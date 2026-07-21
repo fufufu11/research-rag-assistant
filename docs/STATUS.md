@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.1`（阶段 0：仓库与工程基础已完成，尚未提交 PR）
+`v0.0.1`（阶段 0：仓库与工程基础，PR #3 已开，PR #4 待开）
 
 ## 已完成
 
@@ -30,11 +30,22 @@
 - `uv run mypy src` → Success: no issues found in 1 source file
 - `uv run pytest` → 2 passed
 
+### GitHub Issues 与 PR
+- Issue #1：`chore: 初始化Python项目与质量工具`（已开，PR #3 关联）
+- Issue #2：`配置GitHub Actions持续集成`（已开，PR #4 关联）
+- PR #3：`chore/project-bootstrap` → `main`（已开，等待合并）
+- PR #4：`chore/github-actions` → `main`（待开）
+
+### 阶段 0：CI 配置（Issue #2 内容）
+- `.github/workflows/ci.yml`：三个作业（Lint / Type Check / Test），PR 和 push 到 main 时触发
+- `.gitattributes`：统一 LF 换行符，Windows 脚本保留 CRLF，二进制文件不做转换
+
 ## 当前Issue与分支
 
-- 尚未在 GitHub 创建 Issue（建议立即创建 Issue #1：`chore: 初始化Python项目与质量工具`）
-- 尚未创建功能分支（建议 `chore/project-bootstrap`）
-- 当前改动均在 `main` 工作区，尚未提交
+- Issue #1 已创建（https://github.com/fufufu11/research-rag-assistant/issues/1）
+- Issue #2 已创建（https://github.com/fufufu11/research-rag-assistant/issues/2）
+- 分支 `chore/project-bootstrap` 已推送，PR #3 已开
+- 分支 `chore/github-actions` 已创建（基于 `chore/project-bootstrap`），等待提交并开 PR #4
 
 ## 正在处理的问题
 
@@ -67,24 +78,27 @@ uv run pre-commit run --all-files
 
 ## 下一步最小任务
 
-按 [PROJECT_PLAN.md 第 16 节](../PROJECT_PLAN.md#L764) Day 4-7 与 [第 15 节](../PROJECT_PLAN.md#L736) Issue #2：
+按 [PROJECT_PLAN.md 第 16 节](../PROJECT_PLAN.md#L764) Day 7 与 [第 15 节](../PROJECT_PLAN.md#L736) Issue #3：
 
-1. **提交当前改动到 `main`**（或先创建分支 `chore/project-bootstrap` 再提交）
-2. **创建 GitHub Issue #2**：`配置GitHub Actions持续集成`（里程碑 `v0.1 CLI`）
-3. **创建 `.github/workflows/ci.yml`**：在 PR 上自动执行 ruff format --check、ruff check、mypy、pytest
-4. **提交 PR → CI 通过 → 合并到 `main`**
-5. **进入阶段 1（PDF 解析）**：创建 Issue #3 `实现按页PDF解析器`，开始 Day 5 任务
+1. **合并 PR #3 和 PR #4 到 `main`**（在 GitHub 网页操作）
+2. **切回 `main` 并 pull**：`git checkout main; git pull`
+3. **进入阶段 1（PDF 解析）**：创建 Issue #3 `实现按页PDF解析器`（里程碑 `v0.1 CLI`）
+4. **从 `main` 创建分支** `feat/pdf-parser`
+5. **学习 PyMuPDF 最基本用法**（[第 5 节](../PROJECT_PLAN.md#L150)）
+6. **实现按页提取文本**，输出每页页码、字符数和前 200 字（[阶段 1 验收](../PROJECT_PLAN.md#L670)）
+7. **处理异常**：文件不存在、文件损坏、空 PDF（[阶段 1 验收](../PROJECT_PLAN.md#L676)）
+8. **添加单元测试**：合法 PDF、空 PDF、损坏文件（[第 13.1 节](../PROJECT_PLAN.md#L598)）
 
-> 注意：阶段 0 仅完成工程基础，不写任何 RAG 业务代码（[PROJECT_PLAN.md 第 22 节](../PROJECT_PLAN.md#L979)）。
+> 注意：阶段 0 仅完成工程基础，不写任何 RAG 业务代码（[PROJECT_PLAN.md 第 22 节](../PROJECT_PLAN.md#L979)）。PDF 解析是阶段 1 的第一个业务模块。
 
 ## 尚未提交的改动
 
-相对 `main` 的未提交文件（`git status` 待用户执行确认）：
+`chore/github-actions` 分支相对 `chore/project-bootstrap` 的未提交文件：
 
-- 新增：`README.md`、`docs/STATUS.md`、`pyproject.toml`、`uv.lock`、`.python-version`、`.env.example`、`.pre-commit-config.yaml`
-- 新增：`src/research_rag/__init__.py`、`tests/test_smoke.py`
-- 修改：`.gitignore`（原为空，已补全）
-- 自动生成：`.venv/`（已被 .gitignore 忽略）
+- 新增：`.github/workflows/ci.yml`、`.gitattributes`
+- 修改：`docs/STATUS.md`（更新 Issue/PR 状态与下一步）
+
+`chore/project-bootstrap` 分支已推送并开 PR #3，等待合并。
 
 ## 已知问题
 

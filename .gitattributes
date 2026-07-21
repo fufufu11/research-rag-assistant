@@ -1,0 +1,24 @@
+# Git 属性配置
+# 参考：https://git-scm.com/docs/gitattributes
+# 目的：统一换行符，避免 Windows 本地与 Linux CI 协作时出错
+
+# 默认：所有文本文件使用 LF 换行符
+* text=auto eol=lf
+
+# Windows 专用脚本保留 CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件，不做换行符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.bin binary
+*.safetensors binary
