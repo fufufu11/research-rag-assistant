@@ -18,9 +18,10 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-# 阶段 0 暂不引入业务依赖（FastAPI、PyMuPDF、Qdrant 等），
-# 仅保留开发工具链。业务依赖在后续阶段按需添加。
-dependencies = []
+# 业务依赖按阶段逐步引入。阶段 1 引入 PyMuPDF 用于按页解析 PDF。
+dependencies = [
+    "pymupdf>=1.28.0",
+]
 
 [project.optional-dependencies]
 dev = [
