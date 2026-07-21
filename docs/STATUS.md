@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0、阶段 1 已合并到 `main`；项目方向调整为直接使用 LangChain，文档已同步）
+`v0.0.0`（阶段 0、1 已合并到 `main`；项目方向调整为直接使用 LangChain，文档已提交；阶段 2 文本切分器代码完成，待提交 PR）
 
 ## 已完成
 
@@ -19,13 +19,28 @@
 ### 阶段 1：PDF 解析器（Issue #5，PR #6 已合并到 `main`）
 
 - `src/research_rag/pdf_parser.py`：按页解析 PDF
-  - `PageInfo`（page_number / char_count / preview）、`PdfParseResult`（pages / page_count）
+  - `PageInfo`（page_number / char_count / text / preview）、`PdfParseResult`（pages / page_count）
   - `parse_pdf(path: Path) -> PdfParseResult`
   - 异常：`InvalidPdfError`、`EmptyPdfError`（PROJECT_PLAN 第 13.6 节）
   - 文件不存在抛内置 `FileNotFoundError`
+  - 阶段 2 起为 `PageInfo` 增加 `text` 字段保存完整页面文本，供下游切分器使用
 - `scripts/parse_pdf.py`：CLI 入口，退出码区分 4 种结果（成功 / 不存在 / 损坏 / 空 PDF）
 - `tests/unit/test_pdf_parser.py`：5 条测试，覆盖合法 / 空 / 损坏 / 不存在 / preview 长度
 - 新增依赖 `pymupdf>=1.28.0`（PROJECT_PLAN 第 5 节指定）
+
+### 阶段 2：文本切分器（Issue #8，分支 `feat/chunker`，待提交 PR）
+
+- `src/research_rag/chunker.py`：页内文本清洗与带重叠的 Chunk 切分
+  - `Chunk`（page_number / chunk_index / content / char_count）
+  - `ChunkerConfig`（chunk_size=500 / chunk_overlap=80 / min_chunk_chars=20，均可配置）
+  - `clean_page_text(text)`：合并多余空白、统一换行，不过度清洗
+  - `chunk_pages(pages, config) -> list[Chunk]`：使用 LangChain `RecursiveCharacterTextSplitter` 按页切分
+  - 不跨页切分：每页独立调用 `split_text`
+  - 过滤少于 `min_chunk_chars` 的片段（页眉/页脚/噪声）
+  - `chunk_index` 文档内从 0 开始连续编号
+- `tests/unit/test_chunker.py`：14 条测试，覆盖短文本/长文本/多页/不跨页/重叠/过滤/自定义配置/边界/clean_page_text
+- 新增依赖 `langchain-text-splitters>=1.0`（LangChain 官方切分子包）
+- 修改 `pdf_parser.py`：`PageInfo` 增加 `text` 字段（向后兼容，现有测试不受影响）
 
 ## 当前Issue与分支
 
@@ -33,10 +48,11 @@
 - Issue #2（配置GitHub Actions持续集成）：已关闭（PR #4 合并）
 - Issue #5（feat: 实现按页PDF解析器）：已关闭（PR #6 合并，commit `e2056bc`）
   - 注：PROJECT_PLAN 第 15 节建议编号 #3，实际为 #5（PR #3/#4 占用编号 3/4，PR #6 占用编号 6）
+- Issue #8（feat: 实现页内文本切分器）：进行中，分支 `feat/chunker`（本地，未推送）
 
 ## 正在处理的问题
 
-项目方向调整：根据用户要求，从"先手写 RAG 核心流程，再引入 LangChain"改为"直接使用 LangChain 构建"。已同步更新 PROJECT_PLAN.md（第 1、5、5.1、9.1、9.2、13.1 节、阶段 3/6、Issue 清单 #5/#6/#16）、README.md 技术栈与 docs/STATUS.md。尚未提交。
+无。阶段 2 代码与测试已完成，四项检查全部通过，等待用户确认后提交、推送并开 PR。
 
 ## 本地运行命令
 
@@ -59,27 +75,30 @@ uv run pre-commit install
 
 ## 测试状态
 
-- pytest：7 passed（2 冒烟 + 5 PDF 解析）
+- pytest：21 passed（2 冒烟 + 5 PDF 解析 + 14 切分器）
 - ruff format --check：通过
 - ruff check：通过
-- mypy：通过（`Success: no issues found in 2 source files`）
+- mypy：通过（`Success: no issues found in 3 source files`）
 
 ## 下一步最小任务
 
-按 [PROJECT_PLAN.md 第 15 节](../PROJECT_PLAN.md#L736) Issue #4 与[阶段 2](../PROJECT_PLAN.md#L678)：
+按 [PROJECT_PLAN.md 第 15 节](../PROJECT_PLAN.md#L736) Issue #5 与[阶段 3](../PROJECT_PLAN.md#L691)：
 
-1. **提交本次文档方向调整**（PROJECT_PLAN.md / README.md / docs/STATUS.md），建议 commit message：`docs: 改为直接使用LangChain构建RAG流程`
-2. **进入阶段 2（文本切分）**：创建 Issue `feat: 实现页内文本切分器`（里程碑 `v0.1 CLI`）
-3. 从 `main` 创建分支 `feat/chunker`
-4. 新增依赖 `langchain` + `langchain-text-splitters`，使用 `RecursiveCharacterTextSplitter` 按页切分
-5. 实现页内文本清洗、带重叠的 Chunk 切分（chunk_size=500, chunk_overlap=80）、页码与序号 metadata、边界测试
+1. **提交并推送 `feat/chunker` 分支**，开 PR 关联 Issue #8（`Closes #8`）
+2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
+3. **进入阶段 3（Embedding 与向量检索）**：创建 Issue `feat: 基于LangChain实现Embedding适配器`
+4. 新增依赖 `langchain` + `langchain-core`，使用 LangChain Embedding 接口 + `InMemoryVectorStore`
+5. 实现 Top-K 检索与最小评测脚本
 
 ## 尚未提交的改动
 
-`main` 分支上的文档方向调整（均未提交）：
+`feat/chunker` 分支上的改动（均未提交）：
 
-- 修改：`PROJECT_PLAN.md`（第 1、5、5.1、9.1、9.2、13.1 节、阶段 3/6、Issue 清单 #5/#6/#16）
-- 修改：`README.md`（技术栈增加 LangChain）
+- 修改：`pyproject.toml`（添加 `langchain-text-splitters` 依赖）
+- 修改：`uv.lock`（依赖解析结果）
+- 修改：`src/research_rag/pdf_parser.py`（`PageInfo` 增加 `text` 字段）
+- 新增：`src/research_rag/chunker.py`
+- 新增：`tests/unit/test_chunker.py`
 - 修改：`docs/STATUS.md`（本次更新）
 
 ## 已知问题

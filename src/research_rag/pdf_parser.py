@@ -40,11 +40,13 @@ class PageInfo:
         page_number: 页码，从 1 开始（符合读者直觉，也是
             PROJECT_PLAN.md 第 7.2 节 Chunk.page_number 的约定）。
         char_count: 该页提取到的字符数（中文字符按 1 计）。
+        text: 该页提取到的完整文本，供下游切分器使用（阶段 2 起）。
         preview: 该页文本的前 ``PREVIEW_LENGTH`` 字，用于 CLI 输出和日志预览。
     """
 
     page_number: int
     char_count: int
+    text: str
     preview: str
 
 
@@ -100,6 +102,7 @@ def parse_pdf(path: Path) -> PdfParseResult:
                 PageInfo(
                     page_number=index + 1,
                     char_count=len(text),
+                    text=text,
                     preview=text[:PREVIEW_LENGTH],
                 )
             )
