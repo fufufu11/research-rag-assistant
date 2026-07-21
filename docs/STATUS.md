@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.1`（阶段 0：仓库与工程基础，PR #3 已开，PR #4 待开）
+`v0.0.1`（阶段 0：仓库与工程基础，PR #3 和 PR #4 已开，等待合并）
 
 ## 已完成
 
@@ -31,10 +31,10 @@
 - `uv run pytest` → 2 passed
 
 ### GitHub Issues 与 PR
-- Issue #1：`chore: 初始化Python项目与质量工具`（已开，PR #3 关联）
-- Issue #2：`配置GitHub Actions持续集成`（已开，PR #4 关联）
-- PR #3：`chore/project-bootstrap` → `main`（已开，等待合并）
-- PR #4：`chore/github-actions` → `main`（待开）
+- Issue #1：`chore: 初始化Python项目与质量工具`（已开，PR #3 关联，等待合并）
+- Issue #2：`配置GitHub Actions持续集成`（已开，PR #4 关联，等待合并）
+- PR #3：https://github.com/fufufu11/research-rag-assistant/pull/3（`chore/project-bootstrap` → `main`，Closes #1）
+- PR #4：https://github.com/fufufu11/research-rag-assistant/pull/4（`chore/github-actions` → `main`，Closes #2，包含 PR #3 全部内容 + CI 配置）
 
 ### 阶段 0：CI 配置（Issue #2 内容）
 - `.github/workflows/ci.yml`：三个作业（Lint / Type Check / Test），PR 和 push 到 main 时触发
@@ -45,11 +45,13 @@
 - Issue #1 已创建（https://github.com/fufufu11/research-rag-assistant/issues/1）
 - Issue #2 已创建（https://github.com/fufufu11/research-rag-assistant/issues/2）
 - 分支 `chore/project-bootstrap` 已推送，PR #3 已开
-- 分支 `chore/github-actions` 已创建（基于 `chore/project-bootstrap`），等待提交并开 PR #4
+- 分支 `chore/github-actions` 已推送，PR #4 已开
+- **当前所在分支**：`chore/github-actions`（含未提交的 STATUS.md 微调）
+- main 分支尚未合并任何 PR
 
 ## 正在处理的问题
 
-无。等待用户确认是否提交代码 + 创建 GitHub Issue/分支。
+无。阶段 0 全部代码与 CI 配置已完成，等待用户在 GitHub 网页合并 PR #3 和 PR #4。
 
 ## 本地运行命令
 
@@ -93,12 +95,9 @@ uv run pre-commit run --all-files
 
 ## 尚未提交的改动
 
-`chore/github-actions` 分支相对 `chore/project-bootstrap` 的未提交文件：
+`chore/github-actions` 分支上有一处未提交的 `docs/STATUS.md` 微调（更新 PR #4 状态为"已开"）。
 
-- 新增：`.github/workflows/ci.yml`、`.gitattributes`
-- 修改：`docs/STATUS.md`（更新 Issue/PR 状态与下一步）
-
-`chore/project-bootstrap` 分支已推送并开 PR #3，等待合并。
+**建议下一个 AI 窗口第一步**：将此微调追加到上一个 commit 并 force-push，或新起一个 `docs:` commit 推送。
 
 ## 已知问题
 
