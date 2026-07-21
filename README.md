@@ -18,7 +18,7 @@ MVP 边界与可选扩展见 [PROJECT_PLAN.md 第 3 节](./PROJECT_PLAN.md#L65)�
 
 ## 技术栈
 
-Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · Docker · GitHub Actions
+Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · Docker · GitHub Actions
 
 > 详细选型理由见 [PROJECT_PLAN.md 第 5 节](./PROJECT_PLAN.md#L150)。
 
