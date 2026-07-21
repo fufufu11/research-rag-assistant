@@ -24,7 +24,23 @@ Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · Qdrant · SQLAlchemy 2 + 
 
 ## 运行方式
 
-> 待项目骨架搭建完成后补充。当前尚未实现任何业务代码，参见 [docs/STATUS.md](./docs/STATUS.md)。
+> 需先安装 [uv](https://docs.astral.sh/uv/) 0.11+。当前进度与下一步见 [docs/STATUS.md](./docs/STATUS.md)。
+
+```powershell
+# 安装依赖（首次或修改 pyproject.toml 后）
+uv sync --extra dev
+
+# 四项质量检查
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy src
+uv run pytest
+
+# PDF 解析 CLI（阶段 1）
+uv run python scripts/parse_pdf.py <pdf_path>
+```
+
+PDF 解析 CLI 会输出文件总页数，以及每页的页码、字符数和前 200 字预览。退出码：0 成功，2 文件不存在，3 文件损坏，4 空 PDF。
 
 ## 开发流程
 

@@ -2,56 +2,41 @@
 
 ## 当前版本
 
-`v0.0.1`（阶段 0：仓库与工程基础，PR #3 和 PR #4 已开，等待合并）
+`v0.0.0`（阶段 0 已合并到 `main`；阶段 1 PDF 解析器代码完成，待提交 PR）
 
 ## 已完成
 
-### 仓库基础
-- 仓库已创建：`research-rag-assistant`
-- 添加 `.gitignore`（完整 Python + 安全规则，忽略 `.env`、`data/`、密钥）
-- 添加 `LICENSE`（MIT）
-- 添加 `PROJECT_PLAN.md`（项目章程 v1.0）
-- 添加 `README.md`（骨架）
-- 添加 `docs/STATUS.md`
+### 阶段 0：仓库与工程基础（Issue #1、#2，PR #3、#4 已合并）
 
-### 阶段 0：Python 工程与质量工具（Issue #1 内容，未提交 PR）
-- 安装 `uv 0.11.30`（winget）
-- `pyproject.toml`：uv + Hatchling + Python 3.11 + Ruff + mypy + pytest 配置
-- `.python-version`：锁定 3.11（uv 自动下载 Python 3.11.15 独立运行时）
-- `src/research_rag/__init__.py`：最小包，仅暴露 `__version__`
+- 仓库基础：`.gitignore`、`LICENSE`、`PROJECT_PLAN.md`、`README.md`、`docs/STATUS.md`
+- Python 工程：`pyproject.toml`（uv + Hatchling + Python 3.11 + Ruff + mypy + pytest）
+- `src/research_rag/__init__.py`：最小包，暴露 `__version__`
 - `tests/test_smoke.py`：冒烟测试 2 条
-- `.env.example`：环境变量模板（含注释说明启用阶段）
-- `.pre-commit-config.yaml`：pre-commit 钩子（ruff + mypy + 安全检查）
-- `uv.lock`：依赖锁文件
+- `.env.example`、`.pre-commit-config.yaml`、`.python-version`、`uv.lock`
+- CI：`.github/workflows/ci.yml`（Lint / Type Check / Test 三作业）
+- `.gitattributes`：统一 LF 换行符
 
-### 质量工具验证（全部通过）
-- `uv run ruff format --check .` → 2 files already formatted
-- `uv run ruff check .` → All checks passed!
-- `uv run mypy src` → Success: no issues found in 1 source file
-- `uv run pytest` → 2 passed
+### 阶段 1：PDF 解析器（Issue #5，分支 `feat/pdf-parser`，未提交 PR）
 
-### GitHub Issues 与 PR
-- Issue #1：`chore: 初始化Python项目与质量工具`（已开，PR #3 关联，等待合并）
-- Issue #2：`配置GitHub Actions持续集成`（已开，PR #4 关联，等待合并）
-- PR #3：https://github.com/fufufu11/research-rag-assistant/pull/3（`chore/project-bootstrap` → `main`，Closes #1）
-- PR #4：https://github.com/fufufu11/research-rag-assistant/pull/4（`chore/github-actions` → `main`，Closes #2，包含 PR #3 全部内容 + CI 配置）
-
-### 阶段 0：CI 配置（Issue #2 内容）
-- `.github/workflows/ci.yml`：三个作业（Lint / Type Check / Test），PR 和 push 到 main 时触发
-- `.gitattributes`：统一 LF 换行符，Windows 脚本保留 CRLF，二进制文件不做转换
+- `src/research_rag/pdf_parser.py`：按页解析 PDF
+  - `PageInfo`（page_number / char_count / preview）、`PdfParseResult`（pages / page_count）
+  - `parse_pdf(path: Path) -> PdfParseResult`
+  - 异常：`InvalidPdfError`、`EmptyPdfError`（PROJECT_PLAN 第 13.6 节）
+  - 文件不存在抛内置 `FileNotFoundError`
+- `scripts/parse_pdf.py`：CLI 入口，退出码区分 4 种结果（成功 / 不存在 / 损坏 / 空 PDF）
+- `tests/unit/test_pdf_parser.py`：5 条测试，覆盖合法 / 空 / 损坏 / 不存在 / preview 长度
+- 新增依赖 `pymupdf>=1.28.0`（PROJECT_PLAN 第 5 节指定）
 
 ## 当前Issue与分支
 
-- Issue #1 已创建（https://github.com/fufufu11/research-rag-assistant/issues/1）
-- Issue #2 已创建（https://github.com/fufufu11/research-rag-assistant/issues/2）
-- 分支 `chore/project-bootstrap` 已推送，PR #3 已开
-- 分支 `chore/github-actions` 已推送，PR #4 已开
-- **当前所在分支**：`chore/github-actions`（含未提交的 STATUS.md 微调）
-- main 分支尚未合并任何 PR
+- Issue #1（初始化Python项目与质量工具）：已关闭（PR #3 合并）
+- Issue #2（配置GitHub Actions持续集成）：已关闭（PR #4 合并）
+- Issue #5（feat: 实现按页PDF解析器）：进行中，分支 `feat/pdf-parser`（本地，未推送）
+  - 注：PROJECT_PLAN 第 15 节建议编号 #3，实际为 #5（PR #3/#4 占用编号 3/4）
 
 ## 正在处理的问题
 
-无。阶段 0 全部代码与 CI 配置已完成，等待用户在 GitHub 网页合并 PR #3 和 PR #4。
+无。阶段 1 代码与测试已完成，四项检查全部通过，等待用户确认后提交、推送并开 PR。
 
 ## 本地运行命令
 
@@ -65,50 +50,54 @@ uv run ruff check .
 uv run mypy src
 uv run pytest
 
+# 运行 PDF 解析 CLI
+uv run python scripts/parse_pdf.py <pdf_path>
+
 # 安装 pre-commit 钩子（一次性）
 uv run pre-commit install
-
-# 手动运行 pre-commit
-uv run pre-commit run --all-files
 ```
 
 ## 测试状态
 
-- pytest：2 passed（`tests/test_smoke.py`）
-- ruff：通过
-- mypy：通过（关闭增量检查，见下文已知问题）
+- pytest：7 passed（2 冒烟 + 5 PDF 解析）
+- ruff format --check：通过
+- ruff check：通过
+- mypy：通过（`Success: no issues found in 2 source files`）
 
 ## 下一步最小任务
 
-按 [PROJECT_PLAN.md 第 16 节](../PROJECT_PLAN.md#L764) Day 7 与 [第 15 节](../PROJECT_PLAN.md#L736) Issue #3：
+按 [PROJECT_PLAN.md 第 15 节](../PROJECT_PLAN.md#L736) Issue #4（建议编号，实际以 GitHub 为准）与[阶段 2](../PROJECT_PLAN.md#L678)：
 
-1. **合并 PR #3 和 PR #4 到 `main`**（在 GitHub 网页操作）
-2. **切回 `main` 并 pull**：`git checkout main; git pull`
-3. **进入阶段 1（PDF 解析）**：创建 Issue #3 `实现按页PDF解析器`（里程碑 `v0.1 CLI`）
-4. **从 `main` 创建分支** `feat/pdf-parser`
-5. **学习 PyMuPDF 最基本用法**（[第 5 节](../PROJECT_PLAN.md#L150)）
-6. **实现按页提取文本**，输出每页页码、字符数和前 200 字（[阶段 1 验收](../PROJECT_PLAN.md#L670)）
-7. **处理异常**：文件不存在、文件损坏、空 PDF（[阶段 1 验收](../PROJECT_PLAN.md#L676)）
-8. **添加单元测试**：合法 PDF、空 PDF、损坏文件（[第 13.1 节](../PROJECT_PLAN.md#L598)）
-
-> 注意：阶段 0 仅完成工程基础，不写任何 RAG 业务代码（[PROJECT_PLAN.md 第 22 节](../PROJECT_PLAN.md#L979)）。PDF 解析是阶段 1 的第一个业务模块。
+1. **提交并推送 `feat/pdf-parser` 分支**，开 PR 关联 Issue #5（`Closes #5`）
+2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
+3. **进入阶段 2（文本切分）**：创建 Issue `feat: 实现页内文本切分器`（里程碑 `v0.1 CLI`）
+4. 从 `main` 创建分支 `feat/chunker`
+5. 实现页内文本清洗、带重叠的 Chunk 切分、页码与序号元数据、边界测试
 
 ## 尚未提交的改动
 
-`chore/github-actions` 分支上有一处未提交的 `docs/STATUS.md` 微调（更新 PR #4 状态为"已开"）。
+`feat/pdf-parser` 分支上的改动（均未提交）：
 
-**建议下一个 AI 窗口第一步**：将此微调追加到上一个 commit 并 force-push，或新起一个 `docs:` commit 推送。
+- 修改：`pyproject.toml`（添加 `pymupdf>=1.28.0` 依赖、更新注释）
+- 修改：`uv.lock`（pymupdf 依赖解析结果）
+- 新增：`src/research_rag/pdf_parser.py`
+- 新增：`scripts/parse_pdf.py`
+- 新增：`tests/unit/test_pdf_parser.py`
+- 修改：`docs/STATUS.md`、`README.md`（本次更新）
 
 ## 已知问题
 
-1. **mypy 增量缓存不可用**：uv 管理的独立 Python 的 `_sqlite3.dll` 在本机被应用程序控制策略阻止加载，已在 `pyproject.toml` 中用 `no_incremental = true` 规避。若后续迁移到系统级 Python，可移除此项。
-2. **uv 硬链接警告**：缓存与目标目录在不同文件系统，uv 回退为完整复制。性能略降但不影响功能。可设置 `$env:UV_LINK_MODE="copy"` 静默警告。
-3. **GitHub Actions 尚未配置**：阶段 0 的 CI 部分由 Issue #2 完成。
+1. **mypy 增量缓存不可用**：uv 管理的独立 Python 的 `_sqlite3.dll` 在本机被应用程序控制策略阻止加载，已在 `pyproject.toml` 中用 `no_incremental = true` 规避。CI 环境使用 Linux 上的系统 Python，不会有此问题。
+2. **uv 硬链接警告**：缓存与目标目录在不同文件系统，uv 回退为完整复制。不影响功能。可设置 `$env:UV_LINK_MODE="copy"` 静默警告。
+3. **PyMuPDF 类型存根不完整**：`pymupdf.open` / `page.get_text` / `doc.close` 在 mypy strict 下报 `no-untyped-call`，已在调用处用 `# type: ignore[no-untyped-call]` 精确抑制。`warn_unused_ignores = true` 会在 PyMuPDF 修复存根后提醒清理。
+4. **测试 PDF 用英文文本**：PyMuPDF 的 `insert_text` 默认字体（Helvetica）不含中文字形，CI 环境（Linux）也不一定有中文字体，故测试用英文。解析器本身对中文无特殊处理，中文提取能力由 PyMuPDF 保证。
 
 ## 最近学到的内容
 
-- `uv` 是 Astral 出品的 Python 包/运行时管理器，比 pip+venv 快，可托管多个 Python 版本
-- `src/` 布局比扁平布局更安全（强制安装后才可导入，避免测试误导入本地源码）
-- `requires-python = ">=3.11"` 允许 3.13，需配合 `.python-version` 精确锁定
-- Ruff 的 RUF001/002/003 对中文项目会误报全角标点，需在配置中忽略
-- mypy 默认用 sqlite 做增量缓存，运行时若 sqlite3 不可用会内部错误
+- PyMuPDF 1.24+ 推荐用 `import pymupdf`（旧版本 `import fitz` 仍可用）
+- `pymupdf.open()` / `doc.save()` / `doc.tobytes()` 都不允许 0 页文档，测试 0 页 PDF 需手工拼接最小合法 PDF 字节
+- `dataclass(frozen=True)` 让数据类不可变，适合作为解析结果（避免被意外修改）
+- mypy 的 `disallow_untyped_calls` 是调用方属性，对被调用方模块设置 override 无效；正确做法是在调用处用 `# type: ignore[no-untyped-call]` 精确抑制
+- ruff 的 `TC003` 规则建议把只用于类型标注的导入放进 `TYPE_CHECKING` block（配合 `from __future__ import annotations`）
+- GitHub 的 Issue/PR 共享编号空间，PR #3/#4 占用编号后，下一个 Issue 是 #5
+- squash merge 后，基于旧分支的 PR 需要 `git rebase origin/main` 并 force-push 才能消除冲突
