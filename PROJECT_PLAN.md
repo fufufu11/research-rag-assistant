@@ -18,7 +18,7 @@
 
 1. 每次只完成一个小功能，不要求AI一次生成整个项目。
 2. 先建立最小可运行版本，再逐步增加数据库、向量数据库、评测和部署。
-3. 前四个阶段手动实现RAG核心流程，理解原理后再引入LangChain。
+3. 直接使用成熟的AI应用开发框架（LangChain）构建RAG核心流程，把精力集中在业务逻辑、引用溯源和评测上，不从头实现切分、Embedding、检索等通用能力。框架的原理仍需通过阅读文档与源码理解，并在面试中能够解释。
 4. 每个功能都必须有验收标准，重要逻辑必须有自动化测试。
 5. 所有性能和效果数字必须来自实际测试，禁止在README和简历中编造。
 6. 不提交API密钥、个人文档、医疗资料或其他敏感信息。
@@ -155,7 +155,7 @@
 | 依赖管理 | `uv` + `pyproject.toml` | 速度快，便于锁定依赖 |
 | Web框架 | FastAPI + Pydantic | 学习API、类型校验和异步接口 |
 | PDF解析 | PyMuPDF | 按页提取文本并保留页码 |
-| 初始向量检索 | NumPy余弦相似度 | 先理解向量检索原理 |
+| 初始向量存储 | LangChain `InMemoryVectorStore` | 先跑通流程，再迁移到Qdrant |
 | 最终向量数据库 | Qdrant | 支持Payload过滤，Docker部署方便 |
 | Embedding | `BAAI/bge-small-zh-v1.5`或同级中文模型 | 本地模型；模型名可配置 |
 | 大模型 | 支持OpenAI兼容协议的模型服务 | 通过环境变量切换模型 |
@@ -166,17 +166,22 @@
 | 代码质量 | Ruff + mypy + pre-commit | 格式、静态检查和提交前检查 |
 | 容器化 | Docker + Docker Compose | 统一运行环境 |
 | 持续集成 | GitHub Actions | PR自动执行检查和测试 |
-| RAG框架 | LangChain，MVP中后期引入 | 先手写流程，再比较框架实现 |
+| RAG框架 | LangChain | 从阶段 2 起直接使用，构建切分、Embedding、检索与生成链路；重点放在引用溯源与评测 |
 | 可选工作流 | LangGraph | 仅在基础RAG稳定后使用 |
 
-### 5.1 为什么不先使用LangChain
+### 5.1 为什么直接使用LangChain
 
-如果从第一天就使用框架，很容易只记住API，不理解文档切分、向量归一化、Top-K检索和引用映射。项目先用普通Python手动实现核心流程，再在独立分支中使用LangChain重构。最终需要能够说明：
+本项目目标是构建一个可溯源的RAG应用，而非重新实现切分器、Embedding适配器或向量检索引擎。直接使用LangChain可以：
 
-- 不使用LangChain时，RAG流程如何运行
-- LangChain帮项目减少了哪些代码
-- 哪些业务逻辑仍然由项目自己控制
-- 如果框架版本变化，如何替换组件
+- 复用经过社区验证的文本切分器（如 `RecursiveCharacterTextSplitter`）、Embedding接口和向量存储抽象，把精力集中在引用溯源、评测和业务逻辑上
+- 通过阅读LangChain源码和文档理解切分大小、重叠、归一化、Top-K等参数的含义，而非通过重复造轮子学习
+- 在需要时（如引用映射、Prompt约束、错误重试）保留对核心业务逻辑的完全控制
+
+使用框架不等于盲目调用API。最终仍需要能够说明：
+
+- LangChain的切分器、Embedding、向量检索分别做了什么，参数如何影响效果
+- 项目中哪些逻辑由LangChain处理，哪些由项目自己控制（如引用映射、Prompt约束）
+- 如果框架版本变化或需要替换组件（如换用LlamaIndex），应如何隔离依赖
 
 ---
 
@@ -385,14 +390,16 @@ top_k = 8
 - 过滤只有页眉、页脚或极少字符的片段
 - 不应过度清洗导致公式编号和关键术语丢失
 
+实现上使用 LangChain 的 `RecursiveCharacterTextSplitter`，按页调用（`split_text` 作用于单页文本）以保证不跨页；页码和序号作为 metadata 附加到每个 `Document`。
+
 ### 9.2 Embedding与检索
 
-第一版使用本地Embedding模型，将向量归一化后通过NumPy计算余弦相似度。确认流程正确后迁移到Qdrant。
+第一版使用LangChain的Embedding接口（本地模型如 `BAAI/bge-small-zh-v1.5`）配合 `InMemoryVectorStore`，确认流程正确后迁移到Qdrant。
 
 需要理解：
 
 - Embedding表达的是语义相似性，不等于事实正确性
-- 向量归一化如何影响余弦相似度计算
+- 向量归一化如何影响余弦相似度计算（LangChain在内部处理）
 - `top_k`过大和过小分别有什么问题
 - 为什么元数据过滤应在检索阶段处理
 
@@ -600,7 +607,7 @@ Closes #编号
 - PDF按页解析以及空文档处理
 - 文本切分长度、重叠和页码保持
 - 文件哈希和重复判断
-- 向量归一化与相似度排序
+- 检索结果排序与引用映射（基于LangChain retriever封装）
 - 上下文编号与真实引用映射
 - 配置读取和输入校验
 
@@ -683,11 +690,11 @@ API层负责将异常转换为稳定错误码，业务服务不直接拼接HTTP�
 
 验收：切分长度符合配置，重叠正确，页码不丢失，空白片段被过滤。
 
-### 阶段3：Embedding与手写向量检索
+### 阶段3：Embedding与向量检索
 
-交付物：本地Embedding适配器、NumPy余弦相似度、Top-K检索和最小评测脚本。
+交付物：基于LangChain的Embedding适配器、向量存储（先用InMemoryVectorStore，再迁移Qdrant）、Top-K检索和最小评测脚本。
 
-学习内容：Embedding、向量维度、归一化、相似度和批量计算。
+学习内容：Embedding、向量维度、归一化、相似度、批量计算以及LangChain的向量存储抽象。
 
 验收：对示例文档的5～10个问题返回合理片段，并保存第一版基线结果。
 
@@ -707,13 +714,13 @@ API层负责将异常转换为稳定错误码，业务服务不直接拼接HTTP�
 
 验收：可以通过API完成上传、查询和删除，自动测试覆盖主要成功和失败路径。
 
-### 阶段6：Qdrant、LangChain与演示界面
+### 阶段6：Qdrant与演示界面
 
-交付物：迁移Qdrant，在独立分支比较LangChain实现，完成Streamlit界面。
+交付物：将向量存储从InMemoryVectorStore迁移到Qdrant，完成Streamlit界面。
 
-学习内容：向量库与关系数据库的分工、Payload过滤、框架收益和依赖成本。
+学习内容：向量库与关系数据库的分工、Payload过滤、Qdrant在LangChain中的集成方式。
 
-验收：浏览器完成完整流程；删除文档后无残留向量；能够脱离LangChain解释RAG。
+验收：浏览器完成完整流程；删除文档后无残留向量；能够解释LangChain在项目中的职责边界。
 
 ### 阶段7：评测与质量优化
 
@@ -741,8 +748,8 @@ API层负责将异常转换为稳定错误码，业务服务不直接拼接HTTP�
 | #2 | 配置GitHub Actions持续集成 | v0.1 CLI |
 | #3 | 实现按页PDF解析器 | v0.1 CLI |
 | #4 | 实现页内文本切分器 | v0.1 CLI |
-| #5 | 实现Embedding适配器 | v0.1 CLI |
-| #6 | 使用NumPy实现Top-K检索 | v0.1 CLI |
+| #5 | 基于LangChain实现Embedding适配器 | v0.1 CLI |
+| #6 | 基于LangChain实现Top-K向量检索 | v0.1 CLI |
 | #7 | 接入大模型并返回可靠引用 | v0.2 RAG MVP |
 | #8 | 建立文档和Chunk数据模型 | v0.2 RAG MVP |
 | #9 | 实现文档管理API | v0.2 RAG MVP |
@@ -752,7 +759,7 @@ API层负责将异常转换为稳定错误码，业务服务不直接拼接HTTP�
 | #13 | 建立30条检索评测集 | v0.3 Quality |
 | #14 | 比较切分参数并生成报告 | v0.3 Quality |
 | #15 | 加入混合检索或Rerank | v0.3 Quality |
-| #16 | 使用LangChain重构并记录对比 | v0.3 Quality |
+| #16 | 整理LangChain职责边界与替换方案 | v0.3 Quality |
 | #17 | 增加Docker Compose部署 | v1.0 Resume Ready |
 | #18 | 完善README、架构图和演示 | v1.0 Resume Ready |
 | #19 | 完成安全检查与首次Release | v1.0 Resume Ready |

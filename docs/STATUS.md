@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0 已合并到 `main`；阶段 1 PDF 解析器代码完成，待提交 PR）
+`v0.0.0`（阶段 0、阶段 1 已合并到 `main`；项目方向调整为直接使用 LangChain，文档已同步）
 
 ## 已完成
 
@@ -16,7 +16,7 @@
 - CI：`.github/workflows/ci.yml`（Lint / Type Check / Test 三作业）
 - `.gitattributes`：统一 LF 换行符
 
-### 阶段 1：PDF 解析器（Issue #5，分支 `feat/pdf-parser`，未提交 PR）
+### 阶段 1：PDF 解析器（Issue #5，PR #6 已合并到 `main`）
 
 - `src/research_rag/pdf_parser.py`：按页解析 PDF
   - `PageInfo`（page_number / char_count / preview）、`PdfParseResult`（pages / page_count）
@@ -31,12 +31,12 @@
 
 - Issue #1（初始化Python项目与质量工具）：已关闭（PR #3 合并）
 - Issue #2（配置GitHub Actions持续集成）：已关闭（PR #4 合并）
-- Issue #5（feat: 实现按页PDF解析器）：进行中，分支 `feat/pdf-parser`（本地，未推送）
-  - 注：PROJECT_PLAN 第 15 节建议编号 #3，实际为 #5（PR #3/#4 占用编号 3/4）
+- Issue #5（feat: 实现按页PDF解析器）：已关闭（PR #6 合并，commit `e2056bc`）
+  - 注：PROJECT_PLAN 第 15 节建议编号 #3，实际为 #5（PR #3/#4 占用编号 3/4，PR #6 占用编号 6）
 
 ## 正在处理的问题
 
-无。阶段 1 代码与测试已完成，四项检查全部通过，等待用户确认后提交、推送并开 PR。
+项目方向调整：根据用户要求，从"先手写 RAG 核心流程，再引入 LangChain"改为"直接使用 LangChain 构建"。已同步更新 PROJECT_PLAN.md（第 1、5、5.1、9.1、9.2、13.1 节、阶段 3/6、Issue 清单 #5/#6/#16）、README.md 技术栈与 docs/STATUS.md。尚未提交。
 
 ## 本地运行命令
 
@@ -66,24 +66,21 @@ uv run pre-commit install
 
 ## 下一步最小任务
 
-按 [PROJECT_PLAN.md 第 15 节](../PROJECT_PLAN.md#L736) Issue #4（建议编号，实际以 GitHub 为准）与[阶段 2](../PROJECT_PLAN.md#L678)：
+按 [PROJECT_PLAN.md 第 15 节](../PROJECT_PLAN.md#L736) Issue #4 与[阶段 2](../PROJECT_PLAN.md#L678)：
 
-1. **提交并推送 `feat/pdf-parser` 分支**，开 PR 关联 Issue #5（`Closes #5`）
-2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
-3. **进入阶段 2（文本切分）**：创建 Issue `feat: 实现页内文本切分器`（里程碑 `v0.1 CLI`）
-4. 从 `main` 创建分支 `feat/chunker`
-5. 实现页内文本清洗、带重叠的 Chunk 切分、页码与序号元数据、边界测试
+1. **提交本次文档方向调整**（PROJECT_PLAN.md / README.md / docs/STATUS.md），建议 commit message：`docs: 改为直接使用LangChain构建RAG流程`
+2. **进入阶段 2（文本切分）**：创建 Issue `feat: 实现页内文本切分器`（里程碑 `v0.1 CLI`）
+3. 从 `main` 创建分支 `feat/chunker`
+4. 新增依赖 `langchain` + `langchain-text-splitters`，使用 `RecursiveCharacterTextSplitter` 按页切分
+5. 实现页内文本清洗、带重叠的 Chunk 切分（chunk_size=500, chunk_overlap=80）、页码与序号 metadata、边界测试
 
 ## 尚未提交的改动
 
-`feat/pdf-parser` 分支上的改动（均未提交）：
+`main` 分支上的文档方向调整（均未提交）：
 
-- 修改：`pyproject.toml`（添加 `pymupdf>=1.28.0` 依赖、更新注释）
-- 修改：`uv.lock`（pymupdf 依赖解析结果）
-- 新增：`src/research_rag/pdf_parser.py`
-- 新增：`scripts/parse_pdf.py`
-- 新增：`tests/unit/test_pdf_parser.py`
-- 修改：`docs/STATUS.md`、`README.md`（本次更新）
+- 修改：`PROJECT_PLAN.md`（第 1、5、5.1、9.1、9.2、13.1 节、阶段 3/6、Issue 清单 #5/#6/#16）
+- 修改：`README.md`（技术栈增加 LangChain）
+- 修改：`docs/STATUS.md`（本次更新）
 
 ## 已知问题
 
