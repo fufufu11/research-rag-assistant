@@ -45,6 +45,12 @@ uv run python scripts/evaluate_retrieval.py --demo
 
 # 数据库迁移（阶段 5，首次运行或拉取新代码后执行）
 uv run alembic upgrade head
+
+# 启动 FastAPI API 服务（端口 8000）
+uv run uvicorn research_rag.api.app:create_app --factory --reload --port 8000
+
+# 启动 Streamlit 演示界面（端口 8501，需先启动 API 服务）
+uv run streamlit run src/research_rag/ui/app.py
 ```
 
 PDF 解析 CLI 会输出文件总页数，以及每页的页码、字符数和前 200 字预览。退出码：0 成功，2 文件不存在，3 文件损坏，4 空 PDF。

@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0-4 已合并到 `main`；阶段 5 四个 Issue 全部合并：文档模型 PR #15、存储服务 PR #17、文档管理路由 PR #19、问答 API 路由 PR #21；Ollama 本地 LLM 集成 PR #23 已合并（后删除）；get_db 依赖注入修复 PR #25 已合并。阶段 6 Qdrant 向量库迁移进行中，分支 `feat/qdrant`）
+`v0.0.0`（阶段 0-5 已合并到 `main`；阶段 6 Qdrant 向量库迁移已合并 PR #27；Ollama 本地 LLM 集成已删除。阶段 6 Streamlit 演示界面进行中，分支 `feat/streamlit-ui`）
 
 ## 已完成
 
@@ -215,6 +215,36 @@
 
 **本 Issue 不实现**：Qdrant 接入（阶段 6）、QueryLog 持久化（阶段 5 后期）、流式响应、认证/鉴权、多轮对话。
 
+### 阶段 6：Qdrant 与演示界面
+
+#### Issue #26：Qdrant 向量数据库迁移（已合并 PR #27）
+
+- `src/research_rag/vector_store.py`：Qdrant 适配器
+  - `QdrantConfig`（url / collection_name / enabled），从环境变量读取
+  - `create_vector_store(config, embeddings) -> QdrantVectorStore`：支持 `:memory:` 内存测试 + 自动建集合
+  - `upsert_chunks` / `delete_by_document`（按 payload 过滤批量删除）/ `search`
+- `DocumentService` / `QaService` / `api/dependencies` / `api/app` 已接入向量库写入/删除/检索路径
+- 未配置 Qdrant 时 best-effort 回退到 InMemoryVectorStore
+- 彻底删除 Ollama 本地 LLM 集成，当前只用 OpenAI 兼容协议
+- 端到端测试已验证：上传真实 PDF → 问答 → 返回带引用的答案（引用指向真实页码和片段）
+- 新增依赖：`langchain-qdrant>=0.2.0`
+
+#### Issue #28：Streamlit 演示界面（分支 `feat/streamlit-ui`，进行中）
+
+- `src/research_rag/ui/`：Streamlit UI 包
+  - `ui/api_client.py`：HTTP 客户端封装（`ApiClient` + `DocumentInfo` / `Citation` / `QueryResult` dataclass + `ApiClientError`）
+    - 通过 `requests` 调用 FastAPI API（上传/列表/详情/删除/问答），不直接 import 业务层
+    - `base_url` 从环境变量 `API_BASE_URL` 读取，默认 `http://localhost:8000/api/v1`
+    - HTTP 错误和网络错误统一包装为 `ApiClientError`（含 status_code 和 detail）
+  - `ui/app.py`：Streamlit 界面入口（`streamlit run src/research_rag/ui/app.py`）
+    - 界面分三块：文档管理（上传/列表/删除）、问答（输入框 + 带引用展示）、引用详情（`st.expander` 折叠原文片段）
+    - `st.session_state` 缓存文档列表和问答结果
+    - 错误用 `st.error` 展示，不阻断其他功能区
+- `tests/unit/test_api_client.py`：20 条测试（mock `requests.request`，覆盖上传/列表/详情/删除/问答的成功和错误路径、网络错误、环境变量配置）
+- 新增依赖：`streamlit>=1.40`、`requests>=2.32`
+- mypy 新增 `streamlit` 模块的 `ignore_missing_imports` override
+
+
 ## 当前Issue与分支
 
 - Issue #1（初始化Python项目与质量工具）：已关闭（PR #3 合并）
@@ -229,11 +259,12 @@
 - Issue #20（feat: 实现问答 API 路由）：已关闭（PR #21 合并）
 - Issue #22（feat: 集成本地 LLM 支持（Ollama））：已关闭（PR #23 合并）
 - Issue #24（fix: get_db 依赖注入 session_factory 缺 Depends 包裹）：已关闭（PR #25 合并）
-- Issue #26（feat: Qdrant 向量数据库迁移）：进行中，分支 `feat/qdrant`
+- Issue #26（feat: Qdrant 向量数据库迁移）：已关闭（PR #27 合并）
+- Issue #28（feat: 增加 Streamlit 演示界面）：进行中，分支 `feat/streamlit-ui`
 
 ## 正在处理的问题
 
-Issue #26（Qdrant 向量数据库迁移）。将阶段 3 的 InMemoryVectorStore 替换为 Qdrant 持久化向量库，支持 Payload 过滤检索和批量删除。`vector_store.py` 适配器模块已创建（`create_vector_store` 支持 `:memory:` 内存测试 + 自动建集合），`DocumentService` / `QaService` / `api/dependencies` / `api/app` 已接入向量库写入/删除/检索路径。同时修复 CI mypy 失败（`vector_store` 类型收窄 + `app.state` 类型声明），并彻底删除 Ollama 本地 LLM 集成（`langchain-ollama` 依赖、`_create_ollama_chat_model`、`provider` 字段、相关测试和配置项）。202 条全量测试通过，ruff format/check 通过，mypy 本机不可用。
+Issue #28（Streamlit 演示界面）。实现浏览器端完整流程：上传 PDF → 查看文档列表 → 提问并查看带引用的答案 → 删除文档。UI 层通过 `ApiClient`（`requests` HTTP 客户端）调用 FastAPI API，不直接 import 业务层。界面分三块：文档管理、问答、引用详情。222 条测试通过，ruff format/check 通过，mypy 本机不可用。
 
 ## 本地运行命令
 
@@ -260,40 +291,37 @@ uv run alembic upgrade head
 # 启动 FastAPI 开发服务器（阶段 5 第三个 Issue 起）
 uv run uvicorn research_rag.api.app:create_app --factory --reload --port 8000
 
+# 启动 Streamlit 演示界面（阶段 6，需先启动 FastAPI 服务）
+uv run streamlit run src/research_rag/ui/app.py
+
 # 安装 pre-commit 钩子（一次性）
 uv run pre-commit install
 ```
 
 ## 测试状态
 
-- pytest：202 passed（含 17 条 vector_store 测试，已删除 9 条 Ollama 测试）
+- pytest：222 passed（含 20 条 api_client 测试）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：本机因 `librt` C 扩展被应用程序控制策略阻止无法运行，CI 环境（Linux）正常
 
 ## 下一步最小任务
 
-按 [PROJECT_PLAN.md 阶段 6](../PROJECT_PLAN.md#L716)：
-
-1. **提交并推送 `feat/qdrant` 分支**，开 PR 关联 Issue #26（`Closes #26`）
+1. **提交并推送 `feat/streamlit-ui` 分支**，开 PR 关联 Issue #28（`Closes #28`）
 2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
-3. **阶段 6 后续**：Streamlit 演示界面（浏览器完成完整流程验收）
+3. **阶段 7**：评测与质量优化（30 条评测数据，Hit@K / MRR 指标）
 
 ## 尚未提交的改动
 
-`feat/qdrant` 分支上的改动（均未提交）：
+`feat/streamlit-ui` 分支上的改动（均未提交）：
 
-- 新增：`src/research_rag/vector_store.py`（Qdrant 适配器：`QdrantConfig` / `create_vector_store` / `upsert_chunks` / `delete_by_document` / `search`，支持 `:memory:` 内存测试 + 自动建集合）
-- 新增：`tests/unit/test_vector_store.py`（17 条测试：配置、创建、写入、删除、检索、集成验收"删除后无残留向量"）
-- 修改：`src/research_rag/services/document_service.py`（`upload_document` 写入 Qdrant + 回填 `vector_id`；`delete_document` 按 payload 清理 Qdrant 向量，best-effort）
-- 修改：`src/research_rag/services/qa_service.py`（新增 `vector_store` 参数 + `_retrieve_with_qdrant` 单库检索路径；未注入时回退到 InMemory；修复 mypy 类型收窄）
-- 修改：`src/research_rag/api/dependencies.py`（新增 `get_vector_store` 依赖；`get_document_service` / `get_qa_service` 注入 `vector_store`；删除 Ollama 分支）
-- 修改：`src/research_rag/api/app.py`（`lifespan` 中 best-effort 创建 `QdrantVectorStore`；新增 `_create_vector_store` 支持 `QDRANT_ENABLED=false` 显式禁用；修复 `app.state` 类型声明）
-- 修改：`src/research_rag/qa_service.py`（删除 Ollama 集成：`_create_ollama_chat_model` / `DEFAULT_OLLAMA_BASE_URL` / `SUPPORTED_LLM_PROVIDERS` / `provider` 字段；简化 `create_chat_model`）
-- 修改：`tests/unit/test_qa_service.py`（删除 5 条 Ollama 测试）
-- 修改：`tests/unit/test_llm_config.py`（重写，只测试 OpenAI 路径，6 条测试）
-- 修改：`pyproject.toml`（新增 `langchain-qdrant>=0.2.0`，删除 `langchain-ollama>=0.3.0`）
-- 修改：`.env.example`（新增 `QDRANT_ENABLED`；删除 `LLM_PROVIDER` / `OLLAMA_BASE_URL` / `OLLAMA_MODEL`）
+- 新增：`src/research_rag/ui/__init__.py`（UI 包）
+- 新增：`src/research_rag/ui/api_client.py`（HTTP 客户端封装：`ApiClient` + dataclass + `ApiClientError`）
+- 新增：`src/research_rag/ui/app.py`（Streamlit 界面：文档管理 / 问答 / 引用详情三块）
+- 新增：`tests/unit/test_api_client.py`（20 条测试：mock requests，覆盖全部 API 调用路径 + 网络错误）
+- 新增：`scripts/run_server.py`（本地开发服务器启动脚本，加载 .env 后启动 uvicorn）
+- 修改：`pyproject.toml`（新增 `streamlit>=1.40`、`requests>=2.32`；mypy 新增 streamlit override）
+- 修改：`.env.example`（新增 `API_BASE_URL` 配置项）
 - 修改：`docs/STATUS.md`（本次更新）
 
 ## 已知问题
