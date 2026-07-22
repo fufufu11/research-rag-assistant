@@ -29,7 +29,7 @@ from __future__ import annotations
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -276,8 +276,11 @@ def rerank_results(
     contents = [r.content for r in results]
     scored = reranker.rerank(query, contents, top_k)
 
-    # cast 帮助 mypy 将 dataclasses.replace 的返回类型从 _DataclassT 收窄到 _R。
-    # _R bound 到 _Rerankable Protocol，mypy 无法证明它是 dataclass；
+    # _R bound 到 _Rerankable Protocol，mypy 无法证明它是 dataclass，
+    # 故 dataclasses.replace 的 _DataclassT 类型变量不匹配。
     # 实际调用方传入的 RetrievalResult/QdrantSearchResult/ContextPiece 都是
-    # frozen dataclass，replace 只更新 score 字段，返回类型与输入一致。
-    return [cast("_R", dataclasses.replace(results[idx], score=score)) for idx, score in scored]
+    # frozen dataclass，replace 只更新 score 字段，运行时安全。
+    return [
+        dataclasses.replace(results[idx], score=score)  # type: ignore[type-var]
+        for idx, score in scored
+    ]
