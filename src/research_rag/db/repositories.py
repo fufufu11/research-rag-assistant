@@ -159,8 +159,8 @@ class DocumentRepository:
         Args:
             doc: 所属 Document（已持久化）。
             chunks: ORM Chunk 实例列表（service 层负责从 chunker 的 dataclass
-                转换而来，含 document_id / page_number / chunk_index / content
-                / char_count）。
+                转换而来，含 document_id / start_page / end_page / chunk_index
+                / content / char_count）。
         """
 
         # 用 relationship 的 extend：SQLAlchemy 会自动设置 chunk.document_id

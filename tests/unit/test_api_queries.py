@@ -54,7 +54,8 @@ def make_query_response(**overrides: object) -> QueryResponse:
             CitationRead(
                 document_id=doc_id,
                 document_name="paper.pdf",
-                page_number=1,
+                start_page=1,
+                end_page=1,
                 chunk_index=0,
                 snippet="深度学习是机器学习的一个分支。",
                 score=0.92,
@@ -115,7 +116,8 @@ def test_create_query_success(client: TestClient, mock_service: MagicMock) -> No
     assert body["answer"] == response_data.answer
     assert len(body["citations"]) == 1
     assert body["citations"][0]["document_name"] == "paper.pdf"
-    assert body["citations"][0]["page_number"] == 1
+    assert body["citations"][0]["start_page"] == 1
+    assert body["citations"][0]["end_page"] == 1
     assert body["citations"][0]["chunk_index"] == 0
     assert body["citations"][0]["score"] == pytest.approx(0.92)
     assert body["request_id"] == str(response_data.request_id)

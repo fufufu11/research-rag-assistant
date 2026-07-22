@@ -78,7 +78,9 @@ class Citation:
     Attributes:
         document_id: 来源文档 UUID。
         document_name: 来源文档名。
-        page_number: 来源页码。
+        start_page: chunk 内容起始页码。
+        end_page: chunk 内容结束页码。跨页切分时 ``end_page > start_page``，
+            不跨页时 ``end_page == start_page``。
         chunk_index: 文档内分段序号。
         snippet: 原文片段。
         score: 检索相似度分数。
@@ -86,7 +88,8 @@ class Citation:
 
     document_id: str
     document_name: str
-    page_number: int
+    start_page: int
+    end_page: int
     chunk_index: int
     snippet: str
     score: float
@@ -237,7 +240,8 @@ class ApiClient:
                 Citation(
                     document_id=c["document_id"],
                     document_name=c["document_name"],
-                    page_number=c["page_number"],
+                    start_page=c["start_page"],
+                    end_page=c["end_page"],
                     chunk_index=c["chunk_index"],
                     snippet=c["snippet"],
                     score=c["score"],

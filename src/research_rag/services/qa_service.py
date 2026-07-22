@@ -129,7 +129,7 @@ class QaService:
         1. 查询符合条件的 READY 文档（全部或按 ``document_ids`` 过滤）
         2. 收集这些文档的 Chunk
         3. 每文档单独 ``index_chunks`` + ``retrieve``，合并后取全局 top_k
-        4. 构造 ``ContextPiece`` 列表（含 document_name / page_number 等）
+        4. 构造 ``ContextPiece`` 列表（含 document_name / start_page / end_page 等）
         5. 调 ``answer_question`` 让 LLM 基于上下文作答
         6. 用 ``citation_indices`` 映射到 ``CitationRead`` 列表
         7. 组装 ``QueryResponse``（含 request_id 和 elapsed_ms）
@@ -298,7 +298,8 @@ class QaService:
             contexts.append(
                 ContextPiece(
                     document_name=r.document_name,
-                    page_number=r.page_number,
+                    start_page=r.start_page,
+                    end_page=r.end_page,
                     chunk_index=r.chunk_index,
                     content=r.content,
                     score=r.score,
@@ -366,7 +367,8 @@ class QaService:
             contexts.append(
                 ContextPiece(
                     document_name=doc_name,
-                    page_number=r.page_number,
+                    start_page=r.start_page,
+                    end_page=r.end_page,
                     chunk_index=r.chunk_index,
                     content=r.content,
                     score=r.score,
@@ -404,7 +406,8 @@ class QaService:
                 CitationRead(
                     document_id=context_doc_ids[idx - 1],
                     document_name=ctx.document_name,
-                    page_number=ctx.page_number,
+                    start_page=ctx.start_page,
+                    end_page=ctx.end_page,
                     chunk_index=ctx.chunk_index,
                     snippet=ctx.content,
                     score=ctx.score,
@@ -427,7 +430,8 @@ class QaService:
 
         return [
             ChunkerChunk(
-                page_number=c.page_number,
+                start_page=c.start_page,
+                end_page=c.end_page,
                 chunk_index=c.chunk_index,
                 content=c.content,
                 char_count=c.char_count,

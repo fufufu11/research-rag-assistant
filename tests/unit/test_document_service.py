@@ -137,7 +137,8 @@ def _make_chunker_chunks(count: int = 2) -> list[ChunkerChunk]:
 
     return [
         ChunkerChunk(
-            page_number=(i // 2) + 1,
+            start_page=(i // 2) + 1,
+            end_page=(i // 2) + 1,
             chunk_index=i,
             content=f"Chunk {i} content text for testing purposes.",
             char_count=40,

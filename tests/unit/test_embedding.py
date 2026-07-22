@@ -71,19 +71,22 @@ def _make_chunks() -> list[Chunk]:
     """构造一组用于测试的 Chunk（水果 vs 电脑主题）。"""
     return [
         Chunk(
-            page_number=1,
+            start_page=1,
+            end_page=1,
             chunk_index=0,
             content="苹果香蕉橙子葡萄西瓜，这些都是常见的水果种类。",
             char_count=24,
         ),
         Chunk(
-            page_number=1,
+            start_page=1,
+            end_page=1,
             chunk_index=1,
             content="电脑键盘鼠标显示器，这些是计算机的外部设备。",
             char_count=22,
         ),
         Chunk(
-            page_number=2,
+            start_page=2,
+            end_page=2,
             chunk_index=2,
             content="向量检索是信息检索的重要方法，通过余弦相似度匹配。",
             char_count=24,
@@ -163,16 +166,17 @@ def test_index_chunks_empty_list() -> None:
 
 
 def test_index_chunks_preserves_metadata() -> None:
-    """索引后检索应保留 page_number 和 chunk_index 元数据。"""
+    """索引后检索应保留 start_page/end_page 和 chunk_index 元数据。"""
     chunks = _make_chunks()
     store = index_chunks(chunks, FakeEmbeddings())
 
     results = retrieve(store, "水果", top_k=10)
-    # 每条结果的 page_number 和 chunk_index 应在原始 chunk 范围内
-    valid_pages = {c.page_number for c in chunks}
+    # 每条结果的 start_page/end_page 和 chunk_index 应在原始 chunk 范围内
+    valid_start_pages = {c.start_page for c in chunks}
     valid_indices = {c.chunk_index for c in chunks}
     for r in results:
-        assert r.page_number in valid_pages
+        assert r.start_page in valid_start_pages
+        assert r.end_page in valid_start_pages
         assert r.chunk_index in valid_indices
 
 
@@ -261,7 +265,8 @@ def test_retrieve_default_top_k() -> None:
 def test_retrieval_result_is_frozen() -> None:
     """RetrievalResult 应为不可变 dataclass。"""
     result = RetrievalResult(
-        page_number=1,
+        start_page=1,
+        end_page=1,
         chunk_index=0,
         content="测试内容",
         score=0.95,
@@ -273,12 +278,14 @@ def test_retrieval_result_is_frozen() -> None:
 def test_retrieval_result_fields() -> None:
     """RetrievalResult 字段应正确赋值。"""
     result = RetrievalResult(
-        page_number=3,
+        start_page=3,
+        end_page=3,
         chunk_index=5,
         content="一段文本",
         score=0.88,
     )
-    assert result.page_number == 3
+    assert result.start_page == 3
+    assert result.end_page == 3
     assert result.chunk_index == 5
     assert result.content == "一段文本"
     assert result.score == pytest.approx(0.88)
@@ -292,11 +299,27 @@ def test_retrieval_result_fields() -> None:
 def test_end_to_end_chunk_pages_to_retrieve() -> None:
     """端到端：从 Chunk 列表索引并检索，元数据应正确溯源。"""
     chunks: Sequence[Chunk] = [
-        Chunk(page_number=1, chunk_index=0, content="注意力机制是深度学习的核心。", char_count=16),
         Chunk(
-            page_number=1, chunk_index=1, content="梯度下降用于优化神经网络参数。", char_count=16
+            start_page=1,
+            end_page=1,
+            chunk_index=0,
+            content="注意力机制是深度学习的核心。",
+            char_count=16,
         ),
-        Chunk(page_number=2, chunk_index=2, content="余弦相似度衡量向量方向差异。", char_count=15),
+        Chunk(
+            start_page=1,
+            end_page=1,
+            chunk_index=1,
+            content="梯度下降用于优化神经网络参数。",
+            char_count=16,
+        ),
+        Chunk(
+            start_page=2,
+            end_page=2,
+            chunk_index=2,
+            content="余弦相似度衡量向量方向差异。",
+            char_count=15,
+        ),
     ]
 
     store = index_chunks(chunks, FakeEmbeddings())
@@ -305,7 +328,8 @@ def test_end_to_end_chunk_pages_to_retrieve() -> None:
     assert len(results) == 3
     # 第一条应与查询最相关（共享"深度学习/注意力"字符）
     assert "注意力" in results[0].content
-    # 所有结果的 page_number 和 chunk_index 在有效范围内
+    # 所有结果的 start_page/end_page 和 chunk_index 在有效范围内
     for r in results:
-        assert r.page_number in (1, 2)
+        assert r.start_page in (1, 2)
+        assert r.end_page in (1, 2)
         assert r.chunk_index in (0, 1, 2)

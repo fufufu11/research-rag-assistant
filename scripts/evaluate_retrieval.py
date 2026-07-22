@@ -46,7 +46,8 @@ from research_rag.pdf_parser import parse_pdf
 # 不使用真实 PDF 也能验证 Embedding + 检索流程
 DEMO_CHUNKS: list[Chunk] = [
     Chunk(
-        page_number=1,
+        start_page=1,
+        end_page=1,
         chunk_index=0,
         content=(
             "注意力机制（Attention Mechanism）是深度学习中用于建模序列依赖关系的核心方法。"
@@ -56,7 +57,8 @@ DEMO_CHUNKS: list[Chunk] = [
         char_count=96,
     ),
     Chunk(
-        page_number=1,
+        start_page=1,
+        end_page=1,
         chunk_index=1,
         content=(
             "梯度下降是优化神经网络参数的基本方法。通过计算损失函数对参数的偏导数，"
@@ -66,7 +68,8 @@ DEMO_CHUNKS: list[Chunk] = [
         char_count=94,
     ),
     Chunk(
-        page_number=2,
+        start_page=2,
+        end_page=2,
         chunk_index=2,
         content=(
             "余弦相似度通过测量两个向量夹角的余弦值来衡量它们的相似性。"
@@ -76,7 +79,8 @@ DEMO_CHUNKS: list[Chunk] = [
         char_count=97,
     ),
     Chunk(
-        page_number=2,
+        start_page=2,
+        end_page=2,
         chunk_index=3,
         content=(
             "Transformer 架构由编码器和解码器堆叠组成，完全基于自注意力机制，"
@@ -105,7 +109,7 @@ def _print_results(question: str, results: list) -> None:  # type: ignore[type-a
         return
     for i, r in enumerate(results, 1):
         preview = r.content[:80].replace("\n", " ")
-        print(f"  [{i}] 页码={r.page_number} 片段={r.chunk_index} 分数={r.score:.4f}")
+        print(f"  [{i}] 页码={r.start_page}-{r.end_page} 片段={r.chunk_index} 分数={r.score:.4f}")
         print(f"      内容: {preview}...")
     print("-" * 60)
 

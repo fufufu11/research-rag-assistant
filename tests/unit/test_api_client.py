@@ -79,7 +79,8 @@ def make_citation_dict(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
         "document_id": "11111111-1111-1111-1111-111111111111",
         "document_name": "test.pdf",
-        "page_number": 1,
+        "start_page": 1,
+        "end_page": 1,
         "chunk_index": 0,
         "snippet": "这是原文片段内容。",
         "score": 0.85,
@@ -267,7 +268,8 @@ class TestAskQuestion:
         cite = result.citations[0]
         assert isinstance(cite, Citation)
         assert cite.document_name == "test.pdf"
-        assert cite.page_number == 1
+        assert cite.start_page == 1
+        assert cite.end_page == 1
         assert cite.snippet == "这是原文片段内容。"
         assert cite.score == pytest.approx(0.85)
 

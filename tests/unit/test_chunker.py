@@ -1,9 +1,11 @@
 """文本切分器单元测试。
 
-测试覆盖（PROJECT_PLAN.md 第 13.1 节、阶段 2 验收）：
+测试覆盖（PROJECT_PLAN.md 第 13.1 节、阶段 2 验收、阶段 8.2 跨页切分）：
 - 单页短文本：1 个 chunk，页码和序号正确
 - 单页长文本：多个 chunk，页码一致，序号连续，长度不超 chunk_size
-- 多页：页码正确，序号跨页连续，不跨页切分
+- 多页：页码范围正确，序号跨页连续
+- 跨页切分（cross_page=True，默认）：chunk 可跨页，start_page/end_page 正确
+- 不跨页切分（cross_page=False）：page 1 的标记不出现在 page 2 的 chunk 中
 - 重叠：同页相邻 chunk 共享部分内容
 - 过滤：极少字符片段被过滤
 - 自定义配置：参数生效
@@ -49,7 +51,8 @@ def test_short_text_single_chunk() -> None:
     assert len(chunks) == 1
     chunk = chunks[0]
     assert isinstance(chunk, Chunk)
-    assert chunk.page_number == 1
+    assert chunk.start_page == 1
+    assert chunk.end_page == 1
     assert chunk.chunk_index == 0
     assert chunk.content == "这是一段简短的文本，不足以触发切分器执行。"
     assert chunk.char_count == len(chunk.content)
@@ -65,8 +68,8 @@ def test_long_text_multiple_chunks_same_page() -> None:
     chunks = chunk_pages([page])
 
     assert len(chunks) > 1
-    # 所有 chunk 页码一致
-    assert all(c.page_number == 3 for c in chunks)
+    # 所有 chunk 页码一致（单页文本不会跨页）
+    assert all(c.start_page == 3 and c.end_page == 3 for c in chunks)
     # 序号从 0 开始连续
     for i, chunk in enumerate(chunks):
         assert chunk.chunk_index == i
@@ -76,37 +79,45 @@ def test_long_text_multiple_chunks_same_page() -> None:
         assert chunk.char_count <= config.chunk_size
 
 
-def test_multi_page_chunk_index_continuous_and_page_number_correct() -> None:
-    """多页文档：页码正确，序号跨页连续。"""
+def test_multi_page_chunk_index_continuous_and_page_range_correct() -> None:
+    """多页文档：页码范围正确，序号跨页连续。
+
+    默认 cross_page=True，chunk 可能跨页（start_page != end_page），
+    但 start_page 应非递减，且覆盖所有页码。
+    """
     # 每页文本需 > chunk_size 才会切出多个 chunk
-    sentence = "这是第一页的测试句子，长度适中。" * 40  # 约 640 字，超过 chunk_size=500
-    page1 = _make_page(1, sentence)
-    page2 = _make_page(2, sentence)
-    page3 = _make_page(3, sentence)
+    # 各页用不同文本，确保 str.find 能正确定位 chunk 所属页码
+    page1 = _make_page(1, "这是第一页的测试句子，长度适中。" * 40)  # 约 640 字
+    page2 = _make_page(2, "这是第二页的测试句子，长度适中。" * 40)
+    page3 = _make_page(3, "这是第三页的测试句子，长度适中。" * 40)
 
     chunks = chunk_pages([page1, page2, page3])
 
-    assert len(chunks) > 3  # 每页至少切出多个
+    assert len(chunks) > 3  # 合并后至少切出多个
     # 序号从 0 开始连续
     for i, chunk in enumerate(chunks):
         assert chunk.chunk_index == i
-    # 页码升序：page 1 的 chunk 在前，page 3 的 chunk 在后
-    page_numbers = [c.page_number for c in chunks]
-    assert page_numbers == sorted(page_numbers)
-    assert 1 in page_numbers
-    assert 2 in page_numbers
-    assert 3 in page_numbers
+    # start_page 非递减（chunk 按合并文本顺序切分）
+    start_pages = [c.start_page for c in chunks]
+    assert start_pages == sorted(start_pages)
+    # 所有页码都应出现在 start_page 中
+    assert 1 in start_pages
+    assert 2 in start_pages
+    assert 3 in start_pages
+    # end_page >= start_page（页码范围约束）
+    for chunk in chunks:
+        assert chunk.end_page >= chunk.start_page
 
 
-def test_no_cross_page_split() -> None:
-    """不跨页切分：page 1 的标记不出现在 page 2 的任何 chunk 中，反之亦然。"""
+def test_no_cross_page_when_disabled() -> None:
+    """不跨页切分（cross_page=False）：page 1 的标记不出现在 page 2 的任何 chunk 中。"""
     page1 = _make_page(1, "PAGE_ONE_MARKER " + "句子内容。" * 100)
     page2 = _make_page(2, "PAGE_TWO_MARKER " + "句子内容。" * 100)
 
-    chunks = chunk_pages([page1, page2])
+    chunks = chunk_pages([page1, page2], ChunkerConfig(cross_page=False))
 
-    page1_chunks = [c for c in chunks if c.page_number == 1]
-    page2_chunks = [c for c in chunks if c.page_number == 2]
+    page1_chunks = [c for c in chunks if c.start_page == 1 and c.end_page == 1]
+    page2_chunks = [c for c in chunks if c.start_page == 2 and c.end_page == 2]
     assert len(page1_chunks) > 0
     assert len(page2_chunks) > 0
 
@@ -118,6 +129,50 @@ def test_no_cross_page_split() -> None:
     assert any("PAGE_TWO_MARKER" in c.content for c in page2_chunks)
     # page 2 的标记不出现在 page 1 的任何 chunk 中
     assert all("PAGE_TWO_MARKER" not in c.content for c in page1_chunks)
+
+
+def test_cross_page_default_behavior() -> None:
+    """默认 ChunkerConfig 的 cross_page 应为 True（阶段 8.2 默认跨页切分）。"""
+    config = ChunkerConfig()
+    assert config.cross_page is True
+
+
+def test_cross_page_chunk_spans_multiple_pages() -> None:
+    """跨页切分（cross_page=True，默认）：至少有一个 chunk 跨越多页。
+
+    构造两页文本，合并后切分时应有 chunk 的 start_page != end_page
+    （即 chunk 内容跨越了页边界）。
+    """
+    # 每页文本略超过 chunk_size，合并后切分会产生跨页 chunk
+    # 各页用不同文本，确保 str.find 能正确定位 chunk 所属页码
+    page1 = _make_page(1, "这是第一页用于测试跨页切分的句子，长度适中。" * 40)
+    page2 = _make_page(2, "这是第二页用于测试跨页切分的句子，长度适中。" * 40)
+
+    chunks = chunk_pages([page1, page2])
+
+    assert len(chunks) > 1
+    # 跨页切分时至少有一个 chunk 的 end_page > start_page
+    cross_page_chunks = [c for c in chunks if c.end_page > c.start_page]
+    assert len(cross_page_chunks) > 0, "默认 cross_page=True 应产生跨页 chunk"
+    # 跨页 chunk 的 start_page 和 end_page 都应在有效页码范围内
+    for chunk in cross_page_chunks:
+        assert chunk.start_page >= 1
+        assert chunk.end_page <= 2
+        assert chunk.end_page > chunk.start_page
+
+
+def test_cross_page_single_page_chunk() -> None:
+    """跨页切分模式下，不跨页的 chunk 应满足 start_page == end_page。"""
+    # 单页文本不会跨页，所有 chunk 的 start_page == end_page
+    sentence = "这是用于测试切分器的句子，长度适中。" * 40  # 约 600 字
+    page = _make_page(5, sentence)
+
+    chunks = chunk_pages([page])
+
+    assert len(chunks) >= 1
+    for chunk in chunks:
+        assert chunk.start_page == 5
+        assert chunk.end_page == 5
 
 
 def test_overlap_between_adjacent_chunks_same_page() -> None:

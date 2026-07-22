@@ -20,8 +20,8 @@
   真实模型，又能验证"索引→检索→排序"的完整流程。
 - ``RetrievalResult`` 用 ``dataclass(frozen=True)``：与 ``Chunk`` / ``PageInfo``
   一致，不可变，避免下游意外修改溯源信息。
-- 元数据只保留 ``page_number`` 和 ``chunk_index``：这是溯源所需的最小信息，
-  内容通过 ``content`` 字段返回，不重复存到 metadata。
+- 元数据只保留 ``start_page`` / ``end_page`` 和 ``chunk_index``：这是溯源
+  所需的最小信息，内容通过 ``content`` 字段返回，不重复存到 metadata。
 """
 
 from __future__ import annotations
@@ -76,13 +76,16 @@ class RetrievalResult:
     """单条检索结果（不可变）。
 
     Attributes:
-        page_number: 来源页码（与 ``Chunk.page_number`` 一致），用于溯源。
+        start_page: chunk 内容起始页码（与 ``Chunk.start_page`` 一致），用于溯源。
+        end_page: chunk 内容结束页码（与 ``Chunk.end_page`` 一致）。跨页切分时
+            ``end_page > start_page``，不跨页时 ``end_page == start_page``。
         chunk_index: 文档内分段序号（与 ``Chunk.chunk_index`` 一致），用于溯源。
         content: 分段文本。
         score: 余弦相似度分数，越高越相关（``InMemoryVectorStore`` 语义）。
     """
 
-    page_number: int
+    start_page: int
+    end_page: int
     chunk_index: int
     content: str
     score: float
@@ -134,7 +137,7 @@ def index_chunks(
 ) -> InMemoryVectorStore:
     """把 Chunk 列表索引到内存向量存储。
 
-    每个 Chunk 转换为 LangChain ``Document``，``page_number`` 和
+    每个 Chunk 转换为 LangChain ``Document``，``start_page`` / ``end_page`` 和
     ``chunk_index`` 存入 ``metadata`` 用于溯源。``chunk_index`` 在文档内
     唯一，可作为引用编号的基础。
 
@@ -155,7 +158,8 @@ def index_chunks(
         Document(
             page_content=chunk.content,
             metadata={
-                "page_number": chunk.page_number,
+                "start_page": chunk.start_page,
+                "end_page": chunk.end_page,
                 "chunk_index": chunk.chunk_index,
             },
         )
@@ -207,7 +211,8 @@ def retrieve(
 
     return [
         RetrievalResult(
-            page_number=doc.metadata["page_number"],
+            start_page=doc.metadata["start_page"],
+            end_page=doc.metadata["end_page"],
             chunk_index=doc.metadata["chunk_index"],
             content=doc.page_content,
             score=score,

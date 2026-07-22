@@ -175,6 +175,7 @@ def _make_doc(
         name: 文档名（original_name），stored_name 加 ``.stored`` 后缀。
         status: 文档状态，默认 READY。
         chunks: ``[(page_number, chunk_index, content)]`` 列表，默认空。
+            ``page_number`` 同时作为 ``start_page`` 和 ``end_page``（单页 chunk）。
 
     Returns:
         持久化后的 ``Document``（``id`` / ``created_at`` 已由 ORM default 填充）。
@@ -194,7 +195,8 @@ def _make_doc(
         session.add(
             Chunk(
                 document_id=doc.id,
-                page_number=page_number,
+                start_page=page_number,
+                end_page=page_number,
                 chunk_index=chunk_index,
                 content=content,
                 char_count=len(content),
@@ -255,13 +257,15 @@ def test_answer_success_maps_citations(
         assert citation.document_name == "论文A.pdf"
 
     # contexts[0] 是分数最高的（含"深度学习"4个字符）
-    assert response.citations[0].page_number == 1
+    assert response.citations[0].start_page == 1
+    assert response.citations[0].end_page == 1
     assert response.citations[0].chunk_index == 0
     assert "深度学习" in response.citations[0].snippet
     assert response.citations[0].score > 0
 
     # contexts[1] 是分数第二的（含"学习"1个字符）
-    assert response.citations[1].page_number == 2
+    assert response.citations[1].start_page == 2
+    assert response.citations[1].end_page == 2
     assert response.citations[1].chunk_index == 1
 
     # 验证 answer_question 被正确调用
@@ -564,9 +568,11 @@ def test_answer_with_reranker_reorders_contexts_and_syncs_doc_ids(
 
     # 重排后 contexts[0] 是原 chunk1（page 2, idx 1），contexts[1] 是原 chunk0
     contexts = mock_answer.call_args[0][1]
-    assert contexts[0].page_number == 2
+    assert contexts[0].start_page == 2
+    assert contexts[0].end_page == 2
     assert contexts[0].chunk_index == 1
-    assert contexts[1].page_number == 1
+    assert contexts[1].start_page == 1
+    assert contexts[1].end_page == 1
     assert contexts[1].chunk_index == 0
 
     # score 字段被更新为重排分数
@@ -576,7 +582,8 @@ def test_answer_with_reranker_reorders_contexts_and_syncs_doc_ids(
     # citation_indices=[1] 映射到重排后的 contexts[0]（原 chunk1）
     assert len(response.citations) == 1
     assert response.citations[0].document_id == doc.id
-    assert response.citations[0].page_number == 2
+    assert response.citations[0].start_page == 2
+    assert response.citations[0].end_page == 2
     assert response.citations[0].chunk_index == 1
     assert response.citations[0].score == 0.9
 

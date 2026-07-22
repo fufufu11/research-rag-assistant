@@ -64,7 +64,8 @@ def make_chunks(document_id: uuid.UUID, count: int = 3) -> list[Chunk]:
     return [
         Chunk(
             document_id=document_id,
-            page_number=1,
+            start_page=1,
+            end_page=1,
             chunk_index=i,
             content=f"这是第 {i} 个测试片段，关于检索增强生成。test chunk {i}",
             char_count=30 + i,

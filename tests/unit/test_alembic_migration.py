@@ -108,14 +108,15 @@ def test_documents_columns(migrated_engine: Engine) -> None:
 
 
 def test_chunks_columns(migrated_engine: Engine) -> None:
-    """chunks 表包含 PROJECT_PLAN 第 7.2 节全部 8 个字段。"""
+    """chunks 表包含 PROJECT_PLAN 第 7.2 节全部 9 个字段（阶段 8.2 跨页切分扩展）。"""
 
     inspector = inspect(migrated_engine)
     columns = {col["name"] for col in inspector.get_columns("chunks")}
     expected = {
         "id",
         "document_id",
-        "page_number",
+        "start_page",
+        "end_page",
         "chunk_index",
         "content",
         "char_count",
