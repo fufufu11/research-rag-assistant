@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0、1、2、3、4 已合并到 `main`；阶段 5 第一个 Issue「文档和 Chunk 数据模型」已合并 PR #15；阶段 5 第二个 Issue「文档存储与状态管理服务层」已合并 PR #17；阶段 5 第三个 Issue「文档管理 FastAPI 路由」代码完成，待提交 PR）
+`v0.0.0`（阶段 0、1、2、3、4 已合并到 `main`；阶段 5 第一个 Issue「文档和 Chunk 数据模型」已合并 PR #15；阶段 5 第二个 Issue「文档存储与状态管理服务层」已合并 PR #17；阶段 5 第三个 Issue「文档管理 FastAPI 路由」已合并 PR #19；阶段 5 第四个 Issue「问答 API 路由」代码完成，待提交 PR）
 
 ## 已完成
 
@@ -69,7 +69,7 @@
 - 新增依赖：`langchain-openai>=1.2.0`（OpenAI 兼容协议客户端）
 - `.env.example` 新增：`LLM_TIMEOUT=30`、`LLM_MAX_RETRIES=2`
 
-### 阶段 5：FastAPI 与数据库（Issue #14 已合并 PR #15；Issue #16 已合并 PR #17；Issue #18 进行中）
+### 阶段 5：FastAPI 与数据库（Issue #14 已合并 PR #15；Issue #16 已合并 PR #17；Issue #18 已合并 PR #19；Issue #20 进行中）
 
 #### Issue #14：建立文档和 Chunk 数据模型（已合并 PR #15）
 
@@ -121,7 +121,7 @@
 
 **本 Issue 不实现**：FastAPI 路由、向量库写入、QueryLog、文件大小限制/MIME 校验（下一个 Issue 处理）。
 
-#### Issue #18：实现文档管理 FastAPI 路由（分支 `feat/api-routes`，待提交 PR）
+#### Issue #18：实现文档管理 FastAPI 路由（已合并 PR #19）
 
 第三个 Issue 范围：在已有 `DocumentService` 基础上，实现 FastAPI 应用工厂、文档管理 HTTP 路由（上传/列表/详情/删除）、Pydantic schema、异常处理器、依赖注入链。
 
@@ -167,6 +167,54 @@
 
 **本 Issue 不实现**：问答 API（`/qa` 路由，下个 Issue）、向量库写入、QueryLog、认证/鉴权、文件大小限制/MIME 强制校验（验收标准"可选简单校验，不强制"）。
 
+#### Issue #20：实现问答 API 路由（分支 `feat/qa-api`，待提交 PR）
+
+第四个 Issue 范围：实现 `POST /api/v1/queries` 问答 API，编排 DB 查询 → 向量检索 → LLM 问答 → 引用映射 → 组装响应。不新增第三方依赖，复用已有 fastapi/sqlalchemy/langchain。
+
+- `src/research_rag/api/schemas.py`：追加问答相关 Pydantic schema
+  - `QueryRequest`（question 必填 min_length=1 / document_ids 可选默认空列表表示全库 / top_k 默认从环境变量 `RETRIEVAL_TOP_K` 读或 `DEFAULT_TOP_K`=8）
+  - `CitationRead`（document_id / document_name / page_number / chunk_index / snippet / score），对齐 PROJECT_PLAN 第 8.4 节响应结构
+  - `QueryResponse`（answer / citations: list[CitationRead] / request_id: uuid.UUID / elapsed_ms: int），对齐第 8.4 节
+  - `_get_default_top_k()` 辅助函数从环境变量读 top_k，格式错误回退默认值
+- `src/research_rag/services/qa_service.py`：`QaService` 业务编排层（与底层 `qa_service.py` 区分：本模块在 `services/` 子包，编排 DB+Embedding+LLM；底层在顶层 `research_rag/`，只做 LLM 调用+引用映射）
+  - `NoAvailableDocumentsError`：无可用 READY 文档时抛出，API 层映射为 404
+  - `QaService(session, llm_config, embedding_config?, embeddings?, chat_model?)`：构造函数，Embedding 和 ChatModel 惰性创建（首次调 `answer` 时），测试时直接注入 `FakeEmbeddings` / `FakeListChatModel`
+  - `answer(question, document_ids?, top_k) -> QueryResponse`：完整问答流程
+    1. `_get_ready_documents`：查 READY 文档（全库或按 document_ids 过滤，不存在的 UUID 抛 `DocumentNotFoundError`，非 READY 的跳过）
+    2. 惰性创建 Embedding 和 ChatModel（测试时已注入则跳过）
+    3. `_retrieve_contexts`：多文档单独 `index_chunks` + `retrieve`，合并后按 score 降序取全局 top_k；返回 `(contexts, context_doc_ids)` 平行列表（`RetrievalResult` 不含 `document_id`，单文档索引能明确归属）
+    4. 调 `answer_question` 让 LLM 基于上下文作答
+    5. `_map_citations`：用 `citation_indices` 直接索引 contexts，配合 `context_doc_ids` 获取 `document_id`，越界编号静默跳过
+    6. 组装 `QueryResponse`（含 `request_id` 和 `elapsed_ms`）
+  - `_orm_chunks_to_chunker`：ORM `Chunk` → chunker `Chunk` dataclass 转换（`index_chunks` 接受 chunker.Chunk）
+- `src/research_rag/api/routes/queries.py`：问答路由（`prefix=/api/v1/queries`）
+  - `POST ""` → 200 + `QueryResponse`：接收 `QueryRequest`（`Body(...)` 显式标注请求体），调 `QaService.answer`，返回 200（问答是查询而非创建资源，不用 201）
+- `src/research_rag/api/dependencies.py`：追加问答依赖
+  - `get_llm_config()`：从环境变量构造 `LlmConfig`（`_parse_float`/`_parse_int` 安全转换 timeout/max_retries，格式错误回退默认值）
+  - `get_qa_service(session=Depends(get_db), llm_config=Depends(get_llm_config))`：用当前 Session + LlmConfig 构造 `QaService`（参数必须用 `Depends()` 包裹，否则 FastAPI 会当成 query/body 参数）
+- `src/research_rag/api/app.py`：追加 5 个异常处理器
+  - `NoAvailableDocumentsError → 404`（无可用文档）
+  - `InsufficientEvidenceError → 422`（模型无法回答，语义化：请求实体无法处理）
+  - `LlmServiceError → 503`（LLM 服务不可用）
+  - `EmbeddingServiceError → 503`（Embedding 服务不可用）
+  - `VectorStoreError → 500`（向量存储内部错误）
+  - 注册 `queries_router`
+- `tests/unit/test_api_queries.py`：12 条 API 测试
+  - 用 `TestClient` + `app.dependency_overrides[get_qa_service]` 替换为 `MagicMock(spec=QaService)`
+  - 覆盖：问答成功（200）、带 document_ids（200）、证据不足（422）、LLM 异常（503）、Embedding 异常（503）、向量存储异常（500）、无可用文档（404）、文档不存在（404）、空 question（422）、缺少 question（422）、无效 UUID（422）、空 body（422）
+- `tests/unit/test_qa_orchestration.py`：9 条编排测试
+  - 用内存 SQLite + 真实 `DocumentRepository`（测试 DB 查询逻辑），注入 `_FakeEmbeddings`（字符袋向量）+ `FakeListChatModel`
+  - 用 `monkeypatch` 替换 `research_rag.services.qa_service.answer_question`，控制 LLM 返回值
+  - 覆盖：citation 映射正确、document_ids 过滤、默认 top_k、空库 NoAvailableDocumentsError、文档非 READY、文档不存在、证据不足透传、LLM 异常透传、citation_indices 越界跳过
+
+**设计取舍**：
+- 多文档检索用"每文档单独索引+检索，合并按 score 降序取全局 top_k"：`embedding.retrieve` 返回的 `RetrievalResult` 不含 `document_id`，单文档索引能明确归属，避免修改已合并的阶段 3 代码。阶段 6 接 Qdrant 后改为单库检索。
+- `InsufficientEvidenceError → 422` 而非 404：422 语义为"请求实体无法处理"（模型无法基于上下文回答），比 404（资源不存在）更准确。
+- `QaService` 惰性创建 Embedding/ChatModel：生产环境由 `get_qa_service` 依赖注入（不传，让 QaService 自己创建）；测试时直接注入 Fake 实例，跳过真实模型加载。
+- POST /queries 返回 200 而非 201：问答是查询操作（读 LLM + 读 DB），不创建持久化资源。
+
+**本 Issue 不实现**：Qdrant 接入（阶段 6）、QueryLog 持久化（阶段 5 后期）、流式响应、认证/鉴权、多轮对话。
+
 ## 当前Issue与分支
 
 - Issue #1（初始化Python项目与质量工具）：已关闭（PR #3 合并）
@@ -177,11 +225,12 @@
 - Issue #12（feat: 大模型回答与可靠引用）：已关闭（PR #13 合并）
 - Issue #14（feat: 建立文档和Chunk数据模型）：已关闭（PR #15 合并）
 - Issue #16（feat: 实现文档存储与状态管理服务层）：已关闭（PR #17 合并）
-- Issue #18（feat: 实现文档管理 FastAPI 路由）：进行中，分支 `feat/api-routes`（本地，未推送）
+- Issue #18（feat: 实现文档管理 FastAPI 路由）：已关闭（PR #19 合并）
+- Issue #20（feat: 实现问答 API 路由）：进行中，分支 `feat/qa-api`（本地，未推送）
 
 ## 正在处理的问题
 
-无。阶段 5 第三个 Issue 代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过，mypy 因本机 `librt` C 扩展策略限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR。
+无。阶段 5 第四个 Issue（问答 API）代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过，mypy 因本机 `librt` C 扩展策略限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR。
 
 ## 本地运行命令
 
@@ -214,7 +263,7 @@ uv run pre-commit install
 
 ## 测试状态
 
-- pytest：157 passed（2 冒烟 + 5 PDF 解析 + 14 切分器 + 17 Embedding + 42 qa_service + 19 db_models + 7 alembic_migration + 14 repositories + 27 document_service + 10 api_documents）
+- pytest：178 passed（2 冒烟 + 5 PDF 解析 + 14 切分器 + 17 Embedding + 42 qa_service + 19 db_models + 7 alembic_migration + 14 repositories + 27 document_service + 10 api_documents + 12 api_queries + 9 qa_orchestration）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：本机因 `librt` C 扩展被应用程序控制策略阻止无法运行，CI 环境（Linux）正常
@@ -223,28 +272,24 @@ uv run pre-commit install
 
 按 [PROJECT_PLAN.md 阶段 5](../PROJECT_PLAN.md#L709)：
 
-1. **提交并推送 `feat/api-routes` 分支**，开 PR 关联 Issue #18（`Closes #18`）
+1. **提交并推送 `feat/qa-api` 分支**，开 PR 关联 Issue #20（`Closes #20`）
 2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
 3. **继续阶段 5 后续 Issue**：
-   - 问答 API（接入阶段 4 的 qa_service）
    - 集成测试（Mock LLM 与 Embedding，CI 不消耗真实 Token）
+   - QueryLog 持久化（阶段 5 后期）
 
 ## 尚未提交的改动
 
-`feat/api-routes` 分支上的改动（均未提交）：
+`feat/qa-api` 分支上的改动（均未提交）：
 
-- 修改：`pyproject.toml`（新增 fastapi/python-multipart/uvicorn 主依赖、httpx2 dev 依赖、api 包 per-file-ignores）
-- 修改：`src/research_rag/db/session.py`（新增 `create_engine_for_url` 帮助函数）
-- 修改：`tests/unit/test_db_models.py`（新增 2 条 `create_engine_for_url` 测试）
-- 修改：`uv.lock`（依赖锁文件更新）
+- 修改：`src/research_rag/api/app.py`（追加 5 个异常处理器 + 注册 queries_router）
+- 修改：`src/research_rag/api/dependencies.py`（追加 `get_llm_config` / `get_qa_service`，`get_document_service` / `get_qa_service` 参数加 `Depends()`）
+- 修改：`src/research_rag/api/schemas.py`（追加 `QueryRequest` / `CitationRead` / `QueryResponse` + `_get_default_top_k`）
 - 修改：`docs/STATUS.md`（本次更新）
-- 新增：`src/research_rag/api/__init__.py`（api 包初始化）
-- 新增：`src/research_rag/api/app.py`（`create_app` 应用工厂 + lifespan + 异常处理器）
-- 新增：`src/research_rag/api/dependencies.py`（三层依赖链：session_factory → db → service）
-- 新增：`src/research_rag/api/schemas.py`（`DocumentRead` / `DocumentList` / `ErrorResponse`）
-- 新增：`src/research_rag/api/routes/__init__.py`（routes 包初始化）
-- 新增：`src/research_rag/api/routes/documents.py`（文档管理路由）
-- 新增：`tests/unit/test_api_documents.py`（10 条 API 测试）
+- 新增：`src/research_rag/services/qa_service.py`（`QaService` 业务编排层 + `NoAvailableDocumentsError`）
+- 新增：`src/research_rag/api/routes/queries.py`（问答路由 `POST /api/v1/queries`）
+- 新增：`tests/unit/test_api_queries.py`（12 条 API 测试）
+- 新增：`tests/unit/test_qa_orchestration.py`（9 条编排测试）
 
 ## 已知问题
 
@@ -290,3 +335,13 @@ uv run pre-commit install
 - FastAPI `UploadFile` 硬性依赖 `python-multipart` 处理 `multipart/form-data`，未安装时导入即报错；`file.filename or "unknown"` 兜底空文件名
 - starlette 1.x 的 `TestClient` 弃用 `httpx`，改用 `httpx2`（API 兼容 httpx）；用 `with TestClient(app)` 触发 `lifespan`，否则 `app.state` 可能未初始化
 - ruff `TC001/TC002/TC003` 规则把仅用于类型标注的导入移到 `TYPE_CHECKING` 块；但 FastAPI 路由的返回类型注解（`-> Document`）和 `Depends` 参数注解（`service: DocumentService`）需运行时可访问，故 `api/**` 用 `per-file-ignores` 关闭这些规则
+- FastAPI 依赖函数的参数必须用 `Depends()` 包裹：`def get_qa_service(session=Depends(get_db))`。如果不写 `Depends()`，FastAPI 会把 `session` / `llm_config` 当成 query/body 参数，导致请求返回 422（参数缺失）。这是依赖注入最常见的陷阱。
+- FastAPI `Body(...)` 显式标注请求体：当路由函数只有一个 Pydantic model 参数时，FastAPI 默认把它当请求体；但加 `Body(...)` 更明确，避免与路径/查询参数混淆。
+- 业务编排层与底层工具层命名区分：`services/qa_service.py`（`QaService` 类，编排 DB+Embedding+LLM）vs 顶层 `qa_service.py`（`answer_question` 函数，只做 LLM 调用+引用映射）。两者命名相同但职责不同，靠子包路径区分。
+- 多文档检索策略：当向量检索结果不含 `document_id` 时，用"每文档单独索引+检索 + 外部维护 document_id 映射"绕开，避免修改已合并的底层代码。合并后按 score 降序取全局 top_k。
+- `citation_indices` 直接索引 contexts：`answer_question` 返回的编号（从 1 开始）与 contexts 列表顺序一致，用 `contexts[idx - 1]` 直接获取，配合平行 `context_doc_ids` 获取 `document_id`，无需反查 DB。
+- 惰性初始化 + 测试注入：`QaService` 构造函数接受可选 `embeddings` / `chat_model`，未传时在 `answer` 中惰性创建。生产环境不传（让 service 自己创建），测试时注入 Fake 实例跳过真实模型加载。用 `assert self._embeddings is not None` 帮助 mypy 收窄类型（本项目不用 `-O` 优化）。
+- `monkeypatch.setattr("research_rag.services.qa_service.answer_question", mock_fn)` 替换模块级函数：Mock 的是 services/qa_service.py 命名空间中的引用（从 qa_service.py 导入的），不是原始 qa_service.py 模块中的函数。Mock 路径必须是"被测模块的导入路径"。
+- HTTP 状态码语义：422（Unprocessable Entity）比 404 更适合"模型无法回答"（请求格式正确但语义无法处理）；503（Service Unavailable）适合外部依赖（LLM/Embedding）失败；500 适合内部错误（向量存储）。
+- POST 查询类操作返回 200 而非 201：201 Created 语义是"创建了新资源"，问答是读操作（读 LLM + 读 DB），不创建持久化资源，用 200 更准确。
+- SQLAlchemy ORM `default=uuid.uuid4` 在 `flush()` 时才触发：构造对象后 `doc.id` 为 None，必须先 `session.add(doc)` + `session.flush()` 才能获取 `doc.id` 用于设置子表外键（如 Chunk.document_id）。
