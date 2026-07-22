@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0、1、2、3、4 已合并到 `main`；阶段 5 第一个 Issue「文档和 Chunk 数据模型」已合并 PR #15；阶段 5 第二个 Issue「文档存储与状态管理服务层」已合并 PR #17；阶段 5 第三个 Issue「文档管理 FastAPI 路由」已合并 PR #19；阶段 5 第四个 Issue「问答 API 路由」代码完成，待提交 PR）
+`v0.0.0`（阶段 0、1、2、3、4 已合并到 `main`；阶段 5 四个 Issue 全部合并：文档模型 PR #15、存储服务 PR #17、文档管理路由 PR #19、问答 API 路由 PR #21。阶段 5 核心交付完成，下一步端到端测试与阶段 6）
 
 ## 已完成
 
@@ -226,11 +226,21 @@
 - Issue #14（feat: 建立文档和Chunk数据模型）：已关闭（PR #15 合并）
 - Issue #16（feat: 实现文档存储与状态管理服务层）：已关闭（PR #17 合并）
 - Issue #18（feat: 实现文档管理 FastAPI 路由）：已关闭（PR #19 合并）
-- Issue #20（feat: 实现问答 API 路由）：进行中，分支 `feat/qa-api`（本地，未推送）
+- Issue #20（feat: 实现问答 API 路由）：已关闭（PR #21 合并）
+- Issue #22（feat: 集成本地 LLM 支持（Ollama））：进行中，分支 `feat/local-llm`（本地，未推送）
 
 ## 正在处理的问题
 
-无。阶段 5 第四个 Issue（问答 API）代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过，mypy 因本机 `librt` C 扩展策略限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR。
+Issue #22（集成本地 LLM 支持）。在现有 OpenAI 兼容 LLM 调用基础上，新增 Ollama 本地 LLM 支持，通过 `LLM_PROVIDER` 环境变量切换。保留 API 调用能力（`provider=openai`），新增离线免费推理（`provider=ollama`）。代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过（193 passed），mypy 因本机环境限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR 关联 Issue #22。
+
+### Issue #22 改动清单
+
+- `src/research_rag/qa_service.py`：`LlmConfig` 新增 `provider` 字段（默认 `"openai"`）；`create_chat_model` 重构为根据 `provider` 分发到 `_create_openai_chat_model`（原逻辑）或 `_create_ollama_chat_model`（新增，惰性导入 `langchain_ollama.ChatOllama`，通过 `sync_client_kwargs` 透传 timeout）；新增 `DEFAULT_OLLAMA_BASE_URL` / `SUPPORTED_LLM_PROVIDERS` 常量；未知 provider 抛 `LlmServiceError`
+- `src/research_rag/api/dependencies.py`：`get_llm_config` 根据 `LLM_PROVIDER` 环境变量分发——`ollama` 读 `OLLAMA_BASE_URL` / `OLLAMA_MODEL`（默认 `http://localhost:11434`，无需 API Key）；`openai` 读 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`；两个 provider 共享 `LLM_TIMEOUT` / `LLM_MAX_RETRIES`；provider 大小写和首尾空格不敏感
+- `.env.example`：新增 `LLM_PROVIDER`、`OLLAMA_BASE_URL`、`OLLAMA_MODEL` 配置项，含安装指引和模型拉取命令
+- `pyproject.toml`：新增主依赖 `langchain-ollama>=0.3.0`（纯 Python 包，CI 直接安装）
+- `tests/unit/test_qa_service.py`：新增 5 条 Ollama provider 测试（返回 ChatOllama、默认 base_url、依赖缺失抛异常、未知 provider 抛异常、默认 provider 向后兼容）
+- `tests/unit/test_llm_config.py`：新增 10 条 `get_llm_config` 分发测试（默认 openai、ollama provider、默认 base_url、大小写不敏感、共享 timeout/retries、格式错误回退、类型检查）
 
 ## 本地运行命令
 
