@@ -197,9 +197,12 @@ def create_chat_model(config: LlmConfig) -> BaseChatModel:
 
     try:
         # 用 alias 形式传参（model/api_key/base_url/timeout 是 ChatOpenAI 字段 alias）
+        # api_key 字段类型是 SecretStr（pydantic），需要显式包装，否则 mypy strict 报 arg-type
+        from pydantic import SecretStr
+
         return ChatOpenAI(
             model=config.model,
-            api_key=config.api_key,
+            api_key=SecretStr(config.api_key) if config.api_key else None,
             base_url=config.base_url or None,
             timeout=config.timeout,
             max_retries=config.max_retries,
