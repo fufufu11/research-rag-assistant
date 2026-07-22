@@ -20,7 +20,11 @@ classifiers = [
 
 # 业务依赖按阶段逐步引入。阶段 1 引入 PyMuPDF 用于按页解析 PDF。
 dependencies = [
+    "langchain>=1.3.14",
+    "langchain-core>=1.5.0",
+    "langchain-huggingface>=1.2.2",
     "langchain-text-splitters>=1.1.2",
+    "numpy>=2.4.6",
     "pymupdf>=1.28.0",
 ]
 
@@ -32,6 +36,12 @@ dev = [
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
     "pre-commit>=3.8",
+]
+# 本地 Embedding 模型推理后端（阶段 3）。
+# 运行评测脚本的真实模式前需 `uv sync --extra embedding`；
+# 单元测试用确定性 FakeEmbeddings，CI 仅 `uv sync --extra dev`，无需安装此 extra。
+embedding = [
+    "sentence-transformers>=2.7",
 ]
 
 [project.urls]
