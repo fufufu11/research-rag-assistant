@@ -25,10 +25,12 @@
   （``DocumentService`` / ``QaService`` 决定何时 commit）。``get_db`` 只负责
   Session 生命周期。
 - **``get_llm_config`` 每请求读环境变量**：``LlmConfig`` 是不可变 dataclass，
-  每请求从环境变量构造，确保运行时改环境变量能生效（如切换模型）。测试时
-  通过 ``monkeypatch`` 修改环境变量或用 ``dependency_overrides`` 替换。
-  ``LLM_TIMEOUT`` / ``LLM_MAX_RETRIES`` 做 int/float 转换，格式错误时回退到
-  默认值，避免请求因配置格式错误而失败。
+  每请求从环境变量构造，确保运行时改环境变量能生效（如切换模型 / 切换 provider）。
+  根据 ``LLM_PROVIDER`` 分发：``openai`` 读 ``LLM_BASE_URL`` / ``LLM_API_KEY``
+  / ``LLM_MODEL``；``ollama`` 读 ``OLLAMA_BASE_URL`` / ``OLLAMA_MODEL``（无需
+  API Key）。测试时通过 ``monkeypatch`` 修改环境变量或用
+  ``dependency_overrides`` 替换。``LLM_TIMEOUT`` / ``LLM_MAX_RETRIES`` 做
+  int/float 转换，格式错误时回退到默认值，避免请求因配置格式错误而失败。
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from fastapi import Depends, Request
 from research_rag.qa_service import (
     DEFAULT_LLM_MAX_RETRIES,
     DEFAULT_LLM_TIMEOUT,
+    DEFAULT_OLLAMA_BASE_URL,
     LlmConfig,
 )
 from research_rag.services.document_service import DocumentService
@@ -117,20 +120,41 @@ def _parse_int(value: str, default: int) -> int:
 def get_llm_config() -> LlmConfig:
     """从环境变量构造 ``LlmConfig``（PROJECT_PLAN.md 第 9.1 节、.env.example）。
 
-    读取 ``LLM_BASE_URL`` / ``LLM_API_KEY`` / ``LLM_MODEL`` / ``LLM_TIMEOUT``
-    / ``LLM_MAX_RETRIES``。``LLM_TIMEOUT`` 和 ``LLM_MAX_RETRIES`` 格式错误时
-    回退到默认值（``DEFAULT_LLM_TIMEOUT`` / ``DEFAULT_LLM_MAX_RETRIES``）。
+    根据 ``LLM_PROVIDER`` 分发读不同环境变量：
+    - ``LLM_PROVIDER=openai``（默认）：读 ``LLM_BASE_URL`` / ``LLM_API_KEY``
+      / ``LLM_MODEL``
+    - ``LLM_PROVIDER=ollama``：读 ``OLLAMA_BASE_URL``（默认
+      ``DEFAULT_OLLAMA_BASE_URL``）/ ``OLLAMA_MODEL``（Ollama 无需 API Key）
+
+    两个 provider 共用 ``LLM_TIMEOUT`` / ``LLM_MAX_RETRIES``（格式错误时回退
+    默认值）。注意 ``max_retries`` 仅对 OpenAI provider 生效（Ollama 服务
+    自行管理重试，``ChatOllama`` 不接受该参数）。
 
     测试时通过 ``app.dependency_overrides[get_llm_config]`` 替换为固定配置，
     或用 ``monkeypatch`` 修改环境变量。
     """
 
+    provider = os.environ.get("LLM_PROVIDER", "openai").strip().lower()
+    timeout = _parse_float(os.environ.get("LLM_TIMEOUT", ""), DEFAULT_LLM_TIMEOUT)
+    max_retries = _parse_int(os.environ.get("LLM_MAX_RETRIES", ""), DEFAULT_LLM_MAX_RETRIES)
+
+    if provider == "ollama":
+        return LlmConfig(
+            provider="ollama",
+            base_url=os.environ.get("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
+            model=os.environ.get("OLLAMA_MODEL", ""),
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+
+    # 默认 openai
     return LlmConfig(
+        provider="openai",
         base_url=os.environ.get("LLM_BASE_URL", ""),
         api_key=os.environ.get("LLM_API_KEY", ""),
         model=os.environ.get("LLM_MODEL", ""),
-        timeout=_parse_float(os.environ.get("LLM_TIMEOUT", ""), DEFAULT_LLM_TIMEOUT),
-        max_retries=_parse_int(os.environ.get("LLM_MAX_RETRIES", ""), DEFAULT_LLM_MAX_RETRIES),
+        timeout=timeout,
+        max_retries=max_retries,
     )
 
 

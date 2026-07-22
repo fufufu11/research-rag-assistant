@@ -4,13 +4,18 @@
 第 13.6 节（项目级异常清单）。
 
 设计取舍（初学者向说明）：
-- 用 LangChain 的 ``ChatOpenAI``：所有 OpenAI 兼容服务（DeepSeek、Moonshot、
-  Together、本地 vLLM 等）都用同一个客户端，且与已装的 ``langchain-huggingface``
-  风格一致。``ChatOpenAI`` 继承 ``BaseChatModel``，后续可直接接入 LangChain 的
-  LCEL 链路（阶段 5+ 才会用到）。
-- ``create_chat_model`` 是唯一接触 ``ChatOpenAI`` 的地方：
-  惰性导入 ``langchain_openai``，未装时抛 ``LlmServiceError``，把"依赖缺失"
-  这种底层错误归一化成业务异常（与 ``embedding.create_embeddings`` 一致）。
+- 用 LangChain 的 ``ChatOpenAI`` / ``ChatOllama``：所有 OpenAI 兼容服务
+  （DeepSeek、Moonshot、Together、本地 vLLM 等）都用 ``ChatOpenAI``；本地
+  Ollama 用 ``ChatOllama``。两者都继承 ``BaseChatModel``，``invoke`` 接口
+  一致，后续可直接接入 LangChain 的 LCEL 链路（阶段 5+ 才会用到）。
+- ``create_chat_model`` 是唯一接触具体 LLM 客户端的地方：根据
+  ``LlmConfig.provider`` 分发到 ``_create_openai_chat_model`` 或
+  ``_create_ollama_chat_model``。惰性导入对应依赖，未装时抛
+  ``LlmServiceError``，把"依赖缺失"这种底层错误归一化成业务异常（与
+  ``embedding.create_embeddings`` 一致）。
+- ``provider`` 字段而非继承：在 ``LlmConfig`` 加 ``provider`` 字段，用
+  ``if/elif`` 分发。比新增 ``OpenAiLlmConfig`` / ``OllamaLlmConfig`` 子类
+  更简单，符合「不过度设计」原则。
 - 引用编号策略：模型在答案文本中用 ``[C1]``/``[C3]`` 标记引用，服务端用正则
   提取这些标记并映射到真实引用。这种"自然语言+引用标记"方式不需要模型支持
   function calling 或 JSON mode，兼容性最好；服务端映射避免了模型编造页码
@@ -50,6 +55,14 @@ if TYPE_CHECKING:
 DEFAULT_LLM_TIMEOUT = 30.0
 # 默认重试 2 次：保守值，避免在模型服务过载时雪崩。httpx 默认指数退避。
 DEFAULT_LLM_MAX_RETRIES = 2
+# Ollama 默认服务地址（Ollama 启动后默认监听 11434 端口）。
+# 用户可通过环境变量 OLLAMA_BASE_URL 覆盖（如远程 Ollama 服务）。
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+
+# 支持的 LLM provider 列表（用于校验和错误提示）。
+# - "openai"：OpenAI 兼容协议（DeepSeek/Moonshot/OpenAI 等），需 API Key
+# - "ollama"：本地 Ollama 服务，免费离线，无需 API Key
+SUPPORTED_LLM_PROVIDERS = ("openai", "ollama")
 
 # 证据不足标记：要求模型在证据不足时仅输出此字符串。
 # 用方括号包裹与 [C1] 风格一致，避免与正常答案混淆。
@@ -91,14 +104,23 @@ class LlmConfig:
     """大模型客户端配置。
 
     Attributes:
-        base_url: OpenAI 兼容服务的 Base URL（如 ``https://api.deepseek.com``）。
-            为空字符串时使用 OpenAI 官方端点。
-        api_key: API 密钥。从环境变量 ``LLM_API_KEY`` 读取，禁止硬编码到源码。
-        model: 模型名（如 ``deepseek-chat``、``gpt-4o-mini``）。
+        provider: LLM 提供方，``"openai"``（默认，OpenAI 兼容协议，需 API Key）
+            或 ``"ollama"``（本地 Ollama，免费离线，无需 API Key）。
+            ``create_chat_model`` 根据 provider 分发到对应客户端工厂。
+        base_url: 服务 Base URL。``provider="openai"`` 时为 OpenAI 兼容端点
+            （如 ``https://api.deepseek.com``，空字符串用 OpenAI 官方端点）；
+            ``provider="ollama"`` 时为 Ollama 服务地址（空字符串用
+            ``DEFAULT_OLLAMA_BASE_URL``）。
+        api_key: API 密钥（仅 ``provider="openai"`` 需要，从环境变量
+            ``LLM_API_KEY`` 读取，禁止硬编码）。Ollama 不需要 API Key。
+        model: 模型名。``provider="openai"`` 时如 ``deepseek-chat``、
+            ``gpt-4o-mini``；``provider="ollama"`` 时如 ``qwen2.5:3b-instruct``。
         timeout: 单次请求超时秒数。保守默认 30 秒。
-        max_retries: 失败重试次数。保守默认 2 次，由 httpx 实现指数退避。
+        max_retries: 失败重试次数（仅 ``provider="openai"`` 生效，由 httpx
+            实现指数退避；Ollama 服务自行管理重试）。
     """
 
+    provider: str = "openai"
     base_url: str = ""
     api_key: str = ""
     model: str = ""
@@ -171,23 +193,37 @@ class AnswerWithCitations:
 
 
 def create_chat_model(config: LlmConfig) -> BaseChatModel:
-    """创建 OpenAI 兼容的 LangChain ChatModel 客户端。
+    """根据 ``provider`` 创建对应的 LangChain ChatModel 客户端。
 
-    这是本模块唯一接触 ``ChatOpenAI`` 的地方。惰性导入 ``langchain_openai``：
-    未装时抛 ``LlmServiceError``，把底层依赖错误归一化为业务异常（与
-    ``embedding.create_embeddings`` 一致）。
+    本模块唯一接触具体 LLM 客户端（``ChatOpenAI`` / ``ChatOllama``）的地方：
+    - ``provider="openai"``：惰性导入 ``langchain_openai``，创建 ``ChatOpenAI``
+    - ``provider="ollama"``：惰性导入 ``langchain_ollama``，创建 ``ChatOllama``
 
-    超时和重试参数直接传给 ``ChatOpenAI``，由底层 httpx 实现指数退避，
-    本项目不自己写重试循环。
+    未装对应依赖时抛 ``LlmServiceError``，把底层依赖错误归一化为业务异常
+    （与 ``embedding.create_embeddings`` 一致）。
 
     Args:
         config: 大模型客户端配置。
 
     Returns:
-        LangChain ``ChatOpenAI`` 实例（继承 ``BaseChatModel``）。
+        LangChain ``BaseChatModel`` 实例（``ChatOpenAI`` 或 ``ChatOllama``）。
 
     Raises:
-        LlmServiceError: ``langchain-openai`` 未安装或构造失败。
+        LlmServiceError: provider 未知、对应依赖未安装或构造失败。
+    """
+    if config.provider == "ollama":
+        return _create_ollama_chat_model(config)
+    if config.provider == "openai":
+        return _create_openai_chat_model(config)
+    msg = f"未知的 LLM provider: {config.provider!r}（支持: {', '.join(SUPPORTED_LLM_PROVIDERS)}）"
+    raise LlmServiceError(msg)
+
+
+def _create_openai_chat_model(config: LlmConfig) -> BaseChatModel:
+    """创建 OpenAI 兼容的 ``ChatOpenAI`` 客户端。
+
+    超时和重试参数直接传给 ``ChatOpenAI``，由底层 httpx 实现指数退避，
+    本项目不自己写重试循环。
     """
     try:
         from langchain_openai import ChatOpenAI
@@ -209,6 +245,36 @@ def create_chat_model(config: LlmConfig) -> BaseChatModel:
         )
     except Exception as exc:
         msg = f"创建 ChatOpenAI 客户端失败：{exc}"
+        raise LlmServiceError(msg) from exc
+
+
+def _create_ollama_chat_model(config: LlmConfig) -> BaseChatModel:
+    """创建本地 Ollama 的 ``ChatOllama`` 客户端。
+
+    Ollama 是免费本地 LLM 运行时，无需 API Key。``base_url`` 为空时用
+    ``DEFAULT_OLLAMA_BASE_URL``。``ChatOllama`` 不直接接受 ``timeout`` /
+    ``max_retries`` 参数（与 ``ChatOpenAI`` 不同）：超时通过 ``sync_client_kwargs``
+    透传给底层 ollama-python 客户端；Ollama 服务自行管理重试，故忽略
+    ``max_retries``。
+    """
+    try:
+        from langchain_ollama import ChatOllama
+    except ImportError as exc:
+        msg = f"无法导入 langchain_ollama，请确认已安装 langchain-ollama。原始错误：{exc}"
+        raise LlmServiceError(msg) from exc
+
+    try:
+        # ChatOllama 参数与 ChatOpenAI 不同：
+        # - 不接受 api_key（本地服务无需鉴权）
+        # - 不接受 max_retries（Ollama 服务自行管理重试）
+        # - 不接受 timeout（需通过 sync_client_kwargs 透传给底层 ollama 客户端）
+        return ChatOllama(
+            model=config.model,
+            base_url=config.base_url or DEFAULT_OLLAMA_BASE_URL,
+            sync_client_kwargs={"timeout": config.timeout},
+        )
+    except Exception as exc:
+        msg = f"创建 ChatOllama 客户端失败：{exc}"
         raise LlmServiceError(msg) from exc
 
 

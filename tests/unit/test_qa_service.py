@@ -184,6 +184,68 @@ def test_create_chat_model_empty_base_url_uses_default() -> None:
 
 
 # ---------------------------------------------------------------------------
+# create_chat_model 测试：Ollama provider
+# ---------------------------------------------------------------------------
+
+
+def test_create_chat_model_ollama_returns_chat_ollama() -> None:
+    """provider=ollama 时应返回 ChatOllama 实例且参数传递正确。"""
+    from langchain_ollama import ChatOllama
+
+    config = LlmConfig(
+        provider="ollama",
+        base_url="http://localhost:11434",
+        model="qwen2.5:3b-instruct",
+        timeout=15.0,
+    )
+    model = create_chat_model(config)
+
+    assert isinstance(model, ChatOllama)
+    assert model.model == "qwen2.5:3b-instruct"
+    assert model.base_url == "http://localhost:11434"
+    # timeout 通过 sync_client_kwargs 透传给底层 ollama 客户端
+    assert model.sync_client_kwargs == {"timeout": 15.0}
+
+
+def test_create_chat_model_ollama_empty_base_url_uses_default() -> None:
+    """provider=ollama 且 base_url 为空时用 DEFAULT_OLLAMA_BASE_URL。"""
+    from langchain_ollama import ChatOllama
+
+    from research_rag.qa_service import DEFAULT_OLLAMA_BASE_URL
+
+    config = LlmConfig(provider="ollama", model="qwen2.5:3b-instruct")
+    model = create_chat_model(config)
+
+    assert isinstance(model, ChatOllama)
+    assert model.base_url == DEFAULT_OLLAMA_BASE_URL
+
+
+def test_create_chat_model_ollama_missing_dependency_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """provider=ollama 但未安装 langchain-ollama 时应抛 LlmServiceError。"""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "langchain_ollama", None)
+
+    with pytest.raises(LlmServiceError, match="langchain_ollama"):
+        create_chat_model(LlmConfig(provider="ollama", model="test"))
+
+
+def test_create_chat_model_unknown_provider_raises() -> None:
+    """未知 provider 应抛 LlmServiceError。"""
+    config = LlmConfig(provider="unknown", model="test")
+    with pytest.raises(LlmServiceError, match="未知"):
+        create_chat_model(config)
+
+
+def test_llm_config_default_provider_is_openai() -> None:
+    """LlmConfig 不传 provider 时默认 "openai"（向后兼容）。"""
+    config = LlmConfig(api_key="k", model="m")
+    assert config.provider == "openai"
+
+
+# ---------------------------------------------------------------------------
 # build_prompt 测试
 # ---------------------------------------------------------------------------
 
