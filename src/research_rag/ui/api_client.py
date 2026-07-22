@@ -183,7 +183,7 @@ class ApiClient:
         response = self._request(
             "POST",
             "/documents",
-            files=("file", (filename, file_bytes, "application/pdf")),
+            files={"file": (filename, file_bytes, "application/pdf")},
         )
         return _parse_document(response.json())
 
