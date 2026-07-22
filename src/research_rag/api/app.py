@@ -34,9 +34,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import sessionmaker
 
 from research_rag.api.routes.documents import router as documents_router
+from research_rag.api.routes.queries import router as queries_router
 from research_rag.api.schemas import ErrorResponse
 from research_rag.db.models import DocumentNotFoundError, DuplicateDocumentError
 from research_rag.db.session import create_engine_for_url, get_database_url
+from research_rag.embedding import EmbeddingServiceError, VectorStoreError
+from research_rag.qa_service import InsufficientEvidenceError, LlmServiceError
+from research_rag.services.qa_service import NoAvailableDocumentsError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -131,7 +135,47 @@ def create_app(
             content=ErrorResponse(detail=str(exc)).model_dump(),
         )
 
+    @app.exception_handler(NoAvailableDocumentsError)
+    async def handle_no_available(
+        _request: Request, exc: NoAvailableDocumentsError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(detail=str(exc)).model_dump(),
+        )
+
+    @app.exception_handler(InsufficientEvidenceError)
+    async def handle_insufficient_evidence(
+        _request: Request, exc: InsufficientEvidenceError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=ErrorResponse(detail=str(exc)).model_dump(),
+        )
+
+    @app.exception_handler(LlmServiceError)
+    async def handle_llm_error(_request: Request, exc: LlmServiceError) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content=ErrorResponse(detail=str(exc)).model_dump(),
+        )
+
+    @app.exception_handler(EmbeddingServiceError)
+    async def handle_embedding_error(_request: Request, exc: EmbeddingServiceError) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content=ErrorResponse(detail=str(exc)).model_dump(),
+        )
+
+    @app.exception_handler(VectorStoreError)
+    async def handle_vector_store_error(_request: Request, exc: VectorStoreError) -> JSONResponse:
+        return JSONResponse(
+            status_code=500,
+            content=ErrorResponse(detail=str(exc)).model_dump(),
+        )
+
     # 路由
     app.include_router(documents_router)
+    app.include_router(queries_router)
 
     return app
