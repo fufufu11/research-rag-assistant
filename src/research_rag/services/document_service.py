@@ -1,12 +1,14 @@
 """文档存储与状态管理服务层。
 
 依据 PROJECT_PLAN.md 第 6.1 节（文档处理流程）、US-001 / US-002、
-第 11 节（安全：文件路径限制在上传目录内）、第 13.6 节（异常清单）。
+第 11 节（安全：文件路径限制在上传目录内）、第 13.6 节（异常清单）、
+第 716-722 行（阶段 6：向量库写入与清理）。
 
 设计取舍（初学者向说明）：
 - **Service 编排业务流程**：``DocumentService`` 是文档管理的入口，编排
   repository（数据访问）、``parse_pdf`` / ``chunk_pages``（文档处理）、
-  文件 IO（落盘）三类操作。不直接写 SQL，不实现 HTTP 路由。
+  文件 IO（落盘）、``vector_store``（向量库）四类操作。不直接写 SQL，
+  不实现 HTTP 路由。
 - **sha256 去重**：上传前先查 ``sha256`` 是否已存在，存在则抛
   ``DuplicateDocumentError``（US-001"同一文件重复上传时不得产生重复数据"）。
   去重在创建记录之前，避免无效落盘和无效 DB 写入。
@@ -21,10 +23,13 @@
 - **事务边界在 service**：repository 只 ``flush`` 不 ``commit``，service
   决定何时提交。失败时先 ``rollback`` 清除 pending 改动，再重新查询记录
   并标记 FAILED，避免 session 处于不可用状态。
-- **删除顺序**：先删 DB 记录（事务原子，级联删 chunks），再删文件
-  （best-effort，失败不阻断）。理由：DB 事务是一致性保障，文件删除失败
-  只留孤儿文件（可后续清理），不会出现"DB 记录指向不存在文件"的不一致。
-- **不实现向量库写入**：``vector_id`` 保留 ``None``（阶段 6 接 Qdrant）。
+- **删除顺序**：先删 Qdrant 向量（按 document_id payload），再删 DB 记录
+  （事务，级联删 chunks），最后删文件（best-effort）。理由：Qdrant 清理
+  失败不应阻断 DB 删除（DB 是主数据源），但必须尝试清理以满足"删除文档后
+  无残留向量"验收（PROJECT_PLAN 第 722 行）。
+- **向量库可选注入**：``vector_store`` 为 ``None`` 时跳过向量写入/删除，
+  保持向后兼容（测试和未配置 Qdrant 时）。生产环境由 ``get_document_service``
+  依赖注入。
 - **Mock 友好**：``parse_pdf`` / ``chunk_pages`` 在模块顶部直接导入，
   测试用 ``unittest.mock.patch`` 替换 ``document_service.parse_pdf``
   即可，不侵入业务接口。
@@ -47,12 +52,14 @@ from research_rag.db.models import (
     DuplicateDocumentError,
 )
 from research_rag.db.repositories import DocumentRepository
+from research_rag.embedding import VectorStoreError
 from research_rag.pdf_parser import parse_pdf
 
 if TYPE_CHECKING:
     import uuid
     from collections.abc import Sequence
 
+    from langchain_qdrant import QdrantVectorStore
     from sqlalchemy.orm import Session
 
     from research_rag.chunker import Chunk as ChunkerChunk
@@ -81,22 +88,27 @@ class DocumentService:
     """文档管理服务：上传、查询、列表、删除。
 
     编排 repository（数据访问）、``parse_pdf`` / ``chunk_pages``（文档处理）、
-    文件 IO（落盘）。事务边界由本类控制（repository 不 commit）。
+    文件 IO（落盘）、``vector_store``（向量库写入/清理）。事务边界由本类
+    控制（repository 不 commit）。
 
     Attributes:
         session: SQLAlchemy Session，由调用方传入。
         upload_dir: 上传文件保存目录，默认从 ``UPLOAD_DIR`` 环境变量读取。
         repo: ``DocumentRepository`` 实例，封装 DB CRUD。
+        vector_store: 可选的 ``QdrantVectorStore`` 实例。``None`` 时跳过
+            向量写入/删除（测试或未配置 Qdrant 时）。
     """
 
     def __init__(
         self,
         session: Session,
         upload_dir: Path | None = None,
+        vector_store: QdrantVectorStore | None = None,
     ) -> None:
         self.session = session
         self.upload_dir = upload_dir or _get_default_upload_dir()
         self.repo = DocumentRepository(session)
+        self.vector_store = vector_store
 
     # ------------------------------------------------------------------
     # 上传文档（核心业务流程）
@@ -162,12 +174,23 @@ class DocumentService:
             parse_result = parse_pdf(upload_path)
             self.repo.update_page_count(doc, parse_result.page_count)
 
-            # 4d. 切分并持久化 chunks（vector_id 保留 None，阶段 6 才写向量库）
+            # 4d. 切分并持久化 chunks
             chunker_chunks = chunk_pages(parse_result.pages)
             db_chunks = self._convert_chunks(chunker_chunks, doc.id)
             self.repo.add_chunks(doc, db_chunks)
+            # flush 让 chunk.id 生成（add_chunks 内部已 flush，此处保险）
+            self.session.flush()
 
-            # 4e. 状态转 READY
+            # 4e. 写入 Qdrant 向量库（如果注入了 vector_store）
+            # 用 chunk.id 作为 Qdrant point ID，vector_id = str(chunk.id)
+            if self.vector_store is not None and db_chunks:
+                from research_rag.vector_store import upsert_chunks
+
+                vector_ids = upsert_chunks(self.vector_store, doc.id, doc.original_name, db_chunks)
+                for chunk, vid in zip(db_chunks, vector_ids, strict=True):
+                    chunk.vector_id = vid
+
+            # 4f. 状态转 READY
             self.repo.update_status(doc, DocumentStatus.READY, None)
             self.session.commit()
             return doc
@@ -228,8 +251,19 @@ class DocumentService:
         if doc is None:
             raise DocumentNotFoundError(f"文档不存在：{doc_id}")
 
-        # 先保存 stored_name，因为删除后 doc 对象属性可能过期
+        # 先保存 stored_name 和 doc_id，因为删除后 doc 对象属性可能过期
         stored_name = doc.stored_name
+        doc_id = doc.id
+
+        # 删 Qdrant 向量（best-effort：失败不阻断 DB 删除，但记录异常）
+        # 必须在删 DB 记录之前，因为删 DB 后 doc 对象不可用
+        if self.vector_store is not None:
+            from research_rag.vector_store import delete_by_document
+
+            # best-effort：Qdrant 清理失败不阻断 DB 删除
+            # （DB 是主数据源，但向量残留需后续清理）
+            with suppress(VectorStoreError):
+                delete_by_document(self.vector_store, doc_id)
 
         # 删 DB 记录（ORM cascade 会自动删除关联的 chunks）
         self.repo.delete(doc)
@@ -271,8 +305,8 @@ class DocumentService:
 
         chunker 的 ``Chunk`` 是不可变 dataclass（``page_number`` / ``chunk_index``
         / ``content`` / ``char_count``），不含 ``document_id`` 和 ``vector_id``。
-        ORM ``Chunk`` 需要关联到文档，``vector_id`` 保留 ``None``（阶段 6 才写
-        向量库）。
+        ORM ``Chunk`` 需要关联到文档，``vector_id`` 初始为 ``None``，写 Qdrant
+        后由 ``upload_document`` 回填（阶段 6）。
         """
 
         return [

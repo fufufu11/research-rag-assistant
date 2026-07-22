@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0、1、2、3、4 已合并到 `main`；阶段 5 四个 Issue 全部合并：文档模型 PR #15、存储服务 PR #17、文档管理路由 PR #19、问答 API 路由 PR #21。阶段 5 核心交付完成，下一步端到端测试与阶段 6）
+`v0.0.0`（阶段 0-4 已合并到 `main`；阶段 5 四个 Issue 全部合并：文档模型 PR #15、存储服务 PR #17、文档管理路由 PR #19、问答 API 路由 PR #21；Ollama 本地 LLM 集成 PR #23 已合并；get_db 依赖注入修复 PR #25 已合并。阶段 6 Qdrant 向量库迁移进行中，分支 `feat/qdrant`）
 
 ## 已完成
 
@@ -227,20 +227,13 @@
 - Issue #16（feat: 实现文档存储与状态管理服务层）：已关闭（PR #17 合并）
 - Issue #18（feat: 实现文档管理 FastAPI 路由）：已关闭（PR #19 合并）
 - Issue #20（feat: 实现问答 API 路由）：已关闭（PR #21 合并）
-- Issue #22（feat: 集成本地 LLM 支持（Ollama））：进行中，分支 `feat/local-llm`（本地，未推送）
+- Issue #22（feat: 集成本地 LLM 支持（Ollama））：已关闭（PR #23 合并）
+- Issue #24（fix: get_db 依赖注入 session_factory 缺 Depends 包裹）：已关闭（PR #25 合并）
+- Issue #26（feat: Qdrant 向量数据库迁移）：进行中，分支 `feat/qdrant`
 
 ## 正在处理的问题
 
-Issue #22（集成本地 LLM 支持）。在现有 OpenAI 兼容 LLM 调用基础上，新增 Ollama 本地 LLM 支持，通过 `LLM_PROVIDER` 环境变量切换。保留 API 调用能力（`provider=openai`），新增离线免费推理（`provider=ollama`）。代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过（193 passed），mypy 因本机环境限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR 关联 Issue #22。
-
-### Issue #22 改动清单
-
-- `src/research_rag/qa_service.py`：`LlmConfig` 新增 `provider` 字段（默认 `"openai"`）；`create_chat_model` 重构为根据 `provider` 分发到 `_create_openai_chat_model`（原逻辑）或 `_create_ollama_chat_model`（新增，惰性导入 `langchain_ollama.ChatOllama`，通过 `sync_client_kwargs` 透传 timeout）；新增 `DEFAULT_OLLAMA_BASE_URL` / `SUPPORTED_LLM_PROVIDERS` 常量；未知 provider 抛 `LlmServiceError`
-- `src/research_rag/api/dependencies.py`：`get_llm_config` 根据 `LLM_PROVIDER` 环境变量分发——`ollama` 读 `OLLAMA_BASE_URL` / `OLLAMA_MODEL`（默认 `http://localhost:11434`，无需 API Key）；`openai` 读 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`；两个 provider 共享 `LLM_TIMEOUT` / `LLM_MAX_RETRIES`；provider 大小写和首尾空格不敏感
-- `.env.example`：新增 `LLM_PROVIDER`、`OLLAMA_BASE_URL`、`OLLAMA_MODEL` 配置项，含安装指引和模型拉取命令
-- `pyproject.toml`：新增主依赖 `langchain-ollama>=0.3.0`（纯 Python 包，CI 直接安装）
-- `tests/unit/test_qa_service.py`：新增 5 条 Ollama provider 测试（返回 ChatOllama、默认 base_url、依赖缺失抛异常、未知 provider 抛异常、默认 provider 向后兼容）
-- `tests/unit/test_llm_config.py`：新增 10 条 `get_llm_config` 分发测试（默认 openai、ollama provider、默认 base_url、大小写不敏感、共享 timeout/retries、格式错误回退、类型检查）
+Issue #26（Qdrant 向量数据库迁移）。将阶段 3 的 InMemoryVectorStore 替换为 Qdrant 持久化向量库，支持 Payload 过滤检索和批量删除。`vector_store.py` 适配器模块已创建（`create_vector_store` 支持 `:memory:` 内存测试 + 自动建集合），`DocumentService` / `QaService` / `api/dependencies` / `api/app` 已接入向量库写入/删除/检索路径。17 条 vector_store 单元测试 + 211 条全量测试通过，ruff format/check 通过，mypy 本机不可用。
 
 ## 本地运行命令
 
@@ -273,33 +266,32 @@ uv run pre-commit install
 
 ## 测试状态
 
-- pytest：178 passed（2 冒烟 + 5 PDF 解析 + 14 切分器 + 17 Embedding + 42 qa_service + 19 db_models + 7 alembic_migration + 14 repositories + 27 document_service + 10 api_documents + 12 api_queries + 9 qa_orchestration）
+- pytest：211 passed（含 17 条 vector_store 测试）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：本机因 `librt` C 扩展被应用程序控制策略阻止无法运行，CI 环境（Linux）正常
 
 ## 下一步最小任务
 
-按 [PROJECT_PLAN.md 阶段 5](../PROJECT_PLAN.md#L709)：
+按 [PROJECT_PLAN.md 阶段 6](../PROJECT_PLAN.md#L716)：
 
-1. **提交并推送 `feat/qa-api` 分支**，开 PR 关联 Issue #20（`Closes #20`）
+1. **提交并推送 `feat/qdrant` 分支**，开 PR 关联 Issue #26（`Closes #26`）
 2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
-3. **继续阶段 5 后续 Issue**：
-   - 集成测试（Mock LLM 与 Embedding，CI 不消耗真实 Token）
-   - QueryLog 持久化（阶段 5 后期）
+3. **阶段 6 后续**：Streamlit 演示界面（浏览器完成完整流程验收）
 
 ## 尚未提交的改动
 
-`feat/qa-api` 分支上的改动（均未提交）：
+`feat/qdrant` 分支上的改动（均未提交）：
 
-- 修改：`src/research_rag/api/app.py`（追加 5 个异常处理器 + 注册 queries_router）
-- 修改：`src/research_rag/api/dependencies.py`（追加 `get_llm_config` / `get_qa_service`，`get_document_service` / `get_qa_service` 参数加 `Depends()`）
-- 修改：`src/research_rag/api/schemas.py`（追加 `QueryRequest` / `CitationRead` / `QueryResponse` + `_get_default_top_k`）
+- 新增：`src/research_rag/vector_store.py`（Qdrant 适配器：`QdrantConfig` / `create_vector_store` / `upsert_chunks` / `delete_by_document` / `search`，支持 `:memory:` 内存测试 + 自动建集合）
+- 新增：`tests/unit/test_vector_store.py`（17 条测试：配置、创建、写入、删除、检索、集成验收"删除后无残留向量"）
+- 修改：`src/research_rag/services/document_service.py`（`upload_document` 写入 Qdrant + 回填 `vector_id`；`delete_document` 按 payload 清理 Qdrant 向量，best-effort）
+- 修改：`src/research_rag/services/qa_service.py`（新增 `vector_store` 参数 + `_retrieve_with_qdrant` 单库检索路径；未注入时回退到 InMemory）
+- 修改：`src/research_rag/api/dependencies.py`（新增 `get_vector_store` 依赖；`get_document_service` / `get_qa_service` 注入 `vector_store`）
+- 修改：`src/research_rag/api/app.py`（`lifespan` 中 best-effort 创建 `QdrantVectorStore`；新增 `_create_vector_store` 支持 `QDRANT_ENABLED=false` 显式禁用）
+- 修改：`pyproject.toml`（新增依赖 `langchain-qdrant>=0.2.0`）
+- 修改：`.env.example`（新增 `QDRANT_ENABLED` 配置项）
 - 修改：`docs/STATUS.md`（本次更新）
-- 新增：`src/research_rag/services/qa_service.py`（`QaService` 业务编排层 + `NoAvailableDocumentsError`）
-- 新增：`src/research_rag/api/routes/queries.py`（问答路由 `POST /api/v1/queries`）
-- 新增：`tests/unit/test_api_queries.py`（12 条 API 测试）
-- 新增：`tests/unit/test_qa_orchestration.py`（9 条编排测试）
 
 ## 已知问题
 

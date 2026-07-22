@@ -45,6 +45,7 @@ from research_rag.services.qa_service import NoAvailableDocumentsError
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from langchain_qdrant import QdrantVectorStore
     from sqlalchemy import Engine
     from sqlalchemy.orm import Session
 
@@ -62,10 +63,14 @@ DEFAULT_CORS_ORIGINS = [
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """应用启动时创建 engine + session_factory，关闭时 dispose。
+    """应用启动时创建 engine + session_factory + vector_store，关闭时 dispose。
 
     若 ``app.state.session_factory`` 已由 ``create_app`` 调用方注入（测试场景），
     则跳过创建与 dispose，生命周期由调用方管理。
+
+    向量库（``QdrantVectorStore``）在启动时创建并挂到 ``app.state.vector_store``。
+    创建失败（如 Qdrant 服务未启动）不阻断应用启动：service 层会回退到
+    InMemoryVectorStore，文档上传和问答仍可用（但无持久化向量）。
     """
 
     created_engine: Engine | None = None
@@ -76,11 +81,55 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         app.state.session_factory = factory
         created_engine = engine
+
+    # 创建 QdrantVectorStore（best-effort：失败不阻断启动）
+    if getattr(app.state, "vector_store", None) is None:
+        try:
+            app.state.vector_store = _create_vector_store()
+        except VectorStoreError:
+            # Qdrant 不可用：app.state.vector_store 保持 None，
+            # service 层回退到 InMemoryVectorStore
+            app.state.vector_store = None
+
     try:
         yield
     finally:
         if created_engine is not None:
             created_engine.dispose()
+
+
+def _create_vector_store() -> QdrantVectorStore | None:
+    """创建 QdrantVectorStore 实例（best-effort）。
+
+    从环境变量读 Qdrant 配置，创建 Embedding + QdrantVectorStore。
+    任何失败（Qdrant 服务未启动、依赖缺失、embedding 加载失败）都返回
+    ``None``，让 service 层回退到 InMemoryVectorStore。
+
+    返回 ``None`` 的情况：
+    - ``QDRANT_ENABLED`` 环境变量为 ``"false"``（显式禁用）
+    - Qdrant 服务连接失败
+    - Embedding 模型加载失败
+    """
+
+    import os
+
+    # 允许显式禁用 Qdrant（测试或无 Docker 环境时）
+    if os.environ.get("QDRANT_ENABLED", "true").strip().lower() == "false":
+        return None
+
+    try:
+        from research_rag.embedding import EmbeddingConfig, create_embeddings
+        from research_rag.vector_store import create_vector_store, get_qdrant_config
+    except ImportError:
+        return None
+
+    try:
+        embeddings = create_embeddings(EmbeddingConfig())
+        config = get_qdrant_config()
+        return create_vector_store(config, embeddings)
+    except Exception:
+        # Qdrant 不可用或 embedding 加载失败，回退到 None
+        return None
 
 
 def create_app(
@@ -110,6 +159,8 @@ def create_app(
 
     # 挂载 session_factory 到 app.state，供 lifespan 和 get_session_factory 读取
     app.state.session_factory = session_factory
+    # vector_store 初始为 None，lifespan 中按需创建（测试时不创建）
+    app.state.vector_store: QdrantVectorStore | None = None
 
     # CORS 中间件（开发环境允许 localhost）
     app.add_middleware(

@@ -51,6 +51,13 @@ dependencies = [
     # ② langchain-community.ChatOpenAI → community 体积大；③ 手写 HTTP → 违反
     # PROJECT_PLAN 第 5.1 节"直接使用 LangChain"。
     "langchain-openai>=1.2.0",
+    # 阶段 6 引入：LangChain 官方 Qdrant 集成，支持持久化向量存储与 Payload 过滤。
+    # 必要性：QdrantVectorStore 实现 VectorStore 接口，与 embedding.py 的
+    # index_chunks/retrieve 兼容；支持按 document_id payload 过滤检索和批量删除，
+    # 满足"删除文档后无残留向量"验收标准。
+    # 替代方案：① 直接用 qdrant-client → 失去 LangChain VectorStore 抽象；
+    # ② Chroma → 生态相近但 Qdrant Payload 过滤更灵活（PROJECT_PLAN 第 159 行选型）。
+    "langchain-qdrant>=0.2.0",
     "langchain-text-splitters>=1.1.2",
     "numpy>=2.4.6",
     "pymupdf>=1.28.0",

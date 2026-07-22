@@ -1,7 +1,8 @@
-"""FastAPI 依赖注入：DB Session、DocumentService、LlmConfig、QaService。
+"""FastAPI 依赖注入：DB Session、DocumentService、LlmConfig、QaService、VectorStore。
 
 依据 PROJECT_PLAN.md 第 10 节（仓库结构：``api/dependencies.py``）、
-第 13.6 节（API 层与服务层职责分离）、第 9.1 节（LLM 配置）。
+第 13.6 节（API 层与服务层职责分离）、第 9.1 节（LLM 配置）、
+第 716-722 行（阶段 6：Qdrant 向量库依赖注入）。
 
 设计取舍（初学者向说明）：
 - **三层依赖链**：``get_session_factory`` → ``get_db`` → ``get_document_service``。
@@ -13,7 +14,11 @@
   - ``get_document_service``：用当前请求的 Session 构造 ``DocumentService``。
 - **问答依赖链**：``get_session_factory`` → ``get_db`` → ``get_qa_service``，
   另有 ``get_llm_config`` 从环境变量构造 ``LlmConfig``。``get_qa_service``
-  依赖 ``get_db``（Session）和 ``get_llm_config``（LlmConfig）。
+  依赖 ``get_db``（Session）、``get_llm_config``（LlmConfig）和
+  ``get_vector_store``（QdrantVectorStore）。
+- **向量库依赖**：``get_vector_store`` 从 ``app.state`` 取应用启动时创建的
+  ``QdrantVectorStore``（lifespan 里建好）。``None`` 表示未配置 Qdrant，
+  service 层会回退到 InMemoryVectorStore（阶段 5 行为）。
 - **``yield`` 依赖**：FastAPI 支持 generator 依赖，``yield`` 之前的代码在请求
   开始执行，``yield`` 之后的代码在请求结束（包括异常）执行。这样无论请求
   成功还是抛异常，Session 都会被关闭，不会泄漏连接。
@@ -52,6 +57,7 @@ from research_rag.services.qa_service import QaService
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from langchain_qdrant import QdrantVectorStore
     from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -87,14 +93,28 @@ def get_db(
         session.close()
 
 
-def get_document_service(session: Session = Depends(get_db)) -> DocumentService:
-    """用当前请求的 Session 构造 ``DocumentService``。
+def get_vector_store(request: Request) -> QdrantVectorStore | None:
+    """从 ``app.state`` 取应用启动时创建的 ``QdrantVectorStore``。
 
-    测试时通过 ``app.dependency_overrides[get_document_service]`` 替换为 Mock，
-    完全跳过真实数据库与文件 IO。
+    工厂在 ``create_app`` 的 ``lifespan`` 中创建并挂到 ``app.state.vector_store``。
+    ``None`` 表示未配置 Qdrant（测试环境或未启用向量库），service 层会回退
+    到 InMemoryVectorStore。
     """
 
-    return DocumentService(session)
+    return getattr(request.app.state, "vector_store", None)
+
+
+def get_document_service(
+    session: Session = Depends(get_db),
+    vector_store: QdrantVectorStore | None = Depends(get_vector_store),
+) -> DocumentService:
+    """用当前请求的 Session + VectorStore 构造 ``DocumentService``。
+
+    测试时通过 ``app.dependency_overrides[get_document_service]`` 替换为 Mock，
+    完全跳过真实数据库、文件 IO 和向量库。
+    """
+
+    return DocumentService(session, vector_store=vector_store)
 
 
 # ---------------------------------------------------------------------------
@@ -164,13 +184,15 @@ def get_llm_config() -> LlmConfig:
 def get_qa_service(
     session: Session = Depends(get_db),
     llm_config: LlmConfig = Depends(get_llm_config),
+    vector_store: QdrantVectorStore | None = Depends(get_vector_store),
 ) -> QaService:
-    """用当前请求的 Session + LlmConfig 构造 ``QaService``。
+    """用当前请求的 Session + LlmConfig + VectorStore 构造 ``QaService``。
 
-    依赖 ``get_db``（Session）和 ``get_llm_config``（LlmConfig）。
+    依赖 ``get_db``（Session）、``get_llm_config``（LlmConfig）和
+    ``get_vector_store``（QdrantVectorStore）。
     ``QaService`` 内部会惰性创建 Embedding 和 ChatModel（第一次调用
     ``answer`` 时），测试时通过 ``app.dependency_overrides[get_qa_service]``
     替换为 Mock，完全跳过真实数据库、LLM 和 Embedding 调用。
     """
 
-    return QaService(session, llm_config)
+    return QaService(session, llm_config, vector_store=vector_store)
