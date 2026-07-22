@@ -1,28 +1,24 @@
 """问答业务编排服务层。
 
 依据 PROJECT_PLAN.md 第 6.2 节（问答流程）、第 8.4 节（问答 API）、
-US-003、第 13.6 节（异常清单）。
+US-003、第 13.6 节（异常清单）、第 716-722 行（阶段 6：Qdrant 检索）。
 
 设计取舍（初学者向说明）：
 - **Service 编排完整问答流程**：``QaService.answer`` 是问答 API 的业务入口，
-  编排 repository（数据访问）、``embedding``（向量索引与检索）、
+  编排 repository（数据访问）、向量检索（Qdrant 或 InMemory）、
   ``qa_service``（LLM 调用与引用映射）三类操作。不直接写 SQL，不实现 HTTP 路由。
-- **与底层 ``qa_service.py`` 区分**：本模块是业务编排层（编排 DB + Embedding +
+- **与底层 ``qa_service.py`` 区分**：本模块是业务编排层（编排 DB + 向量检索 +
   LLM），底层 ``qa_service.py`` 是"LLM 调用 + 引用映射"工具模块。两者命名相同
   但职责不同：本模块在 ``services/`` 子包，底层在顶层 ``research_rag/``。
-- **多文档检索策略**：每个 READY 文档单独 ``index_chunks`` + ``retrieve``，
-  合并所有结果后按 ``score`` 降序取全局 top_k。理由：``embedding.retrieve``
-  返回的 ``RetrievalResult`` 不含 ``document_id`` 字段，单文档索引能明确知道
-  检索结果属于哪个文档；合并后按分数排序保证全局最相关的片段入选。
-  阶段 6 接 Qdrant 后会改为单库检索，届时可移除此循环。
-- **不修改 ``embedding`` 模块**：本 Issue 范围内不新增 ``document_id`` 到
-  ``RetrievalResult``，通过"每文档单独索引 + 外部维护 document_id 映射"绕开，
-  避免影响已合并的阶段 3 代码。
+- **双检索路径**：注入 ``vector_store`` 时用 Qdrant 单库检索（支持
+  ``document_ids`` payload 过滤，不再每文档单独索引）；未注入时回退到
+  InMemoryVectorStore（每文档单独索引，阶段 5 行为，测试用）。
+- **Qdrant 路径更高效**：向量在上传时就写入 Qdrant，问答时直接 similarity
+  search，不需要每次重建索引。``QdrantSearchResult`` 含 ``document_id``，
+  不再需要外部维护 ``context_doc_ids`` 平行列表。
 - **Citation 映射用 ``citation_indices`` 直接索引**：``answer_question`` 返回的
   ``citation_indices`` 是上下文编号列表（从 1 开始），与 ``contexts`` 列表顺序
-  一致。通过 ``contexts[idx - 1]`` 直接获取 ``ContextPiece``（含 document_name
-  / page_number / chunk_index / content / score），配合平行的
-  ``context_doc_ids`` 获取 ``document_id``，无需反查 DB。
+  一致。通过 ``contexts[idx - 1]`` 直接获取 ``ContextPiece``。
 - **惰性创建 Embedding 和 ChatModel**：``embeddings`` / ``chat_model`` 作为
   构造函数可选参数，未传时在 ``answer`` 中惰性创建。生产环境由
   ``get_qa_service`` 依赖注入（不传，让 QaService 自己创建）；测试时直接注入
@@ -31,13 +27,9 @@ US-003、第 13.6 节（异常清单）。
   的 ``document_ids`` 均非 READY 时抛出。与 ``DocumentNotFoundError``（指定
   UUID 不存在）区分：前者是"没有可问答的内容"，后者是"ID 不存在"。
   API 层将两者都映射为 404（资源不存在语义）。
-- **``document_ids`` 中不存在 UUID 抛 ``DocumentNotFoundError``**：对齐
-  PROJECT_PLAN 第 13.6 节异常清单，复用已有异常，API 层已有 404 处理器。
 - **``request_id`` / ``elapsed_ms`` 在 service 层生成**：``request_id`` 用
   ``uuid.uuid4`` 生成，便于日志追踪单次问答；``elapsed_ms`` 用
   ``time.perf_counter`` 计时，从编排开始到结束。API 层不需要感知这些字段。
-- **不实现向量库持久化**：每次请求重建 ``InMemoryVectorStore`` 索引
-  （阶段 6 才迁移到 Qdrant），本 Issue 范围内可接受。
 """
 
 from __future__ import annotations
@@ -71,6 +63,7 @@ if TYPE_CHECKING:
 
     from langchain_core.embeddings import Embeddings
     from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_qdrant import QdrantVectorStore
     from sqlalchemy.orm import Session
 
 
@@ -105,6 +98,7 @@ class QaService:
         embedding_config: EmbeddingConfig | None = None,
         embeddings: Embeddings | None = None,
         chat_model: BaseChatModel | None = None,
+        vector_store: QdrantVectorStore | None = None,
     ) -> None:
         self.session = session
         self.repo = DocumentRepository(session)
@@ -112,6 +106,7 @@ class QaService:
         self.embedding_config = embedding_config or EmbeddingConfig()
         self._embeddings = embeddings
         self._chat_model = chat_model
+        self.vector_store = vector_store
 
     # ------------------------------------------------------------------
     # 问答主流程
@@ -162,21 +157,28 @@ class QaService:
             msg = "没有可用的 READY 文档可供问答。"
             raise NoAvailableDocumentsError(msg)
 
-        # 2. 惰性创建 Embedding 和 ChatModel（测试时已注入，跳过创建）
-        if self._embeddings is None:
-            self._embeddings = create_embeddings(self.embedding_config)
+        # 2. 惰性创建 ChatModel（测试时已注入，跳过创建）
+        # Qdrant 路径不需要 Embeddings（QdrantVectorStore 内部有），
+        # InMemory 路径在 _retrieve_contexts 中按需创建
         if self._chat_model is None:
             self._chat_model = create_chat_model(self.llm_config)
 
-        # 此时 embeddings 和 chat_model 已确保非 None（惰性创建或测试注入）
+        # 此时 chat_model 已确保非 None（惰性创建或测试注入）
         # 用 assert 帮助 mypy 收窄类型，本项目不使用 -O 优化，assert 不会被移除
-        assert self._embeddings is not None
         assert self._chat_model is not None
-        embeddings = self._embeddings
         chat_model = self._chat_model
 
-        # 3. 多文档检索：每文档单独索引+检索，合并后取全局 top_k
-        contexts, context_doc_ids = self._retrieve_contexts(docs, question, top_k, embeddings)
+        # 3. 向量检索：有 Qdrant 走单库检索，否则回退到 InMemory 多文档索引
+        if self.vector_store is not None:
+            contexts, context_doc_ids = self._retrieve_with_qdrant(docs, question, top_k)
+        else:
+            # InMemory 路径需要 Embeddings（惰性创建或测试注入）
+            if self._embeddings is None:
+                self._embeddings = create_embeddings(self.embedding_config)
+            assert self._embeddings is not None
+            contexts, context_doc_ids = self._retrieve_contexts(
+                docs, question, top_k, self._embeddings
+            )
 
         if not contexts:
             # 所有文档都没有 Chunk（理论上不应发生，READY 文档应有 Chunk）
@@ -238,7 +240,61 @@ class QaService:
         return ready_docs
 
     # ------------------------------------------------------------------
-    # 私有：多文档检索
+    # 私有：Qdrant 检索（阶段 6）
+    # ------------------------------------------------------------------
+
+    def _retrieve_with_qdrant(
+        self,
+        docs: Sequence[Document],
+        question: str,
+        top_k: int,
+    ) -> tuple[list[ContextPiece], list[uuid.UUID]]:
+        """Qdrant 单库检索：直接 similarity search，支持 document_ids 过滤。
+
+        与 ``_retrieve_contexts``（InMemory 多文档索引）的区别：
+        - 不需要每文档单独 index_chunks（向量在上传时已写入 Qdrant）
+        - ``QdrantSearchResult`` 含 ``document_id``，直接映射到 ``context_doc_ids``
+        - 按 ``document_ids`` payload 过滤，而不是遍历每个文档
+
+        Args:
+            docs: READY 文档列表（用于提取 document_ids，即使 Qdrant 有
+                残留向量也能限定检索范围到当前 READY 文档）。
+            question: 查询问题。
+            top_k: 返回的最相关片段数。
+
+        Returns:
+            ``(contexts, context_doc_ids)`` 两个平行列表。
+        """
+
+        from research_rag.vector_store import search
+
+        # 用 READY 文档的 id 列表过滤检索范围（避免检索到已删除但 Qdrant
+        # 未清理的残留向量）
+        doc_ids = [doc.id for doc in docs]
+
+        # 本方法只在 self.vector_store is not None 时被 answer 调用，
+        # 用 assert 帮助 mypy 收窄类型（本项目不用 -O 优化，assert 不会被移除）
+        assert self.vector_store is not None
+        results = search(self.vector_store, question, doc_ids, top_k=top_k)
+
+        contexts: list[ContextPiece] = []
+        context_doc_ids: list[uuid.UUID] = []
+        for r in results:
+            contexts.append(
+                ContextPiece(
+                    document_name=r.document_name,
+                    page_number=r.page_number,
+                    chunk_index=r.chunk_index,
+                    content=r.content,
+                    score=r.score,
+                )
+            )
+            context_doc_ids.append(r.document_id)
+
+        return contexts, context_doc_ids
+
+    # ------------------------------------------------------------------
+    # 私有：多文档检索（InMemory 回退路径）
     # ------------------------------------------------------------------
 
     def _retrieve_contexts(
