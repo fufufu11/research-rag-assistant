@@ -307,6 +307,7 @@ class TestLoadDataset:
                 "expected_substring": "脑纹识别以脑电图",
                 "category": "定义",
                 "note": "测试",
+                "pdf": "brainprint.pdf",
             },
             {
                 "question": "EEG是什么？",
@@ -324,8 +325,10 @@ class TestLoadDataset:
         assert entries[0].expected_substring == "脑纹识别以脑电图"
         assert entries[0].category == "定义"
         assert entries[0].note == "测试"
+        assert entries[0].pdf == "brainprint.pdf"
         assert entries[1].category == ""
         assert entries[1].note == ""
+        assert entries[1].pdf == ""
 
     def test_file_not_found(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError, match="评测数据集文件不存在"):
@@ -345,7 +348,7 @@ class TestLoadDataset:
             load_dataset(path)
 
     def test_load_actual_dataset(self) -> None:
-        """加载实际数据集，验证至少 30 条（PROJECT_PLAN 第 726 行验收）。"""
+        """加载实际数据集，验证至少 30 条且每条有 pdf 字段。"""
         path = Path("eval/dataset.json")
         if not path.exists():
             pytest.skip("eval/dataset.json 不存在（可能不在项目根目录运行）")
@@ -355,6 +358,7 @@ class TestLoadDataset:
             assert entry.question
             assert entry.expected_page >= 1
             assert entry.expected_substring
+            assert entry.pdf, "多论文数据集每条应有 pdf 字段"
 
 
 # ---------------------------------------------------------------------------
