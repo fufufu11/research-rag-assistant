@@ -277,3 +277,52 @@ def test_delete_document_invalid_uuid_returns_422(
 
     assert response.status_code == 422
     mock_service.delete_document.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 集成测试：不 mock get_db，验证 get_session_factory → get_db → get_document_service 依赖链
+# ---------------------------------------------------------------------------
+
+
+def test_dependency_chain_get_db_not_mocked() -> None:
+    """验证 get_session_factory → get_db → get_document_service 依赖链完整。
+
+    不 override ``get_document_service``，走真实的 ``get_db`` → ``get_session_factory``
+    依赖链。如果 ``get_db`` 的 ``session_factory`` 参数缺少 ``Depends()``
+    （历史 bug），FastAPI 会把它当成 query 参数，返回 422 而非 200。
+
+    用内存 SQLite + 真实 ``DocumentService``，``list_documents`` 返回空列表
+    （空库无文档），验证 Session 被正确创建和关闭。
+
+    注意内存 SQLite 的连接隔离陷阱：默认 ``QueuePool`` 每次 ``session()`` 取一个
+    新连接，每个连接是独立的内存数据库，建表不会对后续请求可见。必须用
+    ``StaticPool`` 强制所有 Session 共享同一连接，建表才生效。
+    """
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from research_rag.db.models import Base
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+
+    app = create_app(session_factory=factory)
+    # 不设置 dependency_overrides，走真实依赖链
+
+    try:
+        with TestClient(app) as c:
+            response = c.get("/api/v1/documents")
+    finally:
+        engine.dispose()
+
+    # 如果 get_db 缺少 Depends(get_session_factory)，这里会返回 422
+    assert response.status_code == 200
+    assert response.json() == {"items": []}
