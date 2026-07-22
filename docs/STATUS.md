@@ -39,9 +39,9 @@
 
 ### 评测与质量优化
 
-- 32 条检索评测数据集（基于真实论文 PDF）
+- 30 条检索评测数据集（3 篇英文 AI 经典论文，多论文合并库检索）
 - Hit@1 / Hit@5 / MRR / 平均检索耗时指标
-- 5 组参数对比实验，详见 [评测报告](./evaluation_report.md)
+- 5 组参数对比实验，支持中英文 Embedding 模型切换，详见 [评测报告](./evaluation_report.md)
 
 ## 技术栈
 
@@ -73,8 +73,8 @@ uv run streamlit run src/research_rag/ui/app.py
 
 # 运行检索评测
 uv sync --extra embedding
-uv run python scripts/evaluate.py verify --pdf <pdf_path>
-uv run python scripts/evaluate.py run --pdf <pdf_path>
+uv run python scripts/evaluate.py verify --pdfs-dir <含 PDF 的目录>
+uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 ```
 
 ## 测试状态

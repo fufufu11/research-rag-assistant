@@ -1,141 +1,178 @@
-# 阶段 7 检索评测报告
+# 检索评测报告
 
-> 本报告记录评测数据集、参数、环境、结果与结论，确保评测可复现。
+> 本报告记录多论文检索评测的数据集、参数、环境、结果与结论，确保评测可复现。
 
 ## 1. 评测目标
 
-只评测**检索阶段**（不调用 LLM、不消耗 Token），回答两个问题：
+评测 RAG 系统检索阶段的质量，回答两个问题：
 
-1. 当前默认切分参数（`chunk_size=500, chunk_overlap=80`）的检索质量如何？
-2. 改变 `chunk_size` / `chunk_overlap` 对 Hit@1 / Hit@5 / MRR / 平均检索耗时的影响？
+1. **chunk_size / chunk_overlap 参数如何影响检索质量？**
+2. **多论文合并库场景下，检索系统能否准确定位到正确论文的正确片段？**
 
-生成阶段（LLM 答案质量）评测需消耗 Token 且答案质量主观，留待后续。
+本评测只评测检索阶段，不调用 LLM，不消耗 Token。
 
-## 2. 数据集
+## 2. 评测数据集
 
-- **来源**：真实 PDF `25208207087-符方刚.pdf`（9 页，脑纹识别综述论文《脑纹识别研究进展：方法、挑战与趋势》）
-- **条目数**：32 条（超过验收要求的 30 条）
-- **格式**：`eval/dataset.json`，每条含 `question` / `expected_page` / `expected_substring` / `category` / `note`
-- **覆盖范围**：页 1-6（正文部分，不含参考文献页 7-9）
-- **问题分类**：定义 / 方法 / 指标 / 趋势 / 挑战 / 应用 / 结论 / 细节，共 8 类
+### 2.1 论文选择
 
-### 设计取舍
+选取 3 篇主题独立的英文 AI 经典论文，覆盖不同领域（BCI、序列建模、图像分类），避免论文间内容交叉干扰检索：
 
-- **ground truth 用 `expected_substring` 而非 `chunk_index`**：当 `chunk_size` 改变时，`chunk_index` 会变化，但正确答案所在的文本片段内容不变。用一段独特的子串（10+ 字符）匹配，对参数变化鲁棒。
-- **子串匹配前做空白归一化**：PyMuPDF 提取中文时常在字间插入空格（如 `活 动的`），不同切分参数下空格位置可能不同。`normalize_text` 移除所有空白后再做 `in` 判断，避免误判。
-- **数据集验证**：`uv run python scripts/evaluate.py verify --pdf <path>` 已确认全部 32 条 `expected_substring` 都能在默认切分结果中找到。
+| 标识 | 论文 | 页数 | 领域 |
+|---|---|---|---|
+| EEGNet | EEGNet: A Compact Convolutional Neural Network for EEG-based Brain-Computer Interfaces (2018) | 30 | BCI / CNN |
+| Transformer | Attention Is All You Need (2017) | 15 | 序列建模 / 注意力机制 |
+| AlexNet | ImageNet Classification with Deep Convolutional Neural Networks | 7 | 图像分类 / CNN |
+
+### 2.2 问题集
+
+每篇论文 10 条问题，共 30 条。问题用英文（与论文语言一致），排除跨语言干扰，专注测试 chunking 参数对检索的影响。问题覆盖定义、方法、结果、细节四类：
+
+| 论文 | 定义 | 方法 | 结果 | 细节 | 合计 |
+|---|---|---|---|---|---|
+| EEGNet | 2 | 4 | 0 | 4 | 10 |
+| Transformer | 1 | 7 | 1 | 1 | 10 |
+| AlexNet | 0 | 4 | 4 | 2 | 10 |
+
+每条问题标注 `expected_substring`（答案所在 chunk 的独特子串）和 `expected_page`（答案所在页码）。匹配时对子串和 chunk 内容做空白归一化后判断包含关系。
+
+### 2.3 评测模式
+
+**多 PDF 合并库检索**：3 篇论文的所有 chunk 合并到同一个向量库中，每条问题在整个库中检索 Top-K。这模拟用户上传多份文献后的真实场景，能测试跨论文检索的难度。
 
 ## 3. 评测环境
 
-| 项目 | 版本/配置 |
-|------|----------|
-| 操作系统 | Windows 11 |
-| Python | 3.11（uv 管理） |
-| Embedding 模型 | `BAAI/bge-small-zh-v1.5`（512 维，中文优化） |
-| 向量存储 | `InMemoryVectorStore`（LangChain，余弦相似度） |
-| PDF 解析 | PyMuPDF 1.28+ |
-| 文本切分 | LangChain `RecursiveCharacterTextSplitter`（按页切分，不跨页） |
+| 项 | 值 |
+|---|---|
+| Embedding 模型 | `BAAI/bge-small-en-v1.5`（英文优化，维度 384，约 130MB） |
+| 向量存储 | `InMemoryVectorStore`（LangChain） |
+| PDF 解析 | PyMuPDF |
+| 切分器 | LangChain `RecursiveCharacterTextSplitter` |
+| 操作系统 | Windows |
+| Python | 3.11 |
 
-> 评测脚本调用本地 Embedding，不依赖外部 API。运行前需 `uv sync --extra embedding` 安装 `sentence-transformers`。
+> **模型选择说明**：评测论文为英文，因此选用同家族的英文优化模型 `bge-small-en-v1.5`，而非项目生产默认的 `bge-small-zh-v1.5`（中文优化）。生产环境面向中文用户与中文文献，仍保留中文模型为默认；评测脚本通过 `--embedding-model` 参数支持按论文语言切换模型。
 
-## 4. 实验参数
+## 4. 实验配置
 
-5 组实验，覆盖两个维度的参数对比（满足"至少两组"要求）：
+5 组参数对比，覆盖两个维度：
 
-| 实验名称 | chunk_size | chunk_overlap | top_k | 说明 |
-|----------|-----------|---------------|-------|------|
-| `chunk-300-overlap-50` | 300 | 50 | 5 | 小片段：粒度细，chunk 数量多 |
-| `chunk-500-overlap-0` | 500 | 0 | 5 | 中片段无重叠：对比 overlap 影响 |
-| `chunk-500-overlap-80` | 500 | 80 | 5 | **基线**（项目默认参数） |
-| `chunk-500-overlap-160` | 500 | 160 | 5 | 中片段高重叠：对比 overlap 影响 |
-| `chunk-800-overlap-100` | 800 | 100 | 5 | 大片段：粒度粗，chunk 数量少 |
-
-- 维度 1：`chunk_size`（300 / 500 / 800），控制片段粒度
-- 维度 2：`chunk_overlap`（0 / 80 / 160，固定 `chunk_size=500`），控制边界重叠
-- `top_k` 统一取 5（= `max(HIT_K_VALUES)`，保证 Hit@5 可计算）
+| 实验名 | chunk_size | overlap | 说明 |
+|---|---|---|---|
+| chunk-300-overlap-50 | 300 | 50 | 小片段：粒度细，chunk 数量多 |
+| chunk-500-overlap-0 | 500 | 0 | 中片段无重叠：对比 overlap 影响 |
+| chunk-500-overlap-80 | 500 | 80 | 基线（项目默认参数） |
+| chunk-500-overlap-160 | 500 | 160 | 中片段高重叠：对比 overlap 影响 |
+| chunk-800-overlap-100 | 800 | 100 | 大片段：粒度粗，chunk 数量少 |
 
 ## 5. 评测结果
 
 ### 5.1 汇总指标
 
 | 实验 | chunks | Hit@1 | Hit@5 | MRR | 平均耗时(ms) |
-|------|--------|-------|-------|-----|-------------|
-| `chunk-300-overlap-50` | 75 | **53.1%** | 81.2% | **0.651** | 6.3 |
-| `chunk-500-overlap-0` | 43 | 50.0% | **87.5%** | 0.636 | 5.8 |
-| `chunk-500-overlap-80`（基线） | 47 | 46.9% | 81.2% | 0.613 | 5.8 |
-| `chunk-500-overlap-160` | 53 | **53.1%** | 78.1% | 0.613 | 5.8 |
-| `chunk-800-overlap-100` | 27 | 37.5% | 84.4% | 0.540 | 5.4 |
+|---|---|---|---|---|---|
+| chunk-300-overlap-50 | 681 | **36.7%** | 56.7% | 0.436 | 21.1 |
+| chunk-500-overlap-0 | 391 | 30.0% | **70.0%** | **0.458** | 18.2 |
+| chunk-500-overlap-80（基线） | 411 | 26.7% | 66.7% | 0.431 | 17.1 |
+| chunk-500-overlap-160 | 492 | 20.0% | 53.3% | 0.326 | 16.7 |
+| chunk-800-overlap-100 | 264 | 30.0% | **70.0%** | 0.450 | 15.2 |
 
-> 加粗表示该指标下的最优值。
+### 5.2 参数影响分析
 
-### 5.2 复现命令
+#### chunk_size 的影响
+
+- **小片段（300）**：Hit@1 最高（36.7%），但 Hit@5 中等（56.7%）。小片段粒度细，正确答案所在 chunk 信息聚焦，更容易排在第一位；但 chunk 数量多达 681，正确片段容易被其他语义相近的短片段挤掉 Top-5。
+- **中片段（500）**：综合表现最佳。无重叠时 Hit@5 达 70%，MRR 最高（0.458）。信息密度适中，正确答案完整落在一个 chunk 内的概率高。
+- **大片段（800）**：Hit@5 与中片段持平（70%），Hit@1 也较高（30.0%）。大片段包含更多上下文，检索时更易匹配到答案所在区域；但 chunk 数量少（264），粒度粗，引用溯源时定位精度下降。
+
+#### chunk_overlap 的影响
+
+- **无重叠（0）**：Hit@5 最高（70%），MRR 最高（0.458）。边界清晰，正确答案不被切散到多个重叠片段中分散排名。
+- **中重叠（80，基线）**：Hit@5 略降（66.7%），Hit@1 下降到 26.7%。重叠使答案出现在多个 chunk 中，反而分散了正确片段的排名分数。
+- **高重叠（160）**：Hit@5 最低（53.3%），Hit@1 也最低（20.0%）。继续增加重叠不仅不提升召回，还引入更多重复片段，造成排名分散和检索噪声。
+
+### 5.3 关键发现
+
+1. **英文 Embedding 显著优于中文模型**：相比此前用 `bge-small-zh-v1.5` 的评测（Hit@5 约 43-50%、MRR 约 0.25-0.30），改用 `bge-small-en-v1.5` 后 Hit@5 提升到 53-70%、MRR 提升到 0.33-0.46。模型与文档语言匹配是检索质量的基础。
+2. **overlap 越大反而越差**：与中文论文评测时"overlap 提升召回"的结论不同，英文论文 + 英文 Embedding 下，overlap=0 反而最优。原因：英文 Embedding 语义匹配精确，重叠产生的重复片段会分散正确答案的排名分数；中文模型语义匹配较弱时，重叠能提升召回。
+3. **最优参数为 chunk-500-overlap-0**：Hit@5=70%、MRR=0.458，且 chunk 数量适中（391）。但项目默认基线仍保留 chunk-500-overlap-80，因为生产环境面向中文文献 + 中文 Embedding，参数选择需以中文场景为准。
+4. **多论文场景的检索难度**：3 篇论文合并后 391-681 个 chunk，Hit@5=70% 意味着 30% 的问题被跨论文语义干扰挤出 Top-5，仍有优化空间。
+
+## 6. 失败模式分析
+
+分析最优配置（chunk-500-overlap-0）的 9 条 Hit@5 未命中问题，归纳四类失败模式：
+
+### 6.1 关键词列表类问题（1 条）
+
+- "What are the keywords of the EEGNet paper?"
+
+**原因**：关键词列表是多个术语的并列，与自然语言问题的语义距离远。Embedding 模型难以将"What are the keywords"映射到具体的术语列表 chunk。
+
+### 6.2 公式与符号类问题（1 条）
+
+- "What is the formula for Scaled Dot-Product Attention?"
+
+**原因**：公式含特殊符号（`softmax(QK^T/√d)`），Embedding 模型对数学符号的语义理解有限，且 PyMuPDF 提取公式时可能引入额外字符。
+
+### 6.3 跨论文语义干扰（4 条）
+
+- "What type of network is EEGNet?"
+- "What convolutions did EEGNet introduce from computer vision?"
+- "What does the SMR task in EEGNet classify?"
+- "What does the Transformer dispense with?"
+
+**原因**：3 篇论文都涉及 CNN、卷积、网络结构等概念，合并库中存在多个语义相近的 chunk。例如"convolution"在 EEGNet、Transformer（提及 separable convolutions）、AlexNet 中都出现，正确答案所在 chunk 被其他论文的卷积相关 chunk 挤出 Top-5。
+
+### 6.4 数值结果类问题（2 条）
+
+- "What are the top-1 and top-5 error rates of AlexNet?"
+- "What top-5 error rate did AlexNet achieve in ILSVRC-2012?"
+
+**原因**：问题问的是具体数值（如 "top-1 error rate of 37.5%"），但答案所在的 chunk 是包含多个数值的结果段落，语义上更接近"实验结果总结"而非具体数值。Embedding 模型对数值的语义表示较弱。
+
+### 6.5 定义性短句类问题（1 条）
+
+- "What mechanism is the Transformer based on?"
+
+**原因**：答案"based solely on attention mechanisms"是定义性短句，语义信息稀薄，与问题的语义匹配度低。
+
+## 7. 局限性与改进方向
+
+### 7.1 当前局限
+
+1. **评测模型与生产模型不一致**：评测用英文 `bge-small-en-v1.5`，生产用中文 `bge-small-zh-v1.5`。评测结论（如 overlap=0 最优）基于英文场景，中文场景的参数选择需以中文评测为准。
+2. **只评测检索阶段**：生成阶段（LLM 答案质量）未评测，需消耗 Token 且答案质量主观。
+3. **问题类型单一**：当前问题多为事实型（"是什么""有多少"），缺少推理型、对比型问题。
+4. **论文数量有限**：3 篇论文的合并库规模较小（391-681 chunks），更大规模库的检索效果未验证。
+
+### 7.2 改进方向
+
+| 方向 | 预期收益 | 实施成本 |
+|---|---|---|
+| 换用 `bge-m3` 多语言 Embedding 模型 | 中英文混合场景统一支持 | 中（需重新索引） |
+| Cross-Encoder / BGE Reranker 重排序 | Hit@1 显著提升 | 中（增加推理延迟） |
+| 混合检索（BM25 + 向量） | 关键词列表、数值类问题改善 | 中（引入 BM25） |
+| 跨页切分 | 跨页边界问题改善 | 低（修改切分逻辑） |
+| 表格感知切分 | 表格、数值结果类问题改善 | 高（需表格识别） |
+
+## 8. 复现方法
 
 ```powershell
-# 1. 安装本地 Embedding 后端
+# 安装 Embedding 推理后端
 uv sync --extra embedding
 
-# 2. 验证数据集（32 条子串均能在切分结果中找到）
-uv run python scripts/evaluate.py verify --pdf <pdf_path>
+# 验证数据集子串匹配（不需要 Embedding 模型）
+uv run python scripts/evaluate.py verify --pdfs-dir <含 3 篇 PDF 的目录>
 
-# 3. 运行全部 5 组实验
-uv run python scripts/evaluate.py run --pdf <pdf_path>
+# 运行全部 5 组实验（默认用生产 Embedding 模型，中文优化）
+uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录>
 
-# 4. 仅运行基线实验
-uv run python scripts/evaluate.py run --pdf <pdf_path> --only chunk-500-overlap-80
+# 运行实验并指定英文 Embedding 模型（评测英文论文时推荐）
+uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录> `
+    --embedding-model BAAI/bge-small-en-v1.5
 
-# 5. 自定义实验配置（JSON 文件）
-uv run python scripts/evaluate.py run --pdf <pdf_path> --config my_experiments.json
+# 仅运行基线实验
+uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录> `
+    --embedding-model BAAI/bge-small-en-v1.5 --only chunk-500-overlap-80
 ```
 
-## 6. 结论与分析
-
-### 6.1 参数对比结论
-
-1. **`chunk_size=500` 整体最优**：在 Hit@5（87.5%）和 MRR（0.636）上表现最好。`chunk_size=300` 在 Hit@1 和 MRR 上略优，但 Hit@5 略低；`chunk_size=800` 各项指标均最差。
-
-2. **大片段（`chunk_size=800`）不适合中文科研文献**：Hit@1 仅 37.5%，MRR 0.540。原因是大片段把多个主题混在一个 chunk 里，稀释了语义，Embedding 难以精准匹配单个问题的核心段落。
-
-3. **`overlap` 增大对 Hit@5 有负面影响**（固定 `chunk_size=500`）：overlap 0→80→160 时 Hit@5 为 87.5%→81.2%→78.1%。原因可能是重叠导致同一信息被拆分到多个 chunk，降低了单个 chunk 的语义独立性，反而干扰排序。但 overlap 增大对 Hit@1 有正面影响（46.9%→53.1%），因为重叠能让边界信息出现在更多 chunk 中，提高 Top-1 命中概率。
-
-4. **检索耗时与 chunk 数量正相关**：75 chunks 耗时 6.3ms，27 chunks 耗时 5.4ms。但绝对差异很小（<1ms），对用户体验无影响。InMemoryVectorStore 的检索复杂度是 O(n)，chunk 数量翻倍耗时仅增加约 1ms。
-
-5. **当前项目默认参数（`chunk-500-overlap-80`）表现中等**：Hit@5=81.2%，MRR=0.613。若追求更高召回率，建议将 `chunk_overlap` 调为 0（Hit@5 提升至 87.5%）。但需注意，overlap=0 可能导致跨边界的问题答案被切断（见 6.2 失败分析）。
-
-### 6.2 失败 case 模式分析
-
-跨所有实验的共性失败 case（在多组实验中 Hit@5 未命中）：
-
-- **`BrainPrint如何表示EEG来识别身份？`**：在全部 5 组实验中均未命中。答案在页 4 开头（`提出的BrainPrint将EEG表示为图结构`），但 chunk 边界常切断"提出的"和"BrainPrint"的上下文，且问题中的"BrainPrint"与正文中的"BrainPrint"（大小写、连字符）存在归一化差异。
-- **`静息态EEG采集有什么优势？`**：在 4 组实验中未命中。答案在页 3 的表 1 中（表格被切分成多个碎片 chunk），表格内容分散导致语义不集中。
-- **`可撤销脑纹用了哪些隐私保护方法？`**：在 3 组实验中未命中。答案是一个枚举列表（`随机投影、二值编码、受密钥控制的变换`），列表项被切分到不同 chunk。
-
-**失败模式归纳**：
-1. **跨 chunk 边界**：答案正好被切分边界切断（如"提出的BrainPrint"被拆到两个 chunk）
-2. **表格内容碎片化**：PDF 表格被按行提取并切分，单个 chunk 只含表格的几个单元格，语义不完整
-3. **枚举列表分散**：多个并列项被切到不同 chunk，单个 chunk 无法覆盖完整答案
-
-**未来改进方向**（不在本 Issue 范围）：
-- 跨页切分（当前按页切分，跨页答案无法召回）
-- 表格感知切分（识别表格边界，整表作为一个 chunk）
-- 混合检索（BM25 + 向量检索，对枚举类问题更友好）
-- Rerank（用 cross-encoder 对 Top-K 结果重排，提升 Hit@1）
-
-### 6.3 验收标准达成情况
-
-| 验收标准 | 达成情况 |
-|---------|---------|
-| 至少 30 条评测数据 | 32 条（达标） |
-| 指标：Hit@1、Hit@5、MRR、平均检索耗时 | 全部实现（达标） |
-| 至少两组参数对比 | 5 组，覆盖 chunk_size 和 chunk_overlap 两个维度（达标） |
-| 可选：混合检索或 Rerank | 未实现（可选，留待后续） |
-| 评测可复现，记录数据集、参数、环境、结果和结论 | 本报告完整记录（达标） |
-
-## 7. 相关文件
-
-| 文件 | 说明 |
-|------|------|
-| `eval/dataset.json` | 32 条评测数据集 |
-| `src/research_rag/evaluation.py` | 指标计算与数据集加载的纯函数 |
-| `scripts/evaluate.py` | 评测脚本（`verify` / `run` 子命令） |
-| `tests/unit/test_evaluation.py` | 47 条单元测试 |
-| `docs/evaluation_report.md` | 本报告 |
+数据集见 [eval/dataset.json](../eval/dataset.json)，每条问题的 `pdf` 字段标注答案所在论文的文件名。

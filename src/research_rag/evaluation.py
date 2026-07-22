@@ -58,6 +58,8 @@ class EvaluationEntry:
             变化和 PDF 提取空格鲁棒。
         category: 问题分类（如"定义"/"方法"/"挑战"），用于分桶分析。
         note: 可选备注（人工标注说明）。
+        pdf: 可选，答案所在 PDF 的文件名（不含路径）。多论文评测时用于
+            按论文分组分析；单论文评测可留空。
     """
 
     question: str
@@ -65,6 +67,7 @@ class EvaluationEntry:
     expected_substring: str
     category: str = ""
     note: str = ""
+    pdf: str = ""
 
 
 @dataclass(frozen=True)
@@ -332,6 +335,7 @@ def load_dataset(path: str | Path) -> list[EvaluationEntry]:
                     expected_substring=item["expected_substring"],
                     category=item.get("category", ""),
                     note=item.get("note", ""),
+                    pdf=item.get("pdf", ""),
                 )
             )
         except KeyError as exc:
