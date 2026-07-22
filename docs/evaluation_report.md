@@ -43,14 +43,14 @@
 
 | 项 | 值 |
 |---|---|
-| Embedding 模型 | `BAAI/bge-small-zh-v1.5` |
+| Embedding 模型 | `BAAI/bge-small-en-v1.5`（英文优化，维度 384，约 130MB） |
 | 向量存储 | `InMemoryVectorStore`（LangChain） |
 | PDF 解析 | PyMuPDF |
 | 切分器 | LangChain `RecursiveCharacterTextSplitter` |
 | 操作系统 | Windows |
 | Python | 3.11 |
 
-> **注意**：`bge-small-zh-v1.5` 是中文 Embedding 模型，对英文有基本支持但非最优。本评测使用英文问题+英文论文，旨在测试纯检索能力；中文问题对英文论文的跨语言检索效果见第 7 节局限性分析。
+> **模型选择说明**：评测论文为英文，因此选用同家族的英文优化模型 `bge-small-en-v1.5`，而非项目生产默认的 `bge-small-zh-v1.5`（中文优化）。生产环境面向中文用户与中文文献，仍保留中文模型为默认；评测脚本通过 `--embedding-model` 参数支持按论文语言切换模型。
 
 ## 4. 实验配置
 
@@ -70,85 +70,89 @@
 
 | 实验 | chunks | Hit@1 | Hit@5 | MRR | 平均耗时(ms) |
 |---|---|---|---|---|---|
-| chunk-300-overlap-50 | 681 | 16.7% | 43.3% | 0.269 | 16.5 |
-| chunk-500-overlap-0 | 391 | **23.3%** | 43.3% | **0.298** | 12.7 |
-| chunk-500-overlap-80（基线） | 411 | 13.3% | **50.0%** | 0.262 | 17.9 |
-| chunk-500-overlap-160 | 492 | 13.3% | **50.0%** | 0.262 | 14.6 |
-| chunk-800-overlap-100 | 264 | 13.3% | **50.0%** | 0.250 | 13.2 |
+| chunk-300-overlap-50 | 681 | **36.7%** | 56.7% | 0.436 | 21.1 |
+| chunk-500-overlap-0 | 391 | 30.0% | **70.0%** | **0.458** | 18.2 |
+| chunk-500-overlap-80（基线） | 411 | 26.7% | 66.7% | 0.431 | 17.1 |
+| chunk-500-overlap-160 | 492 | 20.0% | 53.3% | 0.326 | 16.7 |
+| chunk-800-overlap-100 | 264 | 30.0% | **70.0%** | 0.450 | 15.2 |
 
 ### 5.2 参数影响分析
 
 #### chunk_size 的影响
 
-- **小片段（300）**：Hit@1 较高（16.7%），但 Hit@5 最低（43.3%）。小片段粒度细，正确答案所在 chunk 信息少，容易被其他语义相近的片段挤掉。chunk 数量多达 681，检索噪声大。
-- **中片段（500）**：Hit@5 达到 50%，信息密度适中。无重叠时 Hit@1 最高（23.3%），因为片段边界清晰，正确答案完整落在一个 chunk 内的概率高。
-- **大片段（800）**：Hit@5 与中片段持平（50%），但 MRR 最低（0.250）。大片段虽然包含更多信息，但检索时可能匹配到片段中与问题无关的部分，导致排名靠后。chunk 数量少（264），检索快但粒度粗。
+- **小片段（300）**：Hit@1 最高（36.7%），但 Hit@5 中等（56.7%）。小片段粒度细，正确答案所在 chunk 信息聚焦，更容易排在第一位；但 chunk 数量多达 681，正确片段容易被其他语义相近的短片段挤掉 Top-5。
+- **中片段（500）**：综合表现最佳。无重叠时 Hit@5 达 70%，MRR 最高（0.458）。信息密度适中，正确答案完整落在一个 chunk 内的概率高。
+- **大片段（800）**：Hit@5 与中片段持平（70%），Hit@1 也较高（30.0%）。大片段包含更多上下文，检索时更易匹配到答案所在区域；但 chunk 数量少（264），粒度粗，引用溯源时定位精度下降。
 
 #### chunk_overlap 的影响
 
-- **无重叠（0）**：Hit@1 最高（23.3%），MRR 最高（0.298）。边界清晰，正确答案不被切散。
-- **中重叠（80，基线）**：Hit@5 最高（50%），但 Hit@1 下降到 13.3%。重叠使边界问题答案出现在多个 chunk 中，提高召回但分散排名。
-- **高重叠（160）**：Hit@5 与基线持平（50%），Hit@1 不变（13.3%）。继续增加重叠不再提升召回，只增加 chunk 数量（492）和索引成本。
+- **无重叠（0）**：Hit@5 最高（70%），MRR 最高（0.458）。边界清晰，正确答案不被切散到多个重叠片段中分散排名。
+- **中重叠（80，基线）**：Hit@5 略降（66.7%），Hit@1 下降到 26.7%。重叠使答案出现在多个 chunk 中，反而分散了正确片段的排名分数。
+- **高重叠（160）**：Hit@5 最低（53.3%），Hit@1 也最低（20.0%）。继续增加重叠不仅不提升召回，还引入更多重复片段，造成排名分散和检索噪声。
 
 ### 5.3 关键发现
 
-1. **Hit@1 与 Hit@5 的取舍**：无重叠参数（chunk-500-overlap-0）在 Hit@1 和 MRR 上最优，适合"最相关结果排第一"的场景；有重叠参数在 Hit@5 上更优，适合"召回优先"的场景。
-2. **overlap 的边际收益递减**：从 0→80 重叠，Hit@5 提升 6.7 个百分点；从 80→160 重叠，Hit@5 无变化。当前基线（80）已接近 overlap 的收益上限。
-3. **多论文场景的检索难度**：3 篇论文合并后 411 个 chunk（基线参数），Hit@5=50% 意味着一半问题能在 Top-5 找到正确片段，另一半被跨论文的语义干扰挤出。
+1. **英文 Embedding 显著优于中文模型**：相比此前用 `bge-small-zh-v1.5` 的评测（Hit@5 约 43-50%、MRR 约 0.25-0.30），改用 `bge-small-en-v1.5` 后 Hit@5 提升到 53-70%、MRR 提升到 0.33-0.46。模型与文档语言匹配是检索质量的基础。
+2. **overlap 越大反而越差**：与中文论文评测时"overlap 提升召回"的结论不同，英文论文 + 英文 Embedding 下，overlap=0 反而最优。原因：英文 Embedding 语义匹配精确，重叠产生的重复片段会分散正确答案的排名分数；中文模型语义匹配较弱时，重叠能提升召回。
+3. **最优参数为 chunk-500-overlap-0**：Hit@5=70%、MRR=0.458，且 chunk 数量适中（391）。但项目默认基线仍保留 chunk-500-overlap-80，因为生产环境面向中文文献 + 中文 Embedding，参数选择需以中文场景为准。
+4. **多论文场景的检索难度**：3 篇论文合并后 391-681 个 chunk，Hit@5=70% 意味着 30% 的问题被跨论文语义干扰挤出 Top-5，仍有优化空间。
 
 ## 6. 失败模式分析
 
-分析基线（chunk-500-overlap-80）的 15 条 Hit@5 未命中问题，归纳三类失败模式：
+分析最优配置（chunk-500-overlap-0）的 9 条 Hit@5 未命中问题，归纳四类失败模式：
 
-### 6.1 关键词列表类问题（3 条）
+### 6.1 关键词列表类问题（1 条）
 
 - "What are the keywords of the EEGNet paper?"
 
 **原因**：关键词列表是多个术语的并列，与自然语言问题的语义距离远。Embedding 模型难以将"What are the keywords"映射到具体的术语列表 chunk。
 
-### 6.2 公式与符号类问题（3 条）
+### 6.2 公式与符号类问题（1 条）
 
 - "What is the formula for Scaled Dot-Product Attention?"
-- "What functions are used for positional encoding in the Transformer?"
-- "How is the residual connection implemented in the Transformer?"
 
-**原因**：公式含特殊符号（`softmax(QKT`、`sin`、`cos`、`LayerNorm(x + Sublayer(x))`），Embedding 模型对数学符号的语义理解有限，且 PyMuPDF 提取公式时可能引入额外字符。
+**原因**：公式含特殊符号（`softmax(QK^T/√d)`），Embedding 模型对数学符号的语义理解有限，且 PyMuPDF 提取公式时可能引入额外字符。
 
 ### 6.3 跨论文语义干扰（4 条）
 
+- "What type of network is EEGNet?"
 - "What convolutions did EEGNet introduce from computer vision?"
-- "How does AlexNet accelerate convolution operations?"
-- "How many convolutional and fully connected layers does AlexNet have?"
-- "What happens if middle convolutional layers are removed from AlexNet?"
+- "What does the SMR task in EEGNet classify?"
+- "What does the Transformer dispense with?"
 
-**原因**：3 篇论文都涉及 CNN 和卷积操作，合并库中存在多个语义相近的 chunk。例如"convolution"在 EEGNet、Transformer（提及 separable convolutions）、AlexNet 中都出现，正确答案所在 chunk 被其他论文的卷积相关 chunk 挤出 Top-5。
+**原因**：3 篇论文都涉及 CNN、卷积、网络结构等概念，合并库中存在多个语义相近的 chunk。例如"convolution"在 EEGNet、Transformer（提及 separable convolutions）、AlexNet 中都出现，正确答案所在 chunk 被其他论文的卷积相关 chunk 挤出 Top-5。
 
-### 6.4 页面标题/元信息类问题（3 条）
+### 6.4 数值结果类问题（2 条）
 
-- "What does the EEGNet architecture figure show?"
-- "What is the title of the EEGNet paper?"
-- "What type of events are ERN related to?"
+- "What are the top-1 and top-5 error rates of AlexNet?"
+- "What top-5 error rate did AlexNet achieve in ILSVRC-2012?"
 
-**原因**：图标题（"Overall visualization of the EEGNet architecture"）、论文标题、定义性短句的语义信息稀薄，与问题的语义匹配度低。
+**原因**：问题问的是具体数值（如 "top-1 error rate of 37.5%"），但答案所在的 chunk 是包含多个数值的结果段落，语义上更接近"实验结果总结"而非具体数值。Embedding 模型对数值的语义表示较弱。
+
+### 6.5 定义性短句类问题（1 条）
+
+- "What mechanism is the Transformer based on?"
+
+**原因**：答案"based solely on attention mechanisms"是定义性短句，语义信息稀薄，与问题的语义匹配度低。
 
 ## 7. 局限性与改进方向
 
 ### 7.1 当前局限
 
-1. **Embedding 模型与文档语言不匹配**：`bge-small-zh-v1.5` 是中文模型，对英文文档的语义理解有限。改用多语言模型（如 `bge-m3`）或英文模型（如 `bge-small-en-v1.5`）预计能显著提升英文论文检索效果。
-2. **跨语言检索效果差**：用中文问题测英文论文时，Hit@5 仅 23-43%（相比英文问题的 50%）。项目面向中文用户，但文献多为英文，这是核心矛盾。
-3. **只评测检索阶段**：生成阶段（LLM 答案质量）未评测，需消耗 Token 且答案质量主观。
-4. **问题类型单一**：当前问题多为事实型（"是什么""有多少"），缺少推理型、对比型问题。
+1. **评测模型与生产模型不一致**：评测用英文 `bge-small-en-v1.5`，生产用中文 `bge-small-zh-v1.5`。评测结论（如 overlap=0 最优）基于英文场景，中文场景的参数选择需以中文评测为准。
+2. **只评测检索阶段**：生成阶段（LLM 答案质量）未评测，需消耗 Token 且答案质量主观。
+3. **问题类型单一**：当前问题多为事实型（"是什么""有多少"），缺少推理型、对比型问题。
+4. **论文数量有限**：3 篇论文的合并库规模较小（391-681 chunks），更大规模库的检索效果未验证。
 
 ### 7.2 改进方向
 
 | 方向 | 预期收益 | 实施成本 |
 |---|---|---|
-| 换用 `bge-m3` 多语言 Embedding 模型 | 跨语言检索显著提升 | 中（需重新索引） |
-| 混合检索（BM25 + 向量） | 关键词列表类问题改善 | 中（引入 BM25） |
+| 换用 `bge-m3` 多语言 Embedding 模型 | 中英文混合场景统一支持 | 中（需重新索引） |
 | Cross-Encoder / BGE Reranker 重排序 | Hit@1 显著提升 | 中（增加推理延迟） |
+| 混合检索（BM25 + 向量） | 关键词列表、数值类问题改善 | 中（引入 BM25） |
 | 跨页切分 | 跨页边界问题改善 | 低（修改切分逻辑） |
-| 表格感知切分 | 表格类问题改善 | 高（需表格识别） |
+| 表格感知切分 | 表格、数值结果类问题改善 | 高（需表格识别） |
 
 ## 8. 复现方法
 
@@ -159,11 +163,16 @@ uv sync --extra embedding
 # 验证数据集子串匹配（不需要 Embedding 模型）
 uv run python scripts/evaluate.py verify --pdfs-dir <含 3 篇 PDF 的目录>
 
-# 运行全部 5 组实验
+# 运行全部 5 组实验（默认用生产 Embedding 模型，中文优化）
 uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录>
 
+# 运行实验并指定英文 Embedding 模型（评测英文论文时推荐）
+uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录> `
+    --embedding-model BAAI/bge-small-en-v1.5
+
 # 仅运行基线实验
-uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录> --only chunk-500-overlap-80
+uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录> `
+    --embedding-model BAAI/bge-small-en-v1.5 --only chunk-500-overlap-80
 ```
 
 数据集见 [eval/dataset.json](../eval/dataset.json)，每条问题的 `pdf` 字段标注答案所在论文的文件名。

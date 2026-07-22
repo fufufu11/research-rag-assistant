@@ -32,6 +32,10 @@
     # 仅运行基线实验
     uv run python scripts/evaluate.py run --pdfs-dir <dir> --only chunk-500-overlap-80
 
+    # 指定英文 Embedding 模型（评测英文论文时推荐）
+    uv run python scripts/evaluate.py run --pdfs-dir <dir> \
+        --embedding-model BAAI/bge-small-en-v1.5
+
 退出码：
 - 0：成功
 - 2：缺少 sentence-transformers（未运行 ``uv sync --extra embedding``）
@@ -50,6 +54,7 @@ from typing import TYPE_CHECKING
 from research_rag.chunker import Chunk, ChunkerConfig, chunk_pages
 from research_rag.embedding import (
     DEFAULT_EMBEDDING_MODEL,
+    EmbeddingConfig,
     EmbeddingServiceError,
     create_embeddings,
     index_chunks,
@@ -270,6 +275,7 @@ def run_evaluation(
     dataset_path: Path,
     experiments: Sequence[ExperimentConfig],
     only: str | None,
+    embedding_model: str | None = None,
 ) -> int:
     """运行评测：解析 PDF → 按各组参数切分 → 合并索引 → 检索 → 汇总指标。
 
@@ -281,6 +287,9 @@ def run_evaluation(
         dataset_path: 数据集 JSON 文件路径。
         experiments: 实验配置列表。
         only: 仅运行指定名称的实验（None 表示全部）。
+        embedding_model: Embedding 模型名（HuggingFace）。为 ``None`` 时用
+            生产默认（``DEFAULT_EMBEDDING_MODEL``，中文优化）。评测英文论文
+            时建议传 ``BAAI/bge-small-en-v1.5`` 等英文模型以获得更准确结果。
 
     Returns:
         退出码。
@@ -288,13 +297,14 @@ def run_evaluation(
     entries = load_dataset(dataset_path)
     print(f"已加载数据集：{len(entries)} 条")
 
+    model_name = embedding_model or DEFAULT_EMBEDDING_MODEL
     try:
-        embeddings = create_embeddings()
+        embeddings = create_embeddings(EmbeddingConfig(model_name=model_name))
     except EmbeddingServiceError as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return 2
 
-    print(f"Embedding 模型: {DEFAULT_EMBEDDING_MODEL}")
+    print(f"Embedding 模型: {model_name}")
     print(f"待评测 PDF: {len(pdf_paths)} 份")
     print("=" * 70)
 
@@ -442,6 +452,16 @@ def main(argv: list[str] | None = None) -> int:
         type=str,
         help="仅运行指定名称的实验",
     )
+    p_run.add_argument(
+        "--embedding-model",
+        type=str,
+        default=None,
+        help=(
+            "Embedding 模型名（HuggingFace），默认用生产配置 "
+            f"({DEFAULT_EMBEDDING_MODEL}，中文优化)。评测英文论文建议传 "
+            "BAAI/bge-small-en-v1.5 等英文模型以获得更准确结果"
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -456,7 +476,13 @@ def main(argv: list[str] | None = None) -> int:
         experiments = DEFAULT_EXPERIMENTS
         if args.config:
             experiments = load_experiments(args.config)
-        return run_evaluation(pdf_paths, args.dataset, experiments, args.only)
+        return run_evaluation(
+            pdf_paths,
+            args.dataset,
+            experiments,
+            args.only,
+            embedding_model=args.embedding_model,
+        )
 
     return 1
 
