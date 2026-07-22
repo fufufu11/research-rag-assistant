@@ -40,6 +40,7 @@ from research_rag.db.models import DocumentNotFoundError, DuplicateDocumentError
 from research_rag.db.session import create_engine_for_url, get_database_url
 from research_rag.embedding import EmbeddingServiceError, VectorStoreError
 from research_rag.qa_service import InsufficientEvidenceError, LlmServiceError
+from research_rag.reranker import RerankerError
 from research_rag.services.qa_service import NoAvailableDocumentsError
 
 if TYPE_CHECKING:
@@ -90,6 +91,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             # Qdrant 不可用：app.state.vector_store 保持 None，
             # service 层回退到 InMemoryVectorStore
             app.state.vector_store = None
+
+    # 创建 Reranker（best-effort：失败不阻断启动）
+    # RERANKER_ENABLED=true 时尝试加载 CrossEncoder，失败时保持 None
+    if getattr(app.state, "reranker", None) is None:
+        from research_rag.reranker import create_reranker_if_enabled
+
+        app.state.reranker = create_reranker_if_enabled()
 
     try:
         yield
@@ -162,6 +170,8 @@ def create_app(
     # vector_store 初始为 None，lifespan 中按需创建（测试时不创建）
     # 注意：app.state 是 Starlette.State，不支持类型标注赋值，只能直接赋值
     app.state.vector_store = None
+    # reranker 初始为 None，lifespan 中按需创建（测试时不创建）
+    app.state.reranker = None
 
     # CORS 中间件（开发环境允许 localhost）
     app.add_middleware(
@@ -223,6 +233,13 @@ def create_app(
     async def handle_vector_store_error(_request: Request, exc: VectorStoreError) -> JSONResponse:
         return JSONResponse(
             status_code=500,
+            content=ErrorResponse(detail=str(exc)).model_dump(),
+        )
+
+    @app.exception_handler(RerankerError)
+    async def handle_reranker_error(_request: Request, exc: RerankerError) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
             content=ErrorResponse(detail=str(exc)).model_dump(),
         )
 

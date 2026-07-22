@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING
 
 from research_rag.api.schemas import CitationRead, QueryResponse
@@ -65,6 +66,8 @@ if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_qdrant import QdrantVectorStore
     from sqlalchemy.orm import Session
+
+    from research_rag.reranker import BaseReranker
 
 
 class NoAvailableDocumentsError(RuntimeError):
@@ -99,6 +102,7 @@ class QaService:
         embeddings: Embeddings | None = None,
         chat_model: BaseChatModel | None = None,
         vector_store: QdrantVectorStore | None = None,
+        reranker: BaseReranker | None = None,
     ) -> None:
         self.session = session
         self.repo = DocumentRepository(session)
@@ -107,6 +111,7 @@ class QaService:
         self._embeddings = embeddings
         self._chat_model = chat_model
         self.vector_store = vector_store
+        self.reranker = reranker
 
     # ------------------------------------------------------------------
     # 问答主流程
@@ -184,6 +189,16 @@ class QaService:
             # 所有文档都没有 Chunk（理论上不应发生，READY 文档应有 Chunk）
             msg = "检索到的上下文为空：READY 文档均无 Chunk。"
             raise NoAvailableDocumentsError(msg)
+
+        # 3.5. 重排序（如果配置了 reranker）
+        # Cross-Encoder 对 Top-K 结果精排，提升 Hit@1 和引用质量。
+        # contexts 和 context_doc_ids 是平行列表，重排时需同步更新两者顺序。
+        if self.reranker is not None:
+            contents = [ctx.content for ctx in contexts]
+            scored = self.reranker.rerank(question, contents)
+            # scored = [(original_index, rerank_score), ...] 按分数降序
+            contexts = [dataclass_replace(contexts[idx], score=score) for idx, score in scored]
+            context_doc_ids = [context_doc_ids[idx] for idx, _ in scored]
 
         # 4. 调 LLM 问答
         result = answer_question(question, contexts, chat_model)

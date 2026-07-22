@@ -97,6 +97,31 @@
 3. **最优参数为 chunk-500-overlap-0**：Hit@5=70%、MRR=0.458，且 chunk 数量适中（391）。但项目默认基线仍保留 chunk-500-overlap-80，因为生产环境面向中文文献 + 中文 Embedding，参数选择需以中文场景为准。
 4. **多论文场景的检索难度**：3 篇论文合并后 391-681 个 chunk，Hit@5=70% 意味着 30% 的问题被跨论文语义干扰挤出 Top-5，仍有优化空间。
 
+### 5.4 BGE Reranker 重排序效果
+
+引入 Cross-Encoder（`BAAI/bge-reranker-base`）对向量检索 Top-K 结果重排，对比有/无重排的指标：
+
+| 实验 | chunks | Hit@1 | Hit@5 | MRR | 平均耗时(ms) |
+|---|---|---|---|---|---|
+| chunk-300-overlap-50 | 681 | 36.7% | 56.7% | 0.436 | 19.5 |
+| chunk-300-overlap-50 + reranker | 681 | **46.7%** | 56.7% | 0.508 | 215.6 |
+| chunk-500-overlap-0 | 391 | 30.0% | **70.0%** | 0.458 | 19.1 |
+| chunk-500-overlap-0 + reranker | 391 | **50.0%** | **70.0%** | **0.590** | 407.2 |
+| chunk-500-overlap-80（基线） | 411 | 26.7% | 66.7% | 0.431 | 17.9 |
+| chunk-500-overlap-80 + reranker | 411 | **50.0%** | 66.7% | 0.575 | 353.4 |
+| chunk-500-overlap-160 | 492 | 20.0% | 53.3% | 0.326 | 17.9 |
+| chunk-500-overlap-160 + reranker | 492 | **40.0%** | 53.3% | 0.456 | 376.0 |
+| chunk-800-overlap-100 | 264 | 30.0% | **70.0%** | 0.450 | 15.5 |
+| chunk-800-overlap-100 + reranker | 264 | **46.7%** | **70.0%** | 0.575 | 532.5 |
+
+#### 重排序效果分析
+
+1. **Hit@1 全面大幅提升**：所有实验组的 Hit@1 均显著提升，提升幅度 +10% ~ +23.3%。基线组（chunk-500-overlap-80）从 26.7% 提升到 50.0%（相对提升 87%），效果最为显著。Cross-Encoder 将 query+document 联合编码，精排能力远超 Bi-Encoder 的独立编码。
+2. **Hit@5 保持不变**：reranker 只对已召回的 Top-K 重排序，不改变召回集合，因此 Hit@5 不受影响。召回阶段的失败（关键词列表、数值、公式类问题）需通过混合检索等其他手段解决。
+3. **MRR 显著提升**：全局最优组合为 chunk-500-overlap-0 + reranker（MRR=0.590），较无重排的 0.458 提升 29%。即使是最差组（chunk-500-overlap-160 + reranker，MRR=0.456）也超过了基线无重排的 MRR=0.431。
+4. **延迟代价可接受**：Cross-Encoder 推理增加 200-530ms 延迟，最优组总延迟 407ms，仍在亚秒级。生产环境可通过 GPU 推理或缓存进一步优化。
+5. **最优生产组合**：chunk-500-overlap-0 + reranker，Hit@1=50%、Hit@5=70%、MRR=0.590。兼顾精度与延迟，推荐生产启用。
+
 ## 6. 失败模式分析
 
 分析最优配置（chunk-500-overlap-0）的 9 条 Hit@5 未命中问题，归纳四类失败模式：
@@ -146,13 +171,13 @@
 
 ### 7.2 改进方向
 
-| 方向 | 预期收益 | 实施成本 |
-|---|---|---|
-| 换用 `bge-m3` 多语言 Embedding 模型 | 中英文混合场景统一支持 | 中（需重新索引） |
-| Cross-Encoder / BGE Reranker 重排序 | Hit@1 显著提升 | 中（增加推理延迟） |
-| 混合检索（BM25 + 向量） | 关键词列表、数值类问题改善 | 中（引入 BM25） |
-| 跨页切分 | 跨页边界问题改善 | 低（修改切分逻辑） |
-| 表格感知切分 | 表格、数值结果类问题改善 | 高（需表格识别） |
+| 方向 | 预期收益 | 实施成本 | 状态 |
+|---|---|---|---|
+| Cross-Encoder / BGE Reranker 重排序 | Hit@1 显著提升 | 中（增加推理延迟） | ✅ 已实现（Hit@1 提升 +10% ~ +23.3%） |
+| 混合检索（BM25 + 向量） | 关键词列表、数值类问题改善 | 中（引入 BM25） | 待实施 |
+| 跨页切分 | 跨页边界问题改善 | 低（修改切分逻辑） | 待实施 |
+| 换用 `bge-m3` 多语言 Embedding 模型 | 中英文混合场景统一支持 | 中（需重新索引） | 待实施 |
+| 表格感知切分 | 表格、数值结果类问题改善 | 高（需表格识别） | 待实施 |
 
 ## 8. 复现方法
 
@@ -169,6 +194,11 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录>
 # 运行实验并指定英文 Embedding 模型（评测英文论文时推荐）
 uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录> `
     --embedding-model BAAI/bge-small-en-v1.5
+
+# 启用 BGE Reranker 重排序，对比有/无重排的指标
+uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录> `
+    --embedding-model BAAI/bge-small-en-v1.5 `
+    --reranker-model BAAI/bge-reranker-base
 
 # 仅运行基线实验
 uv run python scripts/evaluate.py run --pdfs-dir <含 3 篇 PDF 的目录> `

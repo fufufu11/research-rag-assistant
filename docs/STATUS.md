@@ -17,6 +17,7 @@
 - 基于 LangChain 的 Embedding 适配器（默认 `BAAI/bge-small-zh-v1.5`）
 - Top-K 向量检索，按余弦相似度降序
 - Qdrant 向量数据库（未配置时回退到 `InMemoryVectorStore`）
+- BGE Reranker 重排序（Cross-Encoder 两阶段检索，默认关闭，`RERANKER_ENABLED=true` 启用）
 
 ### 大模型问答与可靠引用
 
@@ -93,6 +94,6 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 ## 后续可选方向
 
 - 混合检索（BM25 + 向量）
-- Cross-Encoder 或 BGE Reranker 重排序
 - 跨页切分与表格感知切分
 - 生成阶段（LLM 答案质量）评测
+- 流式输出与多轮对话
