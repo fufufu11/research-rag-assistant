@@ -20,6 +20,7 @@ classifiers = [
 
 # 业务依赖按阶段逐步引入。阶段 1 引入 PyMuPDF 用于按页解析 PDF。
 dependencies = [
+    "langchain-text-splitters>=1.1.2",
     "pymupdf>=1.28.0",
 ]
 
