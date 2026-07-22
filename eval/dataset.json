@@ -1,0 +1,226 @@
+[
+  {
+    "question": "脑纹识别以什么信号作为输入？",
+    "expected_page": 1,
+    "expected_substring": "脑纹识别以脑电图",
+    "category": "定义",
+    "note": "摘要首句，定义脑纹识别的输入"
+  },
+  {
+    "question": "脑纹识别中EEG信号由什么产生？",
+    "expected_page": 1,
+    "expected_substring": "EEG由活体神经活动产生",
+    "category": "定义",
+    "note": "摘要，EEG的活体性来源"
+  },
+  {
+    "question": "脑纹识别的关键词有哪些？",
+    "expected_page": 1,
+    "expected_substring": "脑纹识别；脑电生物特征；身份认证；事件相关电位；功能连接；深度学习",
+    "category": "细节",
+    "note": "关键词列表"
+  },
+  {
+    "question": "生物特征用于身份认证需要满足什么条件？",
+    "expected_page": 1,
+    "expected_substring": "一种生物特征要能用于身份认证",
+    "category": "方法",
+    "note": "引言开头，生物特征的基本要求"
+  },
+  {
+    "question": "谁最早尝试基于EEG频谱模式进行个体识别？",
+    "expected_page": 1,
+    "expected_substring": "Stassen就尝试基于EEG频谱模式进行个体识别",
+    "category": "方法",
+    "note": "1980年代Stassen的早期工作"
+  },
+  {
+    "question": "脑纹识别领域的研究重心转向了什么？",
+    "expected_page": 2,
+    "expected_substring": "这种区分能力在真实条件下能够维持多久",
+    "category": "趋势",
+    "note": "从能否区分转向能维持多久"
+  },
+  {
+    "question": "脑纹识别系统的典型流程包括哪些环节？",
+    "expected_page": 2,
+    "expected_substring": "脑纹识别系统的典型流程包括信号采集",
+    "category": "方法",
+    "note": "系统框架，流程环节列举"
+  },
+  {
+    "question": "性能评价中识别和认证有什么区别？",
+    "expected_page": 2,
+    "expected_substring": "前者是在已注册的N人中选出一人",
+    "category": "指标",
+    "note": "识别=闭集多分类，认证=登录判定"
+  },
+  {
+    "question": "认证实验除了准确率还应给出哪些指标？",
+    "expected_page": 2,
+    "expected_substring": "误接受率（FAR）、误拒绝率（FRR）和等错误率（EER）",
+    "category": "指标",
+    "note": "认证任务的三个关键指标"
+  },
+  {
+    "question": "Poulos等人在EEG识别中引入了什么方法？",
+    "expected_page": 2,
+    "expected_substring": "Poulos等人将计算几何、自回归参数和非线性分类引入",
+    "category": "方法",
+    "note": "早期谱特征与统计学习方法"
+  },
+  {
+    "question": "Maiorana提出了什么来刻画EEG个体特征？",
+    "expected_page": 2,
+    "expected_substring": "Eigen-Brains表示来刻画EEG个体特征",
+    "category": "方法",
+    "note": "EigenBrains表示方法"
+  },
+  {
+    "question": "脑纹识别有哪些常见采集范式？",
+    "expected_page": 3,
+    "expected_substring": "脑纹识别常见采集范式及适用场景",
+    "category": "方法",
+    "note": "表1标题，范式总览"
+  },
+  {
+    "question": "静息态EEG采集有什么优势？",
+    "expected_page": 3,
+    "expected_substring": "用户负担较低，适合连续认证和无显式任务场景",
+    "category": "方法",
+    "note": "表1中静息态的优势"
+  },
+  {
+    "question": "诱发电位与挑战响应认证是什么思路？",
+    "expected_page": 3,
+    "expected_substring": "诱发电位与挑战响应认证",
+    "category": "方法",
+    "note": "3.2节标题，主动施加刺激"
+  },
+  {
+    "question": "什么是pass-thought概念？",
+    "expected_page": 3,
+    "expected_substring": "概念把主动认知任务纳入登录流程",
+    "category": "方法",
+    "note": "pass-thought概念定义"
+  },
+  {
+    "question": "Brainprint和CEREBRE是什么方向的工作？",
+    "expected_page": 3,
+    "expected_substring": "Brainprint和CERE-BRE是两个代表性工作",
+    "category": "方法",
+    "note": "ERP脑纹方向两个代表"
+  },
+  {
+    "question": "Chen等人如何将RSVP用于登录实验？",
+    "expected_page": 3,
+    "expected_substring": "Chen等人将快速序列视觉呈现（RSVP）与干电极结合用于登录实验",
+    "category": "方法",
+    "note": "RSVP+干电极登录"
+  },
+  {
+    "question": "Demuru和Fraschini发现了什么？",
+    "expected_page": 3,
+    "expected_substring": "Demuru与Fraschini发现功率谱的非周期成分同样具有个体特异性",
+    "category": "方法",
+    "note": "功率谱非周期成分的个体特异性"
+  },
+  {
+    "question": "BrainPrint如何表示EEG来识别身份？",
+    "expected_page": 4,
+    "expected_substring": "BrainPrint将EEG表示为图结构并据此识别身份",
+    "category": "方法",
+    "note": "BrainPrint图结构方法"
+  },
+  {
+    "question": "深度学习在脑纹识别中有什么不足？",
+    "expected_page": 4,
+    "expected_substring": "深度模型的拟合能力也使其更容易学到设备噪声、会话伪迹或任务差异",
+    "category": "挑战",
+    "note": "深度学习的可解释性问题"
+  },
+  {
+    "question": "谱特征和传统机器学习方法的优点是什么？",
+    "expected_page": 4,
+    "expected_substring": "模型简单、可解释性强、计算成本低，适合作为基线",
+    "category": "方法",
+    "note": "表2中谱特征/AR的优点"
+  },
+  {
+    "question": "多模态与可穿戴方案包括哪些技术？",
+    "expected_page": 4,
+    "expected_substring": "低成本EEG、移动EEG、眨眼认证、干电极登录、耳内EEG",
+    "category": "方法",
+    "note": "表2中多模态方案列举"
+  },
+  {
+    "question": "脑纹最直接的特征是什么？",
+    "expected_page": 5,
+    "expected_substring": "脑纹最直接的特征是其信号源于正在活动的神经系统",
+    "category": "定义",
+    "note": "脑纹的活体性特征"
+  },
+  {
+    "question": "脑纹如何复用脑机接口的传感器？",
+    "expected_page": 5,
+    "expected_substring": "脑纹还可以复用脑机接口已有的传感器",
+    "category": "应用",
+    "note": "复用BCI传感器降低成本"
+  },
+  {
+    "question": "为什么脑纹不太适合手机解锁？",
+    "expected_page": 5,
+    "expected_substring": "不太适合直接套用手机解锁这类高频交互场景",
+    "category": "挑战",
+    "note": "采集时间与高频交互的矛盾"
+  },
+  {
+    "question": "纵向研究对个体差异和会话差异有什么提示？",
+    "expected_page": 5,
+    "expected_substring": "把个体差异与会话差异区分开",
+    "category": "挑战",
+    "note": "避免模型学到会话而非个体特征"
+  },
+  {
+    "question": "脑电信号的隐私风险和口令有什么不同？",
+    "expected_page": 5,
+    "expected_substring": "脑电信号的隐私风险与普通口令不同",
+    "category": "挑战",
+    "note": "EEG携带额外信息且无法修改"
+  },
+  {
+    "question": "攻击者可能尝试哪些攻击手段？",
+    "expected_page": 5,
+    "expected_substring": "攻击者仍可能尝试模板窃取、信号注入、刺激欺骗、生成式伪造或传感器干扰",
+    "category": "挑战",
+    "note": "五类攻击手段"
+  },
+  {
+    "question": "脑纹特征的长期稳定性如何？",
+    "expected_page": 6,
+    "expected_substring": "脑纹特征并不会天然保持不变",
+    "category": "挑战",
+    "note": "5.2节长期稳定性与模板更新"
+  },
+  {
+    "question": "可撤销脑纹用了哪些隐私保护方法？",
+    "expected_page": 6,
+    "expected_substring": "随机投影、二值编码、受密钥控制的变换",
+    "category": "方法",
+    "note": "5.4节隐私保护手段"
+  },
+  {
+    "question": "脑纹适合哪些应用场景？",
+    "expected_page": 6,
+    "expected_substring": "高安全实验室、脑机接口设备绑定、医疗神经设备访问控制以及头戴设备连续认证",
+    "category": "应用",
+    "note": "四个具体应用场景"
+  },
+  {
+    "question": "脑纹识别的结论是什么？",
+    "expected_page": 6,
+    "expected_substring": "现有研究已经在EEG频谱、ERP/VEP和脑功能连接中找到了可区分个体的信息",
+    "category": "结论",
+    "note": "7结论，研究发现总结"
+  }
+]

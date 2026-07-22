@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0-5 已合并到 `main`；阶段 6 Qdrant 向量库迁移已合并 PR #27；Ollama 本地 LLM 集成已删除。阶段 6 Streamlit 演示界面进行中，分支 `feat/streamlit-ui`）
+`v0.0.0`（阶段 0-6 全部合并到 `main`；阶段 7 评测与质量优化进行中，分支 `feat/evaluation`）
 
 ## 已完成
 
@@ -229,7 +229,7 @@
 - 端到端测试已验证：上传真实 PDF → 问答 → 返回带引用的答案（引用指向真实页码和片段）
 - 新增依赖：`langchain-qdrant>=0.2.0`
 
-#### Issue #28：Streamlit 演示界面（分支 `feat/streamlit-ui`，进行中）
+#### Issue #28：Streamlit 演示界面（已合并 PR #30）
 
 - `src/research_rag/ui/`：Streamlit UI 包
   - `ui/api_client.py`：HTTP 客户端封装（`ApiClient` + `DocumentInfo` / `Citation` / `QueryResult` dataclass + `ApiClientError`）
@@ -243,6 +243,29 @@
 - `tests/unit/test_api_client.py`：20 条测试（mock `requests.request`，覆盖上传/列表/详情/删除/问答的成功和错误路径、网络错误、环境变量配置）
 - 新增依赖：`streamlit>=1.40`、`requests>=2.32`
 - mypy 新增 `streamlit` 模块的 `ignore_missing_imports` override
+- 端到端验证：上传真实 PDF → 查看文档列表 → 提问并查看带引用的答案 → 删除文档
+
+### 阶段 7：评测与质量优化（Issue #31，分支 `feat/evaluation`，进行中）
+
+- `src/research_rag/evaluation.py`：检索评测指标与数据集加载的纯函数
+  - `EvaluationEntry`（question / expected_page / expected_substring / category / note）：单条评测数据
+  - `ExperimentConfig`（name / chunk_size / chunk_overlap / top_k / description）：单组实验参数
+  - `QueryMetrics` / `MetricResult`：单条 query 与实验级汇总指标
+  - `normalize_text`：移除所有空白字符，对 PyMuPDF 中文提取的空格鲁棒
+  - `is_hit` / `hit_at_k` / `reciprocal_rank` / `first_hit_rank` / `compute_query_metrics` / `aggregate_metrics`：Hit@K / MRR 指标计算
+  - `load_dataset`：从 JSON 加载评测数据集
+  - `DEFAULT_EXPERIMENTS`：5 组实验配置（chunk_size 300/500/800，overlap 0/50/80/100/160）
+  - 设计取舍：ground truth 用 `expected_substring` 而非 `chunk_index`，对 chunk_size 变化鲁棒
+- `eval/dataset.json`：32 条评测数据集（基于脑纹识别论文 PDF，覆盖页 1-6，8 个分类）
+- `scripts/evaluate.py`：评测脚本（`verify` / `run` 子命令）
+  - `verify`：验证数据集子串是否匹配 PDF 切分结果
+  - `run`：运行评测，计算 Hit@1 / Hit@5 / MRR / 平均检索耗时
+  - 支持 `--config` 自定义实验配置、`--only` 运行指定实验
+  - 复用 `chunk_pages` / `index_chunks` / `retrieve`，不重新实现检索
+  - 只评测检索阶段，不调用 LLM，不消耗 Token
+- `tests/unit/test_evaluation.py`：47 条测试（文本归一化、子串匹配、Hit@K、RR、聚合、数据集加载、不可变性、默认实验配置）
+- `docs/evaluation_report.md`：评测报告（数据集说明、参数、环境、结果表格、结论与失败 case 分析）
+- 评测结果：5 组实验全部完成，`chunk-500-overlap-0` 在 Hit@5 最优（87.5%），`chunk-300-overlap-50` 在 MRR 最优（0.651），`chunk-800-overlap-100` 各项最差
 
 
 ## 当前Issue与分支
@@ -260,11 +283,12 @@
 - Issue #22（feat: 集成本地 LLM 支持（Ollama））：已关闭（PR #23 合并）
 - Issue #24（fix: get_db 依赖注入 session_factory 缺 Depends 包裹）：已关闭（PR #25 合并）
 - Issue #26（feat: Qdrant 向量数据库迁移）：已关闭（PR #27 合并）
-- Issue #28（feat: 增加 Streamlit 演示界面）：进行中，分支 `feat/streamlit-ui`
+- Issue #28（feat: 增加 Streamlit 演示界面）：已关闭（PR #30 合并）
+- Issue #31（feat: 阶段 7 评测与质量优化）：进行中，分支 `feat/evaluation`
 
 ## 正在处理的问题
 
-Issue #28（Streamlit 演示界面）。实现浏览器端完整流程：上传 PDF → 查看文档列表 → 提问并查看带引用的答案 → 删除文档。UI 层通过 `ApiClient`（`requests` HTTP 客户端）调用 FastAPI API，不直接 import 业务层。界面分三块：文档管理、问答、引用详情。222 条测试通过，ruff format/check 通过，mypy 本机不可用。
+Issue #31（阶段 7 评测与质量优化）。已实现 32 条评测数据集（基于脑纹识别论文 PDF）、评测脚本（`verify` / `run` 子命令，支持参数对比）、47 条单元测试。5 组实验（chunk_size 300/500/800，overlap 0/50/80/100/160）全部完成。269 条测试通过，ruff format/check 通过，mypy 本机不可用。
 
 ## 本地运行命令
 
@@ -281,9 +305,13 @@ uv run python -m pytest
 # 运行 PDF 解析 CLI
 uv run python scripts/parse_pdf.py <pdf_path>
 
-# 运行检索评测脚本（需先安装推理后端）
+# 运行检索评测脚本（阶段 3，需先安装推理后端）
 uv sync --extra embedding
 uv run python scripts/evaluate_retrieval.py --demo
+
+# 运行阶段 7 评测（Hit@1/Hit@5/MRR/平均耗时 + 参数对比）
+uv run python scripts/evaluate.py verify --pdf <pdf_path>
+uv run python scripts/evaluate.py run --pdf <pdf_path>
 
 # 数据库迁移（阶段 5，首次运行或拉取新代码后执行）
 uv run alembic upgrade head
@@ -300,28 +328,26 @@ uv run pre-commit install
 
 ## 测试状态
 
-- pytest：222 passed（含 20 条 api_client 测试）
+- pytest：269 passed（含 47 条 evaluation 测试）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：本机因 `librt` C 扩展被应用程序控制策略阻止无法运行，CI 环境（Linux）正常
 
 ## 下一步最小任务
 
-1. **提交并推送 `feat/streamlit-ui` 分支**，开 PR 关联 Issue #28（`Closes #28`）
+1. **提交并推送 `feat/evaluation` 分支**，开 PR 关联 Issue #31（`Closes #31`）
 2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
-3. **阶段 7**：评测与质量优化（30 条评测数据，Hit@K / MRR 指标）
+3. **项目全部 7 个阶段完成**，后续可考虑：混合检索（BM25 + 向量）、Rerank、跨页切分、表格感知切分、生成阶段评测
 
 ## 尚未提交的改动
 
-`feat/streamlit-ui` 分支上的改动（均未提交）：
+`feat/evaluation` 分支上的改动（均未提交）：
 
-- 新增：`src/research_rag/ui/__init__.py`（UI 包）
-- 新增：`src/research_rag/ui/api_client.py`（HTTP 客户端封装：`ApiClient` + dataclass + `ApiClientError`）
-- 新增：`src/research_rag/ui/app.py`（Streamlit 界面：文档管理 / 问答 / 引用详情三块）
-- 新增：`tests/unit/test_api_client.py`（20 条测试：mock requests，覆盖全部 API 调用路径 + 网络错误）
-- 新增：`scripts/run_server.py`（本地开发服务器启动脚本，加载 .env 后启动 uvicorn）
-- 修改：`pyproject.toml`（新增 `streamlit>=1.40`、`requests>=2.32`；mypy 新增 streamlit override）
-- 修改：`.env.example`（新增 `API_BASE_URL` 配置项）
+- 新增：`src/research_rag/evaluation.py`（评测指标计算与数据集加载的纯函数）
+- 新增：`eval/dataset.json`（32 条评测数据集）
+- 新增：`scripts/evaluate.py`（评测脚本：`verify` / `run` 子命令，支持参数对比）
+- 新增：`tests/unit/test_evaluation.py`（47 条单元测试）
+- 新增：`docs/evaluation_report.md`（评测报告：数据集、参数、环境、结果、结论）
 - 修改：`docs/STATUS.md`（本次更新）
 
 ## 已知问题
