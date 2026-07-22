@@ -1,0 +1,137 @@
+"""FastAPI 应用工厂。
+
+依据 PROJECT_PLAN.md 第 8 节（API 草案）、第 10 节（仓库结构）、
+第 13.6 节（API 层负责将异常转换为稳定错误码，业务服务不直接拼接 HTTP 响应）。
+
+设计取舍（初学者向说明）：
+- **应用工厂 ``create_app()``**：不创建模块级 ``app`` 单例，返回新实例。便于
+  ① 测试时注入不同配置（如内存 SQLite factory、Mock service）；② 未来在同进程
+  跑多个应用实例（如灰度发布）。FastAPI 官方推荐模式。
+- **``lifespan`` 管理资源**：engine/session_factory 在应用启动时创建一次，
+  关闭时 ``engine.dispose()`` 释放连接池。比 ``@app.on_event("startup")``
+  现代（FastAPI 0.93+ 推荐 ``lifespan``，旧 API 已弃用）。
+  - 如果调用方传入了 ``session_factory``（测试场景），lifespan 不再创建 engine，
+    也不在关闭时 dispose（由调用方管理生命周期）。
+- **CORS 中间件**：开发环境允许 localhost 前端（Streamlit 默认 8501、Vite 默认
+  5173、常见 dev server 3000/8000）访问。生产环境应通过环境变量收紧 origins。
+- **异常处理器集中注册**：``DuplicateDocumentError`` → 409 Conflict，
+  ``DocumentNotFoundError`` → 404 Not Found，统一返回 ``ErrorResponse`` 格式
+  （``{"detail": "..."}``）。业务 service 只抛异常，不感知 HTTP（PROJECT_PLAN
+  第 13.6 节）。新增业务异常只需在此处加一个 ``@app.exception_handler``。
+- **``/api/v1`` 前缀由路由自身声明**：``documents.router`` 自带
+  ``prefix="/api/v1/documents"``，``app.include_router`` 不再额外加前缀，
+  避免前缀重复拼接错误。
+"""
+
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import sessionmaker
+
+from research_rag.api.routes.documents import router as documents_router
+from research_rag.api.schemas import ErrorResponse
+from research_rag.db.models import DocumentNotFoundError, DuplicateDocumentError
+from research_rag.db.session import create_engine_for_url, get_database_url
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from sqlalchemy import Engine
+    from sqlalchemy.orm import Session
+
+# 开发环境允许的前端来源（Streamlit 8501 / Vite 5173 / 常见 dev server）。
+# 生产环境应通过环境变量收紧；本 Issue 范围不实现配置化（验收标准未要求）。
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8000",
+    "http://localhost:8501",
+    "http://127.0.0.1:8501",
+]
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """应用启动时创建 engine + session_factory，关闭时 dispose。
+
+    若 ``app.state.session_factory`` 已由 ``create_app`` 调用方注入（测试场景），
+    则跳过创建与 dispose，生命周期由调用方管理。
+    """
+
+    created_engine: Engine | None = None
+    if getattr(app.state, "session_factory", None) is None:
+        engine = create_engine_for_url(get_database_url())
+        factory: sessionmaker[Session] = sessionmaker(
+            bind=engine, expire_on_commit=False, future=True
+        )
+        app.state.session_factory = factory
+        created_engine = engine
+    try:
+        yield
+    finally:
+        if created_engine is not None:
+            created_engine.dispose()
+
+
+def create_app(
+    session_factory: sessionmaker[Session] | None = None,
+    cors_origins: list[str] | None = None,
+) -> FastAPI:
+    """创建 FastAPI 应用实例。
+
+    Args:
+        session_factory: 可选的 session 工厂。测试时传入内存 SQLite factory
+            隔离数据库；``None``（默认）时由 ``lifespan`` 在启动时用
+            ``get_database_url()`` 创建真实 engine + factory。
+        cors_origins: 可选的 CORS 允许来源列表。``None`` 时用
+            ``DEFAULT_CORS_ORIGINS``（开发环境 localhost）。
+
+    Returns:
+        配置好的 ``FastAPI`` 实例，未启动（由 ``uvicorn`` 或 ``TestClient``
+        驱动 lifespan）。
+    """
+
+    app = FastAPI(
+        title="Research RAG Assistant",
+        description="科研文献可溯源智能问答系统 —— 文档管理 API",
+        version="0.0.0",
+        lifespan=_lifespan,
+    )
+
+    # 挂载 session_factory 到 app.state，供 lifespan 和 get_session_factory 读取
+    app.state.session_factory = session_factory
+
+    # CORS 中间件（开发环境允许 localhost）
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins or DEFAULT_CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # 异常处理器：业务异常 → HTTP 状态码 + ErrorResponse（PROJECT_PLAN 第 13.6 节）
+    @app.exception_handler(DuplicateDocumentError)
+    async def handle_duplicate(_request: Request, exc: DuplicateDocumentError) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content=ErrorResponse(detail=str(exc)).model_dump(),
+        )
+
+    @app.exception_handler(DocumentNotFoundError)
+    async def handle_not_found(_request: Request, exc: DocumentNotFoundError) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(detail=str(exc)).model_dump(),
+        )
+
+    # 路由
+    app.include_router(documents_router)
+
+    return app
