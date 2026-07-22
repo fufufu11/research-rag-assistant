@@ -23,6 +23,13 @@ dependencies = [
     "langchain>=1.3.14",
     "langchain-core>=1.5.0",
     "langchain-huggingface>=1.2.2",
+    # 阶段 4 引入：LangChain 官方维护的 OpenAI 兼容客户端。
+    # 必要性：所有 OpenAI 兼容服务（DeepSeek、Moonshot、Together、本地 vLLM 等）
+    # 都用同一个 ChatOpenAI 类，与已装的 langchain-huggingface 风格一致。
+    # 替代方案：① 直接用 openai SDK → 失去 BaseChatModel 抽象；
+    # ② langchain-community.ChatOpenAI → community 体积大；③ 手写 HTTP → 违反
+    # PROJECT_PLAN 第 5.1 节"直接使用 LangChain"。
+    "langchain-openai>=1.2.0",
     "langchain-text-splitters>=1.1.2",
     "numpy>=2.4.6",
     "pymupdf>=1.28.0",

@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0、1、2 已合并到 `main`；阶段 3 Embedding 与向量检索代码完成，待提交 PR）
+`v0.0.0`（阶段 0、1、2、3 已合并到 `main`；阶段 4 大模型回答与可靠引用代码完成，待提交 PR）
 
 ## 已完成
 
@@ -37,7 +37,7 @@
 - `tests/unit/test_chunker.py`：14 条测试
 - 新增依赖 `langchain-text-splitters>=1.1.2`
 
-### 阶段 3：Embedding 与向量检索（Issue #10，分支 `feat/embedding`，待提交 PR）
+### 阶段 3：Embedding 与向量检索（Issue #10，PR #11 已合并到 `main`）
 
 - `src/research_rag/embedding.py`：Embedding 适配器与向量检索
   - `EmbeddingConfig`（model_name 默认 `BAAI/bge-small-zh-v1.5`）
@@ -51,17 +51,36 @@
 - 新增依赖：`langchain>=1.3.14`、`langchain-core>=1.5.0`、`langchain-huggingface>=1.2.2`、`numpy>=2.4.6`
 - 新增可选 extra `embedding`（`sentence-transformers>=2.7`）：本地推理后端，CI 不安装
 
+### 阶段 4：大模型回答与可靠引用（Issue #12，分支 `feat/llm-qa`，待提交 PR）
+
+- `src/research_rag/qa_service.py`：OpenAI 兼容客户端 + 结构化答案 + 引用映射
+  - `LlmConfig`（base_url / api_key / model / timeout=30 / max_retries=2）
+  - `ContextPiece`（document_name / page_number / chunk_index / content / score）：与 `RetrievalResult` 解耦
+  - `Citation`（document_name / page_number / snippet / score）：服务端映射后的真实引用
+  - `AnswerWithCitations`（answer_text / citation_indices / citations）
+  - `create_chat_model(config) -> BaseChatModel`：惰性导入 `ChatOpenAI`，依赖缺失抛 `LlmServiceError`；超时与重试参数直接传给 `ChatOpenAI`，由 httpx 实现指数退避
+  - `build_prompt(question, contexts)`：SystemMessage 编码第 9.3 节四条约束，HumanMessage 含 `[C1]`/`[C2]` 编号上下文
+  - `parse_citation_indices(text)`：正则提取 `[C1]`/`[C3]` 等编号，去重保序，大小写不敏感
+  - `map_citations(indices, contexts)`：编号→真实引用，越界编号静默跳过
+  - `answer_question(question, contexts, chat_model)`：完整流程；模型输出 `[INSUFFICIENT_EVIDENCE]` 时抛 `InsufficientEvidenceError`
+  - `retrieval_to_context(results, document_name)`：从 `RetrievalResult` 拼接 `ContextPiece`（多文档场景需调用方提供文档名）
+  - 异常：`LlmServiceError`、`InsufficientEvidenceError`（PROJECT_PLAN 第 13.6 节）
+- `tests/unit/test_qa_service.py`：42 条测试，用 langchain_core 内置 `FakeListChatModel` 和自定义 `_RaisingChatModel` Mock LLM，CI 不消耗真实 Token
+- 新增依赖：`langchain-openai>=1.2.0`（OpenAI 兼容协议客户端）
+- `.env.example` 新增：`LLM_TIMEOUT=30`、`LLM_MAX_RETRIES=2`
+
 ## 当前Issue与分支
 
 - Issue #1（初始化Python项目与质量工具）：已关闭（PR #3 合并）
 - Issue #2（配置GitHub Actions持续集成）：已关闭（PR #4 合并）
 - Issue #5（feat: 实现按页PDF解析器）：已关闭（PR #6 合并）
 - Issue #8（feat: 实现页内文本切分器）：已关闭（PR #9 合并）
-- Issue #10（feat: 基于LangChain实现Embedding适配器）：进行中，分支 `feat/embedding`（本地，未推送）
+- Issue #10（feat: 基于LangChain实现Embedding适配器）：已关闭（PR #11 合并）
+- Issue #12（feat: 大模型回答与可靠引用）：进行中，分支 `feat/llm-qa`（本地，未推送）
 
 ## 正在处理的问题
 
-无。阶段 3 代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过，mypy 因本机 DLL 策略限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR。
+无。阶段 4 代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过，mypy 因本机 `librt` C 扩展策略限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR。
 
 ## 本地运行命令
 
@@ -88,31 +107,29 @@ uv run pre-commit install
 
 ## 测试状态
 
-- pytest：38 passed（2 冒烟 + 5 PDF 解析 + 14 切分器 + 17 Embedding）
+- pytest：80 passed（2 冒烟 + 5 PDF 解析 + 14 切分器 + 17 Embedding + 42 qa_service）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：本机因 `librt` C 扩展被应用程序控制策略阻止无法运行，CI 环境（Linux）正常
 
 ## 下一步最小任务
 
-按 [PROJECT_PLAN.md 阶段 4](../PROJECT_PLAN.md#L701)：
+按 [PROJECT_PLAN.md 阶段 5](../PROJECT_PLAN.md#L709)：
 
-1. **提交并推送 `feat/embedding` 分支**，开 PR 关联 Issue #10（`Closes #10`）
+1. **提交并推送 `feat/llm-qa` 分支**，开 PR 关联 Issue #12（`Closes #12`）
 2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
-3. **进入阶段 4（大模型回答与可靠引用）**：创建 Issue，实现 OpenAI 兼容模型客户端、结构化答案、引用映射
+3. **进入阶段 5（FastAPI 与数据库）**：实现文档上传/列表/详情/删除/问答接口，SQLAlchemy 模型与 Alembic 迁移
 
 ## 尚未提交的改动
 
-`feat/embedding` 分支上的改动（均未提交）：
+`feat/llm-qa` 分支上的改动（均未提交）：
 
-- 修改：`pyproject.toml`（新增 langchain/langchain-core/langchain-huggingface/numpy 依赖 + embedding 可选 extra）
-- 修改：`uv.lock`（依赖解析结果）
-- 修改：`.env.example`（向量数据库注释改为 LangChain InMemoryVectorStore）
-- 修改：`README.md`（新增评测脚本说明）
+- 修改：`pyproject.toml`（新增 `langchain-openai>=1.2.0` 依赖 + 必要性说明）
+- 修改：`uv.lock`（依赖解析结果，含 langchain-openai / openai / tiktoken / jiter / regex）
+- 修改：`.env.example`（新增 `LLM_TIMEOUT` / `LLM_MAX_RETRIES`）
 - 修改：`docs/STATUS.md`（本次更新）
-- 新增：`src/research_rag/embedding.py`
-- 新增：`tests/unit/test_embedding.py`
-- 新增：`scripts/evaluate_retrieval.py`
+- 新增：`src/research_rag/qa_service.py`
+- 新增：`tests/unit/test_qa_service.py`
 
 ## 已知问题
 
@@ -132,3 +149,8 @@ uv run pre-commit install
 - `dataclass(frozen=True)` 在赋值时抛 `AttributeError`，可用于测试不可变性
 - `from __future__ import annotations` 只影响函数/类签名注解，不影响函数体内局部变量注解（后者运行时不求值）
 - mypy 新版本引入 `librt` C 扩展用于 IPC，在 Windows 应用程序控制策略下可能被阻止
+- LangChain `ChatOpenAI` 用 Pydantic 字段 alias（`model`/`api_key`/`base_url`/`timeout`/`max_retries`），构造时直接用 alias 形式传参；`timeout` 实际字段名是 `request_timeout`，`max_retries` 由底层 httpx 实现指数退避
+- `BaseChatModel.invoke` 在 langchain-core 中已标注返回 `AIMessage`（不是 `BaseMessage`），可直接读 `.content`
+- `langchain_core.language_models.fake_chat_models.FakeListChatModel` 是内置的假 ChatModel，接受 `responses: list[str]`，每次 `.invoke` 循环返回下一条，CI 不消耗真实 Token
+- 引用编号策略：模型在自然语言答案中用 `[C1]`/`[C3]` 标记引用，服务端正则提取后映射真实引用，比要求 JSON 输出兼容性更好（不依赖模型支持 function calling 或 JSON mode）
+- 证据不足检测：约定模型输出 `[INSUFFICIENT_EVIDENCE]` 标记，服务端检测后抛 `InsufficientEvidenceError`，把"模型拒绝"这种业务情况归一化为异常，便于 API 层统一映射错误码
