@@ -148,7 +148,7 @@ class TestUploadDocument:
         call_kwargs = mock_request.call_args.kwargs
         assert mock_request.call_args.kwargs["method"] == "POST"
         assert call_kwargs["url"] == f"{DEFAULT_API_BASE_URL}/documents"
-        assert call_kwargs["files"] == ("file", ("paper.pdf", b"fake pdf bytes", "application/pdf"))
+        assert call_kwargs["files"] == {"file": ("paper.pdf", b"fake pdf bytes", "application/pdf")}
 
     @patch("research_rag.ui.api_client.requests.request")
     def test_duplicate_returns_409(self, mock_request: MagicMock) -> None:
