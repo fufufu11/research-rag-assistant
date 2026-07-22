@@ -59,6 +59,12 @@ dependencies = [
     # 会直接抛 RuntimeError: Form data requires "python-multipart"。
     # 替代方案：无（这是 FastAPI 的硬性要求，非可选）。
     "python-multipart>=0.0.18",
+    # 阶段 6 引入：HTTP 客户端，供 Streamlit UI 层调用 FastAPI API。
+    # 必要性：requests 是同步 HTTP 客户端，与 Streamlit 的同步执行模型匹配，
+    # API 简单直观，便于在单元测试中用 monkeypatch 替换。
+    # 替代方案：① httpx → 已作为 TestClient 传递依赖存在，但同步/异步 API
+    # 混用增加学习成本；② urllib → 标准库但 API 冗长，无自动 JSON 解析。
+    "requests>=2.32",
     # 阶段 5 引入：ORM 与数据库抽象层，PROJECT_PLAN 第 5 节选型。
     # 必要性：2.0 的 Mapped/mapped_column 提供类型安全的字段定义；
     # Session 抽象让业务代码与 SQL 解耦，便于切换 SQLite → PostgreSQL。
@@ -66,6 +72,12 @@ dependencies = [
     # ② Tortoise ORM → 异步优先但生态小；③ 裸 SQL → 违反 PROJECT_PLAN
     # 第 2.2 节"数据模型、事务和数据库迁移"学习目标。
     "sqlalchemy>=2.0",
+    # 阶段 6 引入：演示界面框架，PROJECT_PLAN 第 5 节选型。
+    # 必要性：Streamlit 适合数据/AI 应用的快速原型，内置文件上传、表格、
+    # 文本输入等组件，无需前端构建工具链即可跑通浏览器交互流程。
+    # 替代方案：① Gradio → 同类但交互模型偏 ML demo；② 纯 HTML+JS →
+    # 需要前端构建，违反"学习 RAG 而非前端"的目标；③ FastAPI 模板 → 静态。
+    "streamlit>=1.40",
     # 阶段 5 引入：ASGI 服务器，运行 FastAPI 应用。
     # 必要性：FastAPI 本身只是 ASGI 应用，需要 ASGI 服务器才能启动；
     # `uv run uvicorn research_rag.api.app:create_app --factory --reload` 启动开发服务必需。
@@ -171,6 +183,12 @@ no_incremental = true
 module = "tests.*"
 disallow_untyped_defs = false
 strict = false
+
+# Streamlit 的类型标注不完整（部分 API 缺少类型信息），忽略缺失导入避免 CI 误报。
+# 仅影响 ui/app.py（演示界面入口），不影响业务代码类型安全。
+[[tool.mypy.overrides]]
+module = ["streamlit.*"]
+ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
 # pytest
