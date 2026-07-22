@@ -71,9 +71,12 @@ def get_session_factory(request: Request) -> sessionmaker[Session]:
     return factory
 
 
-def get_db(session_factory: sessionmaker[Session]) -> Iterator[Session]:
+def get_db(
+    session_factory: sessionmaker[Session] = Depends(get_session_factory),
+) -> Iterator[Session]:
     """每请求一个 Session，请求结束（含异常）自动关闭。
 
+    依赖 ``get_session_factory``（从 ``app.state`` 取启动时创建的工厂）。
     不在此 commit/rollback：事务边界由 service 层控制。
     """
 
