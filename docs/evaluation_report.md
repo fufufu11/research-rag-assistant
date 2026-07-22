@@ -177,6 +177,54 @@
 2. Hit@5（召回率）提升比 Hit@1（精度）下降更重要——召回是基础，精度可由 reranker 弥补
 3. 后续阶段 8.3 混合检索（BM25 + 向量）可显著改善 Hit@1 下降的问题，BM25 的精确关键词匹配能补偿跨页 chunk 语义分散的负面影响
 
+### 5.6 BM25 混合检索效果（阶段 8.3）
+
+引入 BM25 稀疏检索与向量检索融合（加权 RRF，`vector_weight=2.0`, `bm25_weight=1.0`），对比基线 / +BM25 / +reranker / +BM25+reranker 四组。所有实验均启用跨页切分。
+
+| 实验 | chunks | Hit@1 | Hit@5 | MRR | 平均耗时(ms) |
+|---|---|---|---|---|---|
+| chunk-300-overlap-50 | 665 | 33.3% | 50.0% | 0.393 | 18.5 |
+| chunk-300-overlap-50 + bm25 | 665 | 30.0% | 56.7% | 0.414 | 20.9 |
+| chunk-300-overlap-50 + reranker | 665 | 36.7% | 50.0% | 0.419 | 249.0 |
+| chunk-300-overlap-50 + bm25 + reranker | 665 | 36.7% | **56.7%** | **0.442** | 242.1 |
+| chunk-500-overlap-0 | 370 | 13.3% | 73.3% | 0.368 | 17.9 |
+| chunk-500-overlap-0 + bm25 | 370 | 26.7% | 76.7% | 0.457 | 17.1 |
+| chunk-500-overlap-0 + reranker | 370 | 40.0% | 73.3% | 0.551 | 328.2 |
+| chunk-500-overlap-0 + bm25 + reranker | 370 | **46.7%** | **76.7%** | **0.607** | 333.8 |
+| chunk-500-overlap-80 | 394 | 20.0% | 56.7% | 0.356 | 17.2 |
+| chunk-500-overlap-80 + bm25 | 394 | 33.3% | 66.7% | 0.459 | 18.7 |
+| chunk-500-overlap-80 + reranker | 394 | 36.7% | 56.7% | 0.461 | 350.3 |
+| chunk-500-overlap-80 + bm25 + reranker | 394 | 36.7% | **66.7%** | **0.497** | 342.8 |
+| chunk-500-overlap-160 | 489 | 26.7% | 63.3% | 0.402 | 18.9 |
+| chunk-500-overlap-160 + bm25 | 489 | 36.7% | 66.7% | 0.489 | 20.2 |
+| chunk-500-overlap-160 + reranker | 489 | 43.3% | 63.3% | 0.519 | 345.0 |
+| chunk-500-overlap-160 + bm25 + reranker | 489 | **46.7%** | **66.7%** | **0.553** | 338.8 |
+| chunk-800-overlap-100 | 246 | 33.3% | 66.7% | 0.464 | 15.0 |
+| chunk-800-overlap-100 + bm25 | 246 | 33.3% | 70.0% | 0.473 | 15.0 |
+| chunk-800-overlap-100 + reranker | 246 | **50.0%** | 66.7% | **0.558** | 546.6 |
+| chunk-800-overlap-100 + bm25 + reranker | 246 | 46.7% | **70.0%** | 0.550 | 498.9 |
+
+#### BM25 混合检索效果分析
+
+1. **Hit@5 在所有参数组全面提升**：BM25+reranker 相比纯 reranker，Hit@5 在 5 组参数中均提升或持平（+3.3% ~ +10.0%）。chunk-500-overlap-80 提升最显著（56.7% → 66.7%，+10%），chunk-500-overlap-0 达到全局最高 76.7%。BM25 召回了向量检索遗漏的关键词/数值类文档。
+2. **Hit@1 在最优参数组大幅提升**：chunk-500-overlap-0 + BM25 + reranker 的 Hit@1 达到 46.7%，比纯 reranker（40.0%）提升 6.7%。BM25 的精确关键词匹配让正确答案更容易排在第一位。
+3. **MRR 全面提升**：4/5 组参数的 MRR 提升（+0.023 ~ +0.056），全局最优 MRR=0.607（chunk-500-overlap-0 + BM25 + reranker），较纯 reranker（0.551）提升 10%。
+4. **延迟代价极小**：BM25 检索本身仅 1-3ms，叠加 reranker 后总延迟与纯 reranker 基本持平（如 333.8ms vs 328.2ms）。
+5. **加权 RRF 是关键设计**：早期等权 RRF（`vector_weight=1.0`）导致 BM25 噪声文档挤出向量好文档，Hit@5 反而下降（73.3% → 66.7%）。改为 `vector_weight=2.0` 后，BM25 召回的噪声不再干扰向量检索的好文档，同时保留了 BM25 对关键词精确匹配的补充能力。
+
+#### 失败 case 改善对比（chunk-500-overlap-0）
+
+| 配置 | Hit@5 未命中数 | 改善的 case |
+|---|---|---|
+| reranker | 8 条 | - |
+| BM25 + reranker | 7 条 | "What mechanism is the Transformer based on?"（关键词类）|
+
+BM25+reranker 相比 reranker 改善了 1 条 Hit@5 未命中（"What mechanism is the Transformer based on?" —— 关键词类问题），且未新增任何恶化 case。
+
+#### 最优生产组合
+
+**chunk-500-overlap-0 + BM25 + reranker**：Hit@1=46.7%、Hit@5=76.7%、MRR=0.607，延迟 333.8ms。相比上一阶段最优（chunk-500-overlap-0 + reranker，MRR=0.551）提升 10%。推荐生产环境同时启用 BM25 和 reranker。
+
 ## 6. 失败模式分析
 
 分析最优配置（chunk-500-overlap-0）的 9 条 Hit@5 未命中问题，归纳四类失败模式：

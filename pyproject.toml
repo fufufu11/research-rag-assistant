@@ -64,6 +64,12 @@ dependencies = [
     # 替代方案：① httpx → 已作为 TestClient 传递依赖存在，但同步/异步 API
     # 混用增加学习成本；② urllib → 标准库但 API 冗长，无自动 JSON 解析。
     "requests>=2.32",
+    # 阶段 8.3 引入：BM25 稀疏检索，与向量检索融合（Hybrid Retrieval）。
+    # 必要性：rank_bm25 是纯 Python 实现的 BM25Okapi，无重依赖（不依赖 torch），
+    # 体积小（约 50KB），适合生产路径默认启用。对关键词列表、数值、公式类
+    # 问题（向量检索弱项）有天然优势，与向量检索互补。
+    # 替代方案：① bm25s → 性能更好但依赖 C 扩展；② 自实现 BM25 → 重复造轮子。
+    "rank-bm25>=0.2.2",
     # ORM 与数据库抽象层：2.0 的 Mapped/mapped_column 提供类型安全的字段定义；
     # Session 抽象让业务代码与 SQL 解耦，便于切换 SQLite → PostgreSQL。
     # 替代方案：① SQLModel → 多一层 Pydantic 抽象，增加复杂度；
@@ -102,6 +108,13 @@ dev = [
 # 单元测试用确定性 FakeEmbeddings，CI 仅 `uv sync --extra dev`，无需安装此 extra。
 embedding = [
     "sentence-transformers>=2.7",
+]
+# 中文分词后端（阶段 8.3 引入）。
+# BM25 对中文需 jieba 分词才能正确切词；英文场景下用空格切分即可，无需此 extra。
+# 运行中文评测或本地启用 BM25 中文场景时需 `uv sync --extra chinese`；
+# 未安装时 BM25Retriever 自动 fallback 到字符级切分（精度降低但可用）。
+chinese = [
+    "jieba>=0.42.1",
 ]
 
 [project.urls]
@@ -189,6 +202,13 @@ ignore_missing_imports = true
 # 时找不到该模块会报 import-not-found。与 streamlit 同理，忽略缺失导入。
 [[tool.mypy.overrides]]
 module = ["sentence_transformers.*"]
+ignore_missing_imports = true
+
+# rank_bm25 和 jieba 是可选/轻量依赖。rank_bm25 在主依赖中但无 type stubs；
+# jieba 是可选依赖（chinese extra），CI 不强制安装。两者运行时惰性导入，
+# mypy 静态检查时找不到模块会报 import-not-found，忽略避免 CI 误报。
+[[tool.mypy.overrides]]
+module = ["rank_bm25.*", "jieba.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

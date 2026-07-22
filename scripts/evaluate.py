@@ -46,6 +46,18 @@
         --embedding-model BAAI/bge-small-en-v1.5 \
         --no-cross-page
 
+    # 启用 BM25 混合检索（阶段 8.3），对每组实验额外运行一次带 BM25 的评测
+    # 中文场景需 `uv sync --extra chinese` 安装 jieba；英文场景无需此 extra
+    uv run python scripts/evaluate.py run --pdfs-dir <dir> \
+        --embedding-model BAAI/bge-small-en-v1.5 \
+        --bm25
+
+    # 同时启用 BM25 + Reranker，对比四组：基线 / +BM25 / +reranker / +BM25+reranker
+    uv run python scripts/evaluate.py run --pdfs-dir <dir> \
+        --embedding-model BAAI/bge-small-en-v1.5 \
+        --reranker-model BAAI/bge-reranker-base \
+        --bm25
+
 退出码：
 - 0：成功
 - 2：缺少 sentence-transformers（未运行 ``uv sync --extra embedding``）
@@ -79,6 +91,7 @@ from research_rag.evaluation import (
     load_dataset,
     normalize_text,
 )
+from research_rag.hybrid_retriever import BM25Retriever, hybrid_retrieve
 from research_rag.pdf_parser import parse_pdf
 from research_rag.reranker import (
     DEFAULT_RERANKER_MODEL,
@@ -218,8 +231,9 @@ def run_experiment(
     chunks: Sequence[Chunk],
     embeddings: object,
     reranker: BaseReranker | None = None,
+    bm25_retriever: BM25Retriever | None = None,
 ) -> MetricResult:
-    """运行单组实验：索引 → 逐条检索 → （可选重排）→ 计算指标。
+    """运行单组实验：索引 → 逐条检索 → （可选 BM25 融合）→ （可选重排）→ 计算指标。
 
     Args:
         config: 实验参数。
@@ -227,22 +241,31 @@ def run_experiment(
         chunks: 已按 ``config`` 切分好的 Chunk 列表。
         embeddings: LangChain ``Embeddings`` 实例。
         reranker: 可选的 Reranker 实例。为 ``None`` 时跳过重排（基线对比）。
+        bm25_retriever: 可选的 BM25 检索器。为 ``None`` 时走纯向量检索；
+            非 ``None`` 时用 ``hybrid_retrieve`` 做 BM25 + 向量 + RRF 融合。
 
     Returns:
         汇总指标。
     """
     from research_rag.evaluation import QueryMetrics
 
+    bm25_label = " + bm25" if bm25_retriever is not None else ""
     reranker_label = " + reranker" if reranker is not None else ""
-    print(f"\n[{config.name}{reranker_label}] 索引 {len(chunks)} 个 chunk...")
+    label = f"{config.name}{bm25_label}{reranker_label}"
+    print(f"\n[{label}] 索引 {len(chunks)} 个 chunk...")
     store = index_chunks(chunks, embeddings)  # type: ignore[arg-type]
 
     top_k = max(config.top_k, DEFAULT_EVAL_TOP_K)
     per_query: list[QueryMetrics] = []
     for entry in entries:
         start = time.perf_counter()
-        results = retrieve(store, entry.question, top_k=top_k)
-        # 重排序：Cross-Encoder 对 Top-K 结果精排（不截断，仅重排序）
+        if bm25_retriever is not None:
+            # 混合检索：BM25 + 向量 + RRF 融合
+            results = hybrid_retrieve(store, bm25_retriever, entry.question, top_k=top_k)
+        else:
+            # 纯向量检索（基线）
+            results = retrieve(store, entry.question, top_k=top_k)
+        # 重排序：Cross-Encoder 对检索结果精排（不截断，仅重排序）
         if reranker is not None:
             results = rerank_results(reranker, entry.question, results)
         latency_ms = (time.perf_counter() - start) * 1000
@@ -256,7 +279,7 @@ def run_experiment(
         )
 
     result = aggregate_metrics(
-        experiment_name=config.name + reranker_label,
+        experiment_name=label,
         per_query=per_query,
         chunk_count=len(chunks),
     )
@@ -303,6 +326,7 @@ def run_evaluation(
     embedding_model: str | None = None,
     reranker_model: str | None = None,
     cross_page: bool = True,
+    bm25_enabled: bool = False,
 ) -> int:
     """运行评测：解析 PDF → 按各组参数切分 → 合并索引 → 检索 → 汇总指标。
 
@@ -311,6 +335,10 @@ def run_evaluation(
 
     当 ``reranker_model`` 指定时，对每组实验额外运行一次带重排的评测，
     方便对比有/无 reranker 的指标差异。
+
+    当 ``bm25_enabled=True`` 时，对每组实验额外运行一次带 BM25 混合检索的
+    评测。若同时启用 reranker，会再额外运行一次 ``+BM25+reranker`` 组合，
+    形成四组对比（基线 / +BM25 / +reranker / +BM25+reranker）。
 
     Args:
         pdf_paths: ``{文件名: 路径}`` 映射。单 PDF 模式下 key 为空字符串。
@@ -324,6 +352,8 @@ def run_evaluation(
             重排评测。指定时对每组实验额外运行一次带 reranker 的评测。
         cross_page: 是否启用跨页切分（阶段 8.2，默认 ``True``）。传 ``False``
             时退回旧行为（按页独立切分），用于 A/B 对比跨页切分的效果。
+        bm25_enabled: 是否启用 BM25 混合检索对比（阶段 8.3，默认 ``False``）。
+            ``True`` 时对每组实验额外运行带 BM25 的评测。
 
     Returns:
         退出码。
@@ -350,6 +380,7 @@ def run_evaluation(
     print(f"Embedding 模型: {model_name}")
     print(f"Reranker 模型: {reranker_model or '未启用'}")
     print(f"跨页切分: {'启用' if cross_page else '关闭（按页独立切分）'}")
+    print(f"BM25 混合检索: {'启用' if bm25_enabled else '未启用'}")
     print(f"待评测 PDF: {len(pdf_paths)} 份")
     print("=" * 70)
 
@@ -369,16 +400,40 @@ def run_evaluation(
         all_chunks, _ = _parse_and_chunk_pdfs(pdf_paths, chunker_config)
         print(f"\n[{config.name}] 共 {len(all_chunks)} chunks ({len(pdf_paths)} 份 PDF)")
 
-        # 基线（无重排）
+        # 构建 BM25 索引（如果启用）—— 每组实验 chunks 不同，需重建索引
+        bm25_retriever: BM25Retriever | None = None
+        if bm25_enabled:
+            bm25_retriever = BM25Retriever(all_chunks)
+
+        # 基线（无 BM25、无 reranker）
         result = run_experiment(config, entries, all_chunks, embeddings)
         all_results.append(result)
 
-        # 带 reranker 的对比实验
+        # +BM25
+        if bm25_retriever is not None:
+            result_bm25 = run_experiment(
+                config, entries, all_chunks, embeddings, bm25_retriever=bm25_retriever
+            )
+            all_results.append(result_bm25)
+
+        # +reranker
         if reranker is not None:
             result_reranked = run_experiment(
                 config, entries, all_chunks, embeddings, reranker=reranker
             )
             all_results.append(result_reranked)
+
+        # +BM25 +reranker（两者同时启用）
+        if bm25_retriever is not None and reranker is not None:
+            result_both = run_experiment(
+                config,
+                entries,
+                all_chunks,
+                embeddings,
+                reranker=reranker,
+                bm25_retriever=bm25_retriever,
+            )
+            all_results.append(result_both)
 
     print("\n" + "=" * 70)
     print("汇总结果\n")
@@ -536,6 +591,17 @@ def main(argv: list[str] | None = None) -> int:
             "用于 A/B 对比跨页切分带来的指标变化"
         ),
     )
+    p_run.add_argument(
+        "--bm25",
+        action="store_true",
+        default=False,
+        help=(
+            "启用 BM25 混合检索对比（阶段 8.3）。指定时对每组实验额外运行一次"
+            "带 BM25 + 向量 + RRF 融合的评测。若同时启用 --reranker-model，"
+            "会再额外运行一次 +BM25+reranker 组合，形成四组对比。"
+            "中文场景需 `uv sync --extra chinese` 安装 jieba；英文场景无需此 extra"
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -558,6 +624,7 @@ def main(argv: list[str] | None = None) -> int:
             embedding_model=args.embedding_model,
             reranker_model=args.reranker_model,
             cross_page=not args.no_cross_page,
+            bm25_enabled=args.bm25,
         )
 
     return 1

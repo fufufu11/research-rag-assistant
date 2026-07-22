@@ -103,6 +103,7 @@ class QaService:
         chat_model: BaseChatModel | None = None,
         vector_store: QdrantVectorStore | None = None,
         reranker: BaseReranker | None = None,
+        bm25_enabled: bool = False,
     ) -> None:
         self.session = session
         self.repo = DocumentRepository(session)
@@ -112,6 +113,7 @@ class QaService:
         self._chat_model = chat_model
         self.vector_store = vector_store
         self.reranker = reranker
+        self.bm25_enabled = bm25_enabled
 
     # ------------------------------------------------------------------
     # 问答主流程
@@ -173,8 +175,12 @@ class QaService:
         assert self._chat_model is not None
         chat_model = self._chat_model
 
-        # 3. 向量检索：有 Qdrant 走单库检索，否则回退到 InMemory 多文档索引
-        if self.vector_store is not None:
+        # 3. 检索：根据配置选择路径
+        # - ``bm25_enabled=True``：混合检索（BM25 + 向量 + RRF 融合），阶段 8.3
+        # - ``bm25_enabled=False``：纯向量检索（原有行为）
+        if self.bm25_enabled:
+            contexts, context_doc_ids = self._retrieve_hybrid(docs, question, top_k)
+        elif self.vector_store is not None:
             contexts, context_doc_ids = self._retrieve_with_qdrant(docs, question, top_k)
         else:
             # InMemory 路径需要 Embeddings（惰性创建或测试注入）
@@ -306,6 +312,138 @@ class QaService:
                 )
             )
             context_doc_ids.append(r.document_id)
+
+        return contexts, context_doc_ids
+
+    # ------------------------------------------------------------------
+    # 私有：混合检索（BM25 + 向量 + RRF 融合，阶段 8.3）
+    # ------------------------------------------------------------------
+
+    def _retrieve_hybrid(
+        self,
+        docs: Sequence[Document],
+        question: str,
+        top_k: int,
+    ) -> tuple[list[ContextPiece], list[uuid.UUID]]:
+        """混合检索：BM25 + 向量并行召回 + RRF 融合（阶段 8.3）。
+
+        构建全局 BM25 索引（覆盖所有 READY 文档的 chunks），与向量检索
+        （Qdrant 或 InMemory）并行召回，取并集后用 RRF 融合排序，最终
+        截断到 ``top_k``。融合后用 ``content`` 字段映射回 ``document_id``
+        和 ``document_name``。
+
+        与 ``_retrieve_with_qdrant`` / ``_retrieve_contexts`` 的区别：
+        - 多路召回（BM25 + 向量），覆盖关键词/数值类问题（向量检索弱项）
+        - RRF 融合两路排名，不依赖原始分数分布（BM25 与余弦尺度差异大）
+        - 每次问答重建 BM25 索引（当前规模 < 100ms，可接受）
+
+        Args:
+            docs: READY 文档列表。
+            question: 查询问题。
+            top_k: 最终返回的最相关片段数。
+
+        Returns:
+            ``(contexts, context_doc_ids)`` 两个平行列表，按 RRF 分数降序。
+            ``ContextPiece.score`` 为 RRF 分数（与原余弦/BM25 分数尺度不同）。
+
+        Raises:
+            NoAvailableDocumentsError: 文档均无 chunk，无法构建 BM25 索引。
+            HybridRetrievalError: BM25 索引构建或检索失败。
+            VectorStoreError: 向量检索失败。
+        """
+        from research_rag.hybrid_retriever import (
+            DEFAULT_BM25_WEIGHT,
+            DEFAULT_RECALL_MULTIPLIER,
+            DEFAULT_VECTOR_WEIGHT,
+            BM25Retriever,
+            rrf_fusion,
+        )
+
+        # 1. 预收集所有 chunker chunks + content → (doc_id, doc_name) 映射
+        # 一次遍历避免重复调用 _orm_chunks_to_chunker
+        all_chunks: list[ChunkerChunk] = []
+        doc_chunks_map: list[tuple[Document, list[ChunkerChunk]]] = []
+        content_to_meta: dict[str, tuple[uuid.UUID, str]] = {}
+        for doc in docs:
+            chunks = self._orm_chunks_to_chunker(doc)
+            doc_chunks_map.append((doc, chunks))
+            all_chunks.extend(chunks)
+            for c in chunks:
+                # content 作为唯一键；不同文档有相同 content 时后写入覆盖
+                # （实际场景极少，可接受）
+                content_to_meta[c.content] = (doc.id, doc.original_name)
+
+        if not all_chunks:
+            msg = "BM25 索引构建失败：READY 文档均无 chunk。"
+            raise NoAvailableDocumentsError(msg)
+
+        # 2. 构建 BM25 索引
+        bm25_retriever = BM25Retriever(all_chunks)
+
+        # 3. 向量检索 + BM25 检索（多召回以提高融合效果）
+        recall_k = max(top_k * DEFAULT_RECALL_MULTIPLIER, top_k)
+        bm25_results = bm25_retriever.retrieve(question, top_k=recall_k)
+
+        if self.vector_store is not None:
+            # Qdrant 路径：单库检索，结果含 document_id
+            from research_rag.vector_store import search as qdrant_search
+
+            doc_ids = [doc.id for doc in docs]
+            assert self.vector_store is not None
+            qdrant_results = qdrant_search(self.vector_store, question, doc_ids, top_k=recall_k)
+            # 转 RetrievalResult 做 RRF（统一接口）
+            vector_results: list[RetrievalResult] = [
+                RetrievalResult(
+                    start_page=r.start_page,
+                    end_page=r.end_page,
+                    chunk_index=r.chunk_index,
+                    content=r.content,
+                    score=r.score,
+                )
+                for r in qdrant_results
+            ]
+            # Qdrant 结果的 document_id 是权威来源，补充到映射（覆盖可能的推断）
+            for r in qdrant_results:
+                content_to_meta[r.content] = (r.document_id, r.document_name)
+        else:
+            # InMemory 路径：每文档独立索引 + 检索，合并为全局向量结果
+            if self._embeddings is None:
+                self._embeddings = create_embeddings(self.embedding_config)
+            assert self._embeddings is not None
+            vector_results = []
+            for _doc, chunks in doc_chunks_map:
+                if not chunks:
+                    continue
+                store = index_chunks(chunks, self._embeddings)
+                results = retrieve(store, question, top_k=recall_k)
+                vector_results.extend(results)
+
+        # 4. 加权 RRF 融合 + 截断到 top_k（向量 2 倍权重，减少 BM25 噪声干扰）
+        fused = rrf_fusion(
+            vector_results,
+            bm25_results,
+            top_k=top_k,
+            vector_weight=DEFAULT_VECTOR_WEIGHT,
+            bm25_weight=DEFAULT_BM25_WEIGHT,
+        )
+
+        # 5. 用 content 映射回 doc_id 和 doc_name，构造 ContextPiece
+        contexts: list[ContextPiece] = []
+        context_doc_ids: list[uuid.UUID] = []
+        for fused_result in fused:
+            # BM25 召回的 content 一定在 all_chunks 中，因此映射必命中
+            doc_id, doc_name = content_to_meta.get(fused_result.content, (uuid.UUID(int=0), ""))
+            contexts.append(
+                ContextPiece(
+                    document_name=doc_name,
+                    start_page=fused_result.start_page,
+                    end_page=fused_result.end_page,
+                    chunk_index=fused_result.chunk_index,
+                    content=fused_result.content,
+                    score=fused_result.score,
+                )
+            )
+            context_doc_ids.append(doc_id)
 
         return contexts, context_doc_ids
 

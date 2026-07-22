@@ -187,6 +187,17 @@ def get_qa_service(
     ``QaService`` 内部会惰性创建 Embedding 和 ChatModel（第一次调用
     ``answer`` 时），测试时通过 ``app.dependency_overrides[get_qa_service]``
     替换为 Mock，完全跳过真实数据库、LLM 和 Embedding 调用。
+
+    BM25 混合检索通过环境变量 ``BM25_ENABLED=true`` 启用（阶段 8.3）。
+    启用时 ``QaService.answer`` 会构建 BM25 索引与向量检索并行召回 + RRF 融合。
     """
 
-    return QaService(session, llm_config, vector_store=vector_store, reranker=reranker)
+    from research_rag.hybrid_retriever import is_bm25_enabled
+
+    return QaService(
+        session,
+        llm_config,
+        vector_store=vector_store,
+        reranker=reranker,
+        bm25_enabled=is_bm25_enabled(),
+    )
