@@ -430,17 +430,17 @@ class QaService:
         # 5. 用 content 映射回 doc_id 和 doc_name，构造 ContextPiece
         contexts: list[ContextPiece] = []
         context_doc_ids: list[uuid.UUID] = []
-        for r in fused:
+        for fused_result in fused:
             # BM25 召回的 content 一定在 all_chunks 中，因此映射必命中
-            doc_id, doc_name = content_to_meta.get(r.content, (uuid.UUID(int=0), ""))
+            doc_id, doc_name = content_to_meta.get(fused_result.content, (uuid.UUID(int=0), ""))
             contexts.append(
                 ContextPiece(
                     document_name=doc_name,
-                    start_page=r.start_page,
-                    end_page=r.end_page,
-                    chunk_index=r.chunk_index,
-                    content=r.content,
-                    score=r.score,
+                    start_page=fused_result.start_page,
+                    end_page=fused_result.end_page,
+                    chunk_index=fused_result.chunk_index,
+                    content=fused_result.content,
+                    score=fused_result.score,
                 )
             )
             context_doc_ids.append(doc_id)

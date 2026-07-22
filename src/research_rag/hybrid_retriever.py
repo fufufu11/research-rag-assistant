@@ -41,8 +41,9 @@ from research_rag.embedding import RetrievalResult
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from langchain_core.vectorstores import InMemoryVectorStore
+
     from research_rag.chunker import Chunk
-    from research_rag.embedding import InMemoryVectorStore
 
 # RRF 默认 k 值（原论文《Reciprocal Rank Fusion》推荐 60）
 # k 越大，排名差异对融合分数的影响越平缓；k 越小，排名靠前的结果优势越大。
@@ -144,18 +145,18 @@ def tokenize(text: str, use_jieba: bool = True) -> list[str]:
     # Fallback：CJK 字符按单字切，英文按连续 \w 字符合并
     # 标点/空格会打断连续 ASCII（触发 flush），避免 "attention, transformer"
     # 被错误合并为 "attentiontransformer"
-    tokens: list[str] = []
+    fallback_tokens: list[str] = []
     ascii_buffer: list[str] = []
 
     def _flush_buffer() -> None:
         if ascii_buffer:
-            tokens.append("".join(ascii_buffer))
+            fallback_tokens.append("".join(ascii_buffer))
             ascii_buffer.clear()
 
     for char in text:
         if _CJK_PATTERN.match(char):
             _flush_buffer()
-            tokens.append(char)
+            fallback_tokens.append(char)
         elif _WORD_PATTERN.match(char):
             ascii_buffer.append(char)
         else:
@@ -163,7 +164,7 @@ def tokenize(text: str, use_jieba: bool = True) -> list[str]:
             _flush_buffer()
 
     _flush_buffer()
-    return tokens
+    return fallback_tokens
 
 
 class BM25Retriever:
