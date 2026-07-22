@@ -94,6 +94,6 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 ## 后续可选方向
 
 - 混合检索（BM25 + 向量）
-- 跨页切分与表格感知切分
+- 表格感知切分与公式识别
 - 生成阶段（LLM 答案质量）评测
 - 流式输出与多轮对话

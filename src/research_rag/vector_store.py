@@ -8,8 +8,8 @@ InMemoryVectorStore → Qdrant）、第 268 行（Chunk.vector_id 字段）、
 - **与 ``embedding.py`` 的 InMemoryVectorStore 并存**：不删除阶段 3 的内存实现，
   作为测试 fallback 和学习成果保留。本模块是生产实现，通过依赖注入选择用哪个。
 - **Payload 设计**：每个向量点的 payload 存 ``document_id`` / ``document_name``
-  / ``page_number`` / ``chunk_index``（放在 LangChain metadata 下），支持按
-  ``document_id`` 过滤检索和批量删除。``page_content`` 单独存为 content payload。
+  / ``start_page`` / ``end_page`` / ``chunk_index``（放在 LangChain metadata 下），
+  支持按 ``document_id`` 过滤检索和批量删除。``page_content`` 单独存为 content payload。
 - **向量 ID 用 chunk UUID**：上传时用 ORM ``Chunk.id`` 作为 Qdrant point ID，
   ``vector_id = str(chunk.id)``，避免"先写 Qdrant 再回填 DB"的二次更新。
 - **删除用 Payload 过滤**：Qdrant ``client.delete`` 支持按 Filter 批量删除，
@@ -72,7 +72,9 @@ class QdrantSearchResult:
     Attributes:
         document_id: 所属文档 UUID。
         document_name: 文档原始文件名（展示用）。
-        page_number: 来源页码。
+        start_page: chunk 内容起始页码。
+        end_page: chunk 内容结束页码。跨页切分时 ``end_page > start_page``，
+            不跨页时 ``end_page == start_page``。
         chunk_index: 文档内分段序号。
         content: 分段文本。
         score: 相似度分数，越高越相关。
@@ -80,7 +82,8 @@ class QdrantSearchResult:
 
     document_id: uuid.UUID
     document_name: str
-    page_number: int
+    start_page: int
+    end_page: int
     chunk_index: int
     content: str
     score: float
@@ -198,7 +201,8 @@ def upsert_chunks(
             metadata={
                 "document_id": str(document_id),
                 "document_name": document_name,
-                "page_number": chunk.page_number,
+                "start_page": chunk.start_page,
+                "end_page": chunk.end_page,
                 "chunk_index": chunk.chunk_index,
             },
         )
@@ -320,7 +324,8 @@ def search(
             QdrantSearchResult(
                 document_id=doc_id,
                 document_name=meta.get("document_name", ""),
-                page_number=meta.get("page_number", 0),
+                start_page=meta.get("start_page", 0),
+                end_page=meta.get("end_page", 0),
                 chunk_index=meta.get("chunk_index", 0),
                 content=doc.page_content,
                 score=score,

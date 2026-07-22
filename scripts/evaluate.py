@@ -41,6 +41,11 @@
         --embedding-model BAAI/bge-small-en-v1.5 \
         --reranker-model BAAI/bge-reranker-base
 
+    # 关闭跨页切分（阶段 8.2），退回旧行为按页独立切分，用于 A/B 对比
+    uv run python scripts/evaluate.py run --pdfs-dir <dir> \
+        --embedding-model BAAI/bge-small-en-v1.5 \
+        --no-cross-page
+
 退出码：
 - 0：成功
 - 2：缺少 sentence-transformers（未运行 ``uv sync --extra embedding``）
@@ -134,7 +139,8 @@ def _parse_and_chunk_pdfs(
         for c in raw_chunks:
             reindexed.append(
                 Chunk(
-                    page_number=c.page_number,
+                    start_page=c.start_page,
+                    end_page=c.end_page,
                     chunk_index=global_index,
                     content=c.content,
                     char_count=c.char_count,
@@ -296,6 +302,7 @@ def run_evaluation(
     only: str | None,
     embedding_model: str | None = None,
     reranker_model: str | None = None,
+    cross_page: bool = True,
 ) -> int:
     """运行评测：解析 PDF → 按各组参数切分 → 合并索引 → 检索 → 汇总指标。
 
@@ -315,6 +322,8 @@ def run_evaluation(
             时建议传 ``BAAI/bge-small-en-v1.5`` 等英文模型以获得更准确结果。
         reranker_model: Reranker 模型名（HuggingFace）。为 ``None`` 时跳过
             重排评测。指定时对每组实验额外运行一次带 reranker 的评测。
+        cross_page: 是否启用跨页切分（阶段 8.2，默认 ``True``）。传 ``False``
+            时退回旧行为（按页独立切分），用于 A/B 对比跨页切分的效果。
 
     Returns:
         退出码。
@@ -340,6 +349,7 @@ def run_evaluation(
 
     print(f"Embedding 模型: {model_name}")
     print(f"Reranker 模型: {reranker_model or '未启用'}")
+    print(f"跨页切分: {'启用' if cross_page else '关闭（按页独立切分）'}")
     print(f"待评测 PDF: {len(pdf_paths)} 份")
     print("=" * 70)
 
@@ -353,6 +363,7 @@ def run_evaluation(
         chunker_config = ChunkerConfig(
             chunk_size=config.chunk_size,
             chunk_overlap=config.chunk_overlap,
+            cross_page=cross_page,
         )
         # 每组实验重新切分所有 PDF（参数不同，切分结果不同）
         all_chunks, _ = _parse_and_chunk_pdfs(pdf_paths, chunker_config)
@@ -516,6 +527,15 @@ def main(argv: list[str] | None = None) -> int:
             f"的指标差异。推荐用 {DEFAULT_RERANKER_MODEL}"
         ),
     )
+    p_run.add_argument(
+        "--no-cross-page",
+        action="store_true",
+        default=False,
+        help=(
+            "关闭跨页切分（阶段 8.2），退回旧行为（按页独立切分）。"
+            "用于 A/B 对比跨页切分带来的指标变化"
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -537,6 +557,7 @@ def main(argv: list[str] | None = None) -> int:
             args.only,
             embedding_model=args.embedding_model,
             reranker_model=args.reranker_model,
+            cross_page=not args.no_cross_page,
         )
 
     return 1

@@ -108,7 +108,9 @@ class CitationRead(BaseModel):
     Attributes:
         document_id: 来源文档 UUID（序列化为字符串）。
         document_name: 来源文档名（``Document.original_name``）。
-        page_number: 来源页码（与 ``Chunk.page_number`` 一致）。
+        start_page: chunk 内容起始页码（与 ``Chunk.start_page`` 一致）。
+        end_page: chunk 内容结束页码（与 ``Chunk.end_page`` 一致）。跨页切分时
+            ``end_page > start_page``，不跨页时 ``end_page == start_page``。
         chunk_index: 文档内分段序号（与 ``Chunk.chunk_index`` 一致）。
         snippet: 原文片段（``Chunk.content``）。
         score: 检索相似度分数，越高越相关。
@@ -116,7 +118,8 @@ class CitationRead(BaseModel):
 
     document_id: uuid.UUID
     document_name: str
-    page_number: int
+    start_page: int
+    end_page: int
     chunk_index: int
     snippet: str
     score: float

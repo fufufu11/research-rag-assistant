@@ -162,6 +162,18 @@ def _render_qa(client: ApiClient) -> None:
     _render_query_result()
 
 
+def _format_page_range(start: int, end: int) -> str:
+    """格式化页码范围展示文案。
+
+    - ``start == end``：返回 ``"第X页"``（单页）
+    - ``start != end``：返回 ``"第X-Y页"``（跨页范围）
+    """
+
+    if start == end:
+        return f"第 {start} 页"
+    return f"第 {start}-{end} 页"
+
+
 def _render_query_result() -> None:
     """渲染上一次问答的答案和引用。"""
 
@@ -179,12 +191,11 @@ def _render_query_result() -> None:
 
     st.subheader(f"📎 引用详情（{len(result.citations)} 条）")
     for idx, cite in enumerate(result.citations, start=1):
-        label = (
-            f"[C{idx}] {cite.document_name} · 第 {cite.page_number} 页 · 片段 {cite.chunk_index}"
-        )
+        page_range = _format_page_range(cite.start_page, cite.end_page)
+        label = f"[C{idx}] {cite.document_name} · {page_range} · 片段 {cite.chunk_index}"
         with st.expander(label, expanded=False):
             st.write(f"**来源文档**：{cite.document_name}（`{cite.document_id}`）")
-            st.write(f"**页码**：第 {cite.page_number} 页")
+            st.write(f"**页码**：{page_range}")
             st.write(f"**片段序号**：{cite.chunk_index}")
             st.write(f"**相似度分数**：{cite.score:.4f}")
             st.divider()

@@ -45,7 +45,8 @@ from research_rag.evaluation import (
 def _make_result(page: int, chunk_index: int, content: str, score: float = 0.0) -> RetrievalResult:
     """构造 RetrievalResult。"""
     return RetrievalResult(
-        page_number=page,
+        start_page=page,
+        end_page=page,
         chunk_index=chunk_index,
         content=content,
         score=score,

@@ -60,14 +60,16 @@ def _make_contexts() -> list[ContextPiece]:
     return [
         ContextPiece(
             document_name="论文A.pdf",
-            page_number=1,
+            start_page=1,
+            end_page=1,
             chunk_index=0,
             content="深度学习是机器学习的一个分支，使用多层神经网络。",
             score=0.92,
         ),
         ContextPiece(
             document_name="论文B.pdf",
-            page_number=2,
+            start_page=2,
+            end_page=2,
             chunk_index=1,
             content="余弦相似度衡量两个向量方向的差异，常用于向量检索。",
             score=0.85,
@@ -263,7 +265,8 @@ def test_build_prompt_single_context() -> None:
     contexts = [
         ContextPiece(
             document_name="single.pdf",
-            page_number=1,
+            start_page=1,
+            end_page=1,
             chunk_index=0,
             content="单个片段。",
             score=0.5,
@@ -330,7 +333,8 @@ def test_map_citations_normal() -> None:
     citations = map_citations([1, 2], contexts)
     assert len(citations) == 2
     assert citations[0].document_name == "论文A.pdf"
-    assert citations[0].page_number == 1
+    assert citations[0].start_page == 1
+    assert citations[0].end_page == 1
     assert citations[0].snippet == contexts[0].content
     assert citations[0].score == pytest.approx(0.92)
 
@@ -381,10 +385,12 @@ def test_answer_question_normal_with_citations() -> None:
     assert result.citation_indices == [1, 2]
     assert len(result.citations) == 2
     assert result.citations[0].document_name == "论文A.pdf"
-    assert result.citations[0].page_number == 1
+    assert result.citations[0].start_page == 1
+    assert result.citations[0].end_page == 1
     assert result.citations[0].snippet == contexts[0].content
     assert result.citations[1].document_name == "论文B.pdf"
-    assert result.citations[1].page_number == 2
+    assert result.citations[1].start_page == 2
+    assert result.citations[1].end_page == 2
 
 
 def test_answer_question_single_citation() -> None:
@@ -502,20 +508,21 @@ def test_context_piece_is_frozen() -> None:
     """ContextPiece 应为不可变 dataclass。"""
     ctx = ContextPiece(
         document_name="a.pdf",
-        page_number=1,
+        start_page=1,
+        end_page=1,
         chunk_index=0,
         content="x",
         score=0.5,
     )
     with pytest.raises(AttributeError):
-        ctx.page_number = 2  # type: ignore[misc]
+        ctx.start_page = 2  # type: ignore[misc]
 
 
 def test_citation_is_frozen() -> None:
     """Citation 应为不可变 dataclass。"""
-    citation = Citation(document_name="a.pdf", page_number=1, snippet="x", score=0.5)
+    citation = Citation(document_name="a.pdf", start_page=1, end_page=1, snippet="x", score=0.5)
     with pytest.raises(AttributeError):
-        citation.page_number = 2  # type: ignore[misc]
+        citation.start_page = 2  # type: ignore[misc]
 
 
 def test_answer_with_citations_is_frozen() -> None:
@@ -534,7 +541,8 @@ def test_answer_with_citations_is_frozen() -> None:
 class _FakeRetrievalResult:
     """模拟 embedding.RetrievalResult（鸭子类型，字段同名即可）。"""
 
-    page_number: int
+    start_page: int
+    end_page: int
     chunk_index: int
     content: str
     score: float
@@ -543,19 +551,20 @@ class _FakeRetrievalResult:
 def test_retrieval_to_context_basic() -> None:
     """应正确把 RetrievalResult 列表转换为 ContextPiece 列表。"""
     results: list[_FakeRetrievalResult] = [
-        _FakeRetrievalResult(page_number=1, chunk_index=0, content="内容A", score=0.9),
-        _FakeRetrievalResult(page_number=2, chunk_index=1, content="内容B", score=0.8),
+        _FakeRetrievalResult(start_page=1, end_page=1, chunk_index=0, content="内容A", score=0.9),
+        _FakeRetrievalResult(start_page=2, end_page=2, chunk_index=1, content="内容B", score=0.8),
     ]
     contexts = retrieval_to_context(results, "论文.pdf")
 
     assert len(contexts) == 2
     assert all(isinstance(c, ContextPiece) for c in contexts)
     assert contexts[0].document_name == "论文.pdf"
-    assert contexts[0].page_number == 1
+    assert contexts[0].start_page == 1
+    assert contexts[0].end_page == 1
     assert contexts[0].chunk_index == 0
     assert contexts[0].content == "内容A"
     assert contexts[0].score == pytest.approx(0.9)
-    assert contexts[1].page_number == 2
+    assert contexts[1].start_page == 2
 
 
 def test_retrieval_to_context_empty() -> None:
@@ -567,12 +576,12 @@ def test_retrieval_to_context_empty() -> None:
 def test_retrieval_to_context_preserves_order() -> None:
     """顺序应与输入一致。"""
     results: list[_FakeRetrievalResult] = [
-        _FakeRetrievalResult(page_number=3, chunk_index=2, content="C", score=0.7),
-        _FakeRetrievalResult(page_number=1, chunk_index=0, content="A", score=0.9),
+        _FakeRetrievalResult(start_page=3, end_page=3, chunk_index=2, content="C", score=0.7),
+        _FakeRetrievalResult(start_page=1, end_page=1, chunk_index=0, content="A", score=0.9),
     ]
     contexts = retrieval_to_context(results, "论文.pdf")
-    assert contexts[0].page_number == 3
-    assert contexts[1].page_number == 1
+    assert contexts[0].start_page == 3
+    assert contexts[1].start_page == 1
 
 
 # ---------------------------------------------------------------------------
@@ -584,10 +593,15 @@ def test_end_to_end_retrieval_to_answer() -> None:
     """端到端：检索结果 → 上下文 → Prompt → 答案 + 引用。"""
     results: list[_FakeRetrievalResult] = [
         _FakeRetrievalResult(
-            page_number=3, chunk_index=5, content="Transformer 使用自注意力机制。", score=0.9
+            start_page=3,
+            end_page=3,
+            chunk_index=5,
+            content="Transformer 使用自注意力机制。",
+            score=0.9,
         ),
         _FakeRetrievalResult(
-            page_number=4,
+            start_page=4,
+            end_page=4,
             chunk_index=6,
             content="BERT 是基于 Transformer 的预训练模型。",
             score=0.85,
@@ -604,7 +618,9 @@ def test_end_to_end_retrieval_to_answer() -> None:
     assert len(result.citations) == 2
     # 真实引用映射：编号 → 文档名 + 页码 + 原文片段
     assert result.citations[0].document_name == "attention.pdf"
-    assert result.citations[0].page_number == 3
+    assert result.citations[0].start_page == 3
+    assert result.citations[0].end_page == 3
     assert "Transformer" in result.citations[0].snippet
-    assert result.citations[1].page_number == 4
+    assert result.citations[1].start_page == 4
+    assert result.citations[1].end_page == 4
     assert "BERT" in result.citations[1].snippet

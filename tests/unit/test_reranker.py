@@ -340,8 +340,8 @@ def test_rerank_results_with_retrieval_result() -> None:
     """``rerank_results`` 应支持 ``RetrievalResult`` 列表。"""
 
     results = [
-        RetrievalResult(page_number=1, chunk_index=0, content="abc", score=0.5),
-        RetrievalResult(page_number=1, chunk_index=1, content="xyz", score=0.9),
+        RetrievalResult(start_page=1, end_page=1, chunk_index=0, content="abc", score=0.5),
+        RetrievalResult(start_page=1, end_page=1, chunk_index=1, content="xyz", score=0.9),
     ]
 
     # FakeReranker 评分：query="abc" → content "abc" 得 3 分，"xyz" 得 0 分
@@ -356,7 +356,8 @@ def test_rerank_results_with_retrieval_result() -> None:
     assert reranked[0].score == 3.0
     assert reranked[1].score == 0.0
     # 其他属性应保持不变
-    assert reranked[0].page_number == 1
+    assert reranked[0].start_page == 1
+    assert reranked[0].end_page == 1
     assert reranked[0].chunk_index == 0
 
 
@@ -368,7 +369,8 @@ def test_rerank_results_with_qdrant_search_result() -> None:
         QdrantSearchResult(
             document_id=doc_id,
             document_name="paper.pdf",
-            page_number=1,
+            start_page=1,
+            end_page=1,
             chunk_index=0,
             content="deep learning",
             score=0.3,
@@ -376,7 +378,8 @@ def test_rerank_results_with_qdrant_search_result() -> None:
         QdrantSearchResult(
             document_id=doc_id,
             document_name="paper.pdf",
-            page_number=2,
+            start_page=2,
+            end_page=2,
             chunk_index=1,
             content="cooking recipe",
             score=0.8,
@@ -394,7 +397,8 @@ def test_rerank_results_with_qdrant_search_result() -> None:
     # document_id 等元数据应保持不变
     assert reranked[0].document_id == doc_id
     assert reranked[0].document_name == "paper.pdf"
-    assert reranked[0].page_number == 1
+    assert reranked[0].start_page == 1
+    assert reranked[0].end_page == 1
 
 
 def test_rerank_results_with_context_piece() -> None:
@@ -403,14 +407,16 @@ def test_rerank_results_with_context_piece() -> None:
     results = [
         ContextPiece(
             document_name="a.pdf",
-            page_number=1,
+            start_page=1,
+            end_page=1,
             chunk_index=0,
             content="机器学习",
             score=0.2,
         ),
         ContextPiece(
             document_name="b.pdf",
-            page_number=2,
+            start_page=2,
+            end_page=2,
             chunk_index=1,
             content="深度学习网络",
             score=0.7,
@@ -434,10 +440,10 @@ def test_rerank_results_top_k_truncation() -> None:
     """``top_k`` 应截断结果数量。"""
 
     results = [
-        RetrievalResult(page_number=1, chunk_index=0, content="aaa", score=0.1),
-        RetrievalResult(page_number=1, chunk_index=1, content="aab", score=0.2),
-        RetrievalResult(page_number=1, chunk_index=2, content="abc", score=0.3),
-        RetrievalResult(page_number=1, chunk_index=3, content="xyz", score=0.9),
+        RetrievalResult(start_page=1, end_page=1, chunk_index=0, content="aaa", score=0.1),
+        RetrievalResult(start_page=1, end_page=1, chunk_index=1, content="aab", score=0.2),
+        RetrievalResult(start_page=1, end_page=1, chunk_index=2, content="abc", score=0.3),
+        RetrievalResult(start_page=1, end_page=1, chunk_index=3, content="xyz", score=0.9),
     ]
 
     # query="abc" → "abc" 得 3 分，"aab" 得 2 分，"aaa" 得 1 分，"xyz" 得 0 分
@@ -453,8 +459,8 @@ def test_rerank_results_preserves_all_fields() -> None:
     """重排后所有非 score 字段应保持不变（验证 dataclasses.replace 正确性）。"""
 
     results = [
-        RetrievalResult(page_number=3, chunk_index=5, content="hello", score=0.1),
-        RetrievalResult(page_number=7, chunk_index=2, content="world", score=0.9),
+        RetrievalResult(start_page=3, end_page=3, chunk_index=5, content="hello", score=0.1),
+        RetrievalResult(start_page=7, end_page=7, chunk_index=2, content="world", score=0.9),
     ]
 
     reranker = FakeReranker()
@@ -462,11 +468,13 @@ def test_rerank_results_preserves_all_fields() -> None:
 
     # "hello" 得分更高，排第一
     assert reranked[0].content == "hello"
-    assert reranked[0].page_number == 3
+    assert reranked[0].start_page == 3
+    assert reranked[0].end_page == 3
     assert reranked[0].chunk_index == 5
 
     assert reranked[1].content == "world"
-    assert reranked[1].page_number == 7
+    assert reranked[1].start_page == 7
+    assert reranked[1].end_page == 7
     assert reranked[1].chunk_index == 2
 
 
@@ -474,8 +482,8 @@ def test_rerank_results_original_list_not_modified() -> None:
     """重排不应修改原始列表（frozen dataclass 不可变，但列表本身可变）。"""
 
     original = [
-        RetrievalResult(page_number=1, chunk_index=0, content="b", score=0.9),
-        RetrievalResult(page_number=1, chunk_index=1, content="a", score=0.1),
+        RetrievalResult(start_page=1, end_page=1, chunk_index=0, content="b", score=0.9),
+        RetrievalResult(start_page=1, end_page=1, chunk_index=1, content="a", score=0.1),
     ]
     original_order = [r.content for r in original]
 

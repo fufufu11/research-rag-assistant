@@ -70,7 +70,8 @@ def repo(session: Session) -> DocumentRepository:
 def _make_chunk(
     document_id: uuid.UUID,
     *,
-    page_number: int = 1,
+    start_page: int = 1,
+    end_page: int = 1,
     chunk_index: int = 0,
     content: str = "测试片段",
 ) -> Chunk:
@@ -78,7 +79,8 @@ def _make_chunk(
 
     return Chunk(
         document_id=document_id,
-        page_number=page_number,
+        start_page=start_page,
+        end_page=end_page,
         chunk_index=chunk_index,
         content=content,
         char_count=len(content),
@@ -210,7 +212,7 @@ def test_delete_cascades_chunks(repo: DocumentRepository, session: Session) -> N
         doc,
         [
             _make_chunk(doc.id, chunk_index=0, content="片段 0"),
-            _make_chunk(doc.id, chunk_index=1, content="片段 1", page_number=2),
+            _make_chunk(doc.id, chunk_index=1, content="片段 1", start_page=2, end_page=2),
         ],
     )
     session.commit()
@@ -311,8 +313,8 @@ def test_add_chunks(repo: DocumentRepository, session: Session) -> None:
 
     chunks = [
         _make_chunk(doc.id, chunk_index=0, content="第一段"),
-        _make_chunk(doc.id, chunk_index=1, content="第二段", page_number=2),
-        _make_chunk(doc.id, chunk_index=2, content="第三段", page_number=2),
+        _make_chunk(doc.id, chunk_index=1, content="第二段", start_page=2, end_page=2),
+        _make_chunk(doc.id, chunk_index=2, content="第三段", start_page=2, end_page=2),
     ]
     repo.add_chunks(doc, chunks)
     session.commit()

@@ -116,14 +116,17 @@ class ContextPiece:
 
     Attributes:
         document_name: 来源文档名（用于真实引用映射）。
-        page_number: 来源页码（与 ``Chunk.page_number`` 一致）。
+        start_page: chunk 内容起始页码（与 ``Chunk.start_page`` 一致）。
+        end_page: chunk 内容结束页码（与 ``Chunk.end_page`` 一致）。跨页切分时
+            ``end_page > start_page``，不跨页时 ``end_page == start_page``。
         chunk_index: 文档内分段序号（与 ``Chunk.chunk_index`` 一致）。
         content: 分段文本（模型可见的上下文内容）。
         score: 检索相似度分数（用于引用排序，可选）。
     """
 
     document_name: str
-    page_number: int
+    start_page: int
+    end_page: int
     chunk_index: int
     content: str
     score: float = 0.0
@@ -138,13 +141,16 @@ class Citation:
 
     Attributes:
         document_name: 来源文档名。
-        page_number: 来源页码。
+        start_page: chunk 内容起始页码。
+        end_page: chunk 内容结束页码。跨页切分时 ``end_page > start_page``，
+            不跨页时 ``end_page == start_page``。
         snippet: 原文片段（与 ``ContextPiece.content`` 一致）。
         score: 检索相似度分数（透传自 ``ContextPiece.score``）。
     """
 
     document_name: str
-    page_number: int
+    start_page: int
+    end_page: int
     snippet: str
     score: float
 
@@ -211,6 +217,24 @@ def create_chat_model(config: LlmConfig) -> BaseChatModel:
         raise LlmServiceError(msg) from exc
 
 
+def _format_page_range(start: int, end: int) -> str:
+    """格式化页码范围展示文案。
+
+    - ``start == end``：返回 ``"第X页"``（单页）
+    - ``start != end``：返回 ``"第X-Y页"``（跨页范围）
+
+    Args:
+        start: 起始页码。
+        end: 结束页码。
+
+    Returns:
+        页码范围文案。
+    """
+    if start == end:
+        return f"第{start}页"
+    return f"第{start}-{end}页"
+
+
 def build_prompt(question: str, contexts: Sequence[ContextPiece]) -> list[BaseMessage]:
     """构造符合第 9.3 节约束的 Prompt（SystemMessage + HumanMessage）。
 
@@ -221,9 +245,9 @@ def build_prompt(question: str, contexts: Sequence[ContextPiece]) -> list[BaseMe
     4. 不得编造文档名、页码、参考文献。
 
     HumanMessage 包含问题 + 带编号的上下文片段。每个片段格式为：
-    ``[C1] （来自《文档名》第N页）\\n<内容>``，让模型明确每个编号对应的来源，
-    但页码仅用于模型理解上下文结构，真实引用由服务端映射（模型不得在答案中
-    输出页码）。
+    ``[C1] （来自《文档名》第N页）\\n<内容>``（跨页时为 ``第X-Y页``），让模型
+    明确每个编号对应的来源，但页码仅用于模型理解上下文结构，真实引用由服务端
+    映射（模型不得在答案中输出页码）。
 
     Args:
         question: 用户问题。
@@ -245,7 +269,8 @@ def build_prompt(question: str, contexts: Sequence[ContextPiece]) -> list[BaseMe
     )
 
     context_block = "\n\n".join(
-        f"[C{i + 1}] （来自《{ctx.document_name}》第{ctx.page_number}页）\n{ctx.content}"
+        f"[C{i + 1}] （来自《{ctx.document_name}》"
+        f"{_format_page_range(ctx.start_page, ctx.end_page)}）\n{ctx.content}"
         for i, ctx in enumerate(contexts)
     )
 
@@ -317,7 +342,8 @@ def map_citations(
         citations.append(
             Citation(
                 document_name=ctx.document_name,
-                page_number=ctx.page_number,
+                start_page=ctx.start_page,
+                end_page=ctx.end_page,
                 snippet=ctx.content,
                 score=ctx.score,
             )
@@ -405,7 +431,8 @@ def retrieval_to_context(
     return [
         ContextPiece(
             document_name=document_name,
-            page_number=r.page_number,
+            start_page=r.start_page,
+            end_page=r.end_page,
             chunk_index=r.chunk_index,
             content=r.content,
             score=r.score,

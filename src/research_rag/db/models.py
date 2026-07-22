@@ -137,12 +137,13 @@ class Document(Base):
 
 
 class Chunk(Base):
-    """文档分段模型（PROJECT_PLAN.md 第 7.2 节）。
+    """文档分段模型（PROJECT_PLAN.md 第 7.2 节，阶段 8.2 跨页切分扩展）。
 
     Attributes:
         id: UUID 主键。
         document_id: 所属文档的 UUID（外键，``ondelete="CASCADE"``）。
-        page_number: 来源页码，从 1 开始（与 ``PageInfo`` / ``Chunk`` 一致）。
+        start_page: chunk 内容起始页码，从 1 开始（与 ``PageInfo`` / ``Chunk`` 一致）。
+        end_page: chunk 内容结束页码。不跨页时 ``end_page == start_page``。
         chunk_index: 文档内分段序号，从 0 开始。
         content: 分段文本。
         char_count: 字符数。
@@ -159,7 +160,8 @@ class Chunk(Base):
         nullable=False,
         index=True,
     )
-    page_number: Mapped[int] = mapped_column(nullable=False)
+    start_page: Mapped[int] = mapped_column(nullable=False)
+    end_page: Mapped[int] = mapped_column(nullable=False)
     chunk_index: Mapped[int] = mapped_column(nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     char_count: Mapped[int] = mapped_column(nullable=False)
@@ -177,5 +179,6 @@ class Chunk(Base):
     def __repr__(self) -> str:
         return (
             f"Chunk(id={self.id!r}, document_id={self.document_id!r}, "
-            f"page_number={self.page_number!r}, chunk_index={self.chunk_index!r})"
+            f"start_page={self.start_page!r}, end_page={self.end_page!r}, "
+            f"chunk_index={self.chunk_index!r})"
         )

@@ -303,16 +303,17 @@ class DocumentService:
     ) -> list[Chunk]:
         """把 chunker 的 dataclass ``Chunk`` 列表转成 ORM ``Chunk`` 列表。
 
-        chunker 的 ``Chunk`` 是不可变 dataclass（``page_number`` / ``chunk_index``
-        / ``content`` / ``char_count``），不含 ``document_id`` 和 ``vector_id``。
-        ORM ``Chunk`` 需要关联到文档，``vector_id`` 初始为 ``None``，写 Qdrant
-        后由 ``upload_document`` 回填（阶段 6）。
+        chunker 的 ``Chunk`` 是不可变 dataclass（``start_page`` / ``end_page``
+        / ``chunk_index`` / ``content`` / ``char_count``），不含 ``document_id``
+        和 ``vector_id``。ORM ``Chunk`` 需要关联到文档，``vector_id`` 初始为
+        ``None``，写 Qdrant 后由 ``upload_document`` 回填（阶段 6）。
         """
 
         return [
             Chunk(
                 document_id=document_id,
-                page_number=c.page_number,
+                start_page=c.start_page,
+                end_page=c.end_page,
                 chunk_index=c.chunk_index,
                 content=c.content,
                 char_count=c.char_count,

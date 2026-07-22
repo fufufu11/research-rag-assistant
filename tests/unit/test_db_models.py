@@ -99,7 +99,8 @@ def _make_document(
 def _make_chunk(
     document_id: uuid.UUID,
     *,
-    page_number: int = 1,
+    start_page: int = 1,
+    end_page: int = 1,
     chunk_index: int = 0,
     content: str = "这是一段测试文本。",
     char_count: int | None = None,
@@ -108,7 +109,8 @@ def _make_chunk(
 
     return Chunk(
         document_id=document_id,
-        page_number=page_number,
+        start_page=start_page,
+        end_page=end_page,
         chunk_index=chunk_index,
         content=content,
         char_count=char_count if char_count is not None else len(content),
@@ -238,7 +240,7 @@ def test_chunk_crud(session: Session) -> None:
     session.commit()
 
     chunk1 = _make_chunk(doc.id, chunk_index=0, content="第一段")
-    chunk2 = _make_chunk(doc.id, chunk_index=1, content="第二段", page_number=1)
+    chunk2 = _make_chunk(doc.id, chunk_index=1, content="第二段", start_page=1)
     session.add_all([chunk1, chunk2])
     session.commit()
 
@@ -271,7 +273,7 @@ def test_cascade_delete_document_removes_chunks(session: Session) -> None:
     session.add_all(
         [
             _make_chunk(doc.id, chunk_index=0),
-            _make_chunk(doc.id, chunk_index=1, page_number=2),
+            _make_chunk(doc.id, chunk_index=1, start_page=2),
         ]
     )
     session.commit()
@@ -336,7 +338,7 @@ def test_document_chunks_relationship(session: Session) -> None:
     session.add_all(
         [
             _make_chunk(doc.id, chunk_index=0, content="片段 0"),
-            _make_chunk(doc.id, chunk_index=1, content="片段 1", page_number=2),
+            _make_chunk(doc.id, chunk_index=1, content="片段 1", start_page=2),
         ]
     )
     session.commit()
