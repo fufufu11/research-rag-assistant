@@ -58,6 +58,8 @@ if TYPE_CHECKING:
     from langchain_qdrant import QdrantVectorStore
     from sqlalchemy.orm import Session, sessionmaker
 
+    from research_rag.reranker import BaseReranker
+
 
 def get_session_factory(request: Request) -> sessionmaker[Session]:
     """从 ``app.state`` 取应用启动时创建的 session 工厂。
@@ -100,6 +102,17 @@ def get_vector_store(request: Request) -> QdrantVectorStore | None:
     """
 
     return getattr(request.app.state, "vector_store", None)
+
+
+def get_reranker(request: Request) -> BaseReranker | None:
+    """从 ``app.state`` 取应用启动时创建的 Reranker。
+
+    工厂在 ``create_app`` 的 ``lifespan`` 中创建并挂到 ``app.state.reranker``。
+    ``None`` 表示未启用 Reranker（``RERANKER_ENABLED`` 非 true 或创建失败），
+    service 层跳过重排序，直接使用向量检索原始排序。
+    """
+
+    return getattr(request.app.state, "reranker", None)
 
 
 def get_document_service(
@@ -165,14 +178,15 @@ def get_qa_service(
     session: Session = Depends(get_db),
     llm_config: LlmConfig = Depends(get_llm_config),
     vector_store: QdrantVectorStore | None = Depends(get_vector_store),
+    reranker: BaseReranker | None = Depends(get_reranker),
 ) -> QaService:
-    """用当前请求的 Session + LlmConfig + VectorStore 构造 ``QaService``。
+    """用当前请求的 Session + LlmConfig + VectorStore + Reranker 构造 ``QaService``。
 
-    依赖 ``get_db``（Session）、``get_llm_config``（LlmConfig）和
-    ``get_vector_store``（QdrantVectorStore）。
+    依赖 ``get_db``（Session）、``get_llm_config``（LlmConfig）、
+    ``get_vector_store``（QdrantVectorStore）和 ``get_reranker``（BaseReranker）。
     ``QaService`` 内部会惰性创建 Embedding 和 ChatModel（第一次调用
     ``answer`` 时），测试时通过 ``app.dependency_overrides[get_qa_service]``
     替换为 Mock，完全跳过真实数据库、LLM 和 Embedding 调用。
     """
 
-    return QaService(session, llm_config, vector_store=vector_store)
+    return QaService(session, llm_config, vector_store=vector_store, reranker=reranker)

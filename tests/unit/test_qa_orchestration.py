@@ -468,3 +468,148 @@ def test_answer_citation_indices_out_of_range_skipped(
 
     assert response.answer == "回答。"
     assert response.citations == []
+
+
+# ---------------------------------------------------------------------------
+# Reranker 集成：注入后重排 contexts 和 context_doc_ids（阶段 8）
+# ---------------------------------------------------------------------------
+
+
+class _FixedScoreReranker:
+    """按预设分数列表对 contents 评分的 Fake Reranker。
+
+    构造时传入 ``scores`` 列表（与 contents 一一对应），``rerank`` 返回
+    ``[(原始索引, 分数)]`` 按分数降序排列。记录调用参数便于断言。
+
+    用于测试 reranker 注入后 ``QaService.answer`` 是否正确重排
+    ``contexts`` 和 ``context_doc_ids`` 两个平行列表，以及是否更新 ``score``。
+    """
+
+    def __init__(self, scores: list[float]) -> None:
+        self.scores = scores
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def rerank(
+        self,
+        query: str,
+        contents: Sequence[str],
+        top_k: int | None = None,
+    ) -> list[tuple[int, float]]:
+        self.calls.append((query, list(contents)))
+        indexed = list(enumerate(self.scores[: len(contents)]))
+        indexed.sort(key=lambda x: x[1], reverse=True)
+        if top_k is not None and top_k > 0:
+            indexed = indexed[:top_k]
+        return [(idx, score) for idx, score in indexed]
+
+
+def test_answer_with_reranker_reorders_contexts_and_syncs_doc_ids(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_embeddings: _FakeEmbeddings,
+    fake_chat_model: BaseChatModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """注入 Reranker 后：contexts 和 context_doc_ids 按重排分数同步重排。
+
+    场景：
+    - 单文档，2 个 chunks：
+      - chunk0 (page 1, idx 0)："深度学习是机器学习分支" —— ``_FakeEmbeddings``
+        字符袋会让它向量检索 score 最高（含"深度学习"4 个字符）
+      - chunk1 (page 2, idx 1)："神经网络可以用于图像识别" —— 向量检索 score 较低
+    - 向量检索后 contexts 顺序：[chunk0, chunk1]
+    - Fake Reranker 给 chunk0 分数 0.1，给 chunk1 分数 0.9（与向量检索顺序相反）
+    - 重排后 contexts 顺序：[chunk1, chunk0]
+    - ``citation_indices=[1]`` 映射到重排后的 contexts[0]（即原 chunk1）
+    """
+
+    doc = _make_doc(
+        session,
+        "论文A.pdf",
+        chunks=[
+            (1, 0, "深度学习是机器学习分支"),
+            (2, 1, "神经网络可以用于图像识别"),
+        ],
+    )
+
+    # Fake Reranker：给原 chunk0 分数 0.1，原 chunk1 分数 0.9
+    reranker = _FixedScoreReranker(scores=[0.1, 0.9])
+
+    service = QaService(
+        session,
+        llm_config,
+        embeddings=fake_embeddings,
+        chat_model=fake_chat_model,
+        reranker=reranker,
+    )
+
+    mock_answer = MagicMock(
+        return_value=AnswerWithCitations(
+            answer_text="回答。",
+            citation_indices=[1],  # 引用重排后的 contexts[0]
+            citations=[],
+        )
+    )
+    monkeypatch.setattr("research_rag.services.qa_service.answer_question", mock_answer)
+
+    response = service.answer("深度学习", top_k=2)
+
+    # rerank 被调用一次，query 和 contents 正确
+    assert len(reranker.calls) == 1
+    called_query, called_contents = reranker.calls[0]
+    assert called_query == "深度学习"
+    assert len(called_contents) == 2
+    assert called_contents[0] == "深度学习是机器学习分支"
+    assert called_contents[1] == "神经网络可以用于图像识别"
+
+    # 重排后 contexts[0] 是原 chunk1（page 2, idx 1），contexts[1] 是原 chunk0
+    contexts = mock_answer.call_args[0][1]
+    assert contexts[0].page_number == 2
+    assert contexts[0].chunk_index == 1
+    assert contexts[1].page_number == 1
+    assert contexts[1].chunk_index == 0
+
+    # score 字段被更新为重排分数
+    assert contexts[0].score == 0.9
+    assert contexts[1].score == 0.1
+
+    # citation_indices=[1] 映射到重排后的 contexts[0]（原 chunk1）
+    assert len(response.citations) == 1
+    assert response.citations[0].document_id == doc.id
+    assert response.citations[0].page_number == 2
+    assert response.citations[0].chunk_index == 1
+    assert response.citations[0].score == 0.9
+
+
+def test_answer_without_reranker_skips_rerank(
+    service: QaService, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """reranker=None（默认）：不调用 rerank，contexts 按向量检索原始顺序。
+
+    ``service`` fixture 默认不注入 reranker，验证 rerank 步骤被跳过。
+    虽然其他测试隐式覆盖此场景，但显式断言更清晰。
+    """
+
+    _make_doc(
+        session,
+        "论文.pdf",
+        chunks=[(1, 0, "深度学习内容。")],
+    )
+
+    mock_answer = MagicMock(
+        return_value=AnswerWithCitations(
+            answer_text="回答。",
+            citation_indices=[1],
+            citations=[],
+        )
+    )
+    monkeypatch.setattr("research_rag.services.qa_service.answer_question", mock_answer)
+
+    # service.reranker 应为 None
+    assert service.reranker is None
+
+    response = service.answer("深度学习")
+
+    # 正常返回，未触发重排
+    assert response.answer == "回答。"
+    assert len(response.citations) == 1

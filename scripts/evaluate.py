@@ -36,6 +36,11 @@
     uv run python scripts/evaluate.py run --pdfs-dir <dir> \
         --embedding-model BAAI/bge-small-en-v1.5
 
+    # 启用 BGE Reranker 重排序，对比有/无重排的指标
+    uv run python scripts/evaluate.py run --pdfs-dir <dir> \
+        --embedding-model BAAI/bge-small-en-v1.5 \
+        --reranker-model BAAI/bge-reranker-base
+
 退出码：
 - 0：成功
 - 2：缺少 sentence-transformers（未运行 ``uv sync --extra embedding``）
@@ -70,6 +75,14 @@ from research_rag.evaluation import (
     normalize_text,
 )
 from research_rag.pdf_parser import parse_pdf
+from research_rag.reranker import (
+    DEFAULT_RERANKER_MODEL,
+    BaseReranker,
+    RerankerConfig,
+    RerankerError,
+    create_reranker,
+    rerank_results,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -198,21 +211,24 @@ def run_experiment(
     entries: Sequence[EvaluationEntry],
     chunks: Sequence[Chunk],
     embeddings: object,
+    reranker: BaseReranker | None = None,
 ) -> MetricResult:
-    """运行单组实验：索引 → 逐条检索 → 计算指标。
+    """运行单组实验：索引 → 逐条检索 → （可选重排）→ 计算指标。
 
     Args:
         config: 实验参数。
         entries: 评测数据集。
         chunks: 已按 ``config`` 切分好的 Chunk 列表。
         embeddings: LangChain ``Embeddings`` 实例。
+        reranker: 可选的 Reranker 实例。为 ``None`` 时跳过重排（基线对比）。
 
     Returns:
         汇总指标。
     """
     from research_rag.evaluation import QueryMetrics
 
-    print(f"\n[{config.name}] 索引 {len(chunks)} 个 chunk...")
+    reranker_label = " + reranker" if reranker is not None else ""
+    print(f"\n[{config.name}{reranker_label}] 索引 {len(chunks)} 个 chunk...")
     store = index_chunks(chunks, embeddings)  # type: ignore[arg-type]
 
     top_k = max(config.top_k, DEFAULT_EVAL_TOP_K)
@@ -220,6 +236,9 @@ def run_experiment(
     for entry in entries:
         start = time.perf_counter()
         results = retrieve(store, entry.question, top_k=top_k)
+        # 重排序：Cross-Encoder 对 Top-K 结果精排（不截断，仅重排序）
+        if reranker is not None:
+            results = rerank_results(reranker, entry.question, results)
         latency_ms = (time.perf_counter() - start) * 1000
         per_query.append(
             compute_query_metrics(
@@ -231,7 +250,7 @@ def run_experiment(
         )
 
     result = aggregate_metrics(
-        experiment_name=config.name,
+        experiment_name=config.name + reranker_label,
         per_query=per_query,
         chunk_count=len(chunks),
     )
@@ -276,11 +295,15 @@ def run_evaluation(
     experiments: Sequence[ExperimentConfig],
     only: str | None,
     embedding_model: str | None = None,
+    reranker_model: str | None = None,
 ) -> int:
     """运行评测：解析 PDF → 按各组参数切分 → 合并索引 → 检索 → 汇总指标。
 
     多 PDF 模式下，所有 PDF 的 chunk 合并到同一个向量库中检索，模拟用户
     上传多份文献后的真实场景；单 PDF 模式下 ``pdf_paths`` 只有一个条目。
+
+    当 ``reranker_model`` 指定时，对每组实验额外运行一次带重排的评测，
+    方便对比有/无 reranker 的指标差异。
 
     Args:
         pdf_paths: ``{文件名: 路径}`` 映射。单 PDF 模式下 key 为空字符串。
@@ -290,6 +313,8 @@ def run_evaluation(
         embedding_model: Embedding 模型名（HuggingFace）。为 ``None`` 时用
             生产默认（``DEFAULT_EMBEDDING_MODEL``，中文优化）。评测英文论文
             时建议传 ``BAAI/bge-small-en-v1.5`` 等英文模型以获得更准确结果。
+        reranker_model: Reranker 模型名（HuggingFace）。为 ``None`` 时跳过
+            重排评测。指定时对每组实验额外运行一次带 reranker 的评测。
 
     Returns:
         退出码。
@@ -304,7 +329,17 @@ def run_evaluation(
         print(f"错误: {exc}", file=sys.stderr)
         return 2
 
+    # 可选：创建 Reranker
+    reranker: BaseReranker | None = None
+    if reranker_model is not None:
+        try:
+            reranker = create_reranker(RerankerConfig(model_name=reranker_model))
+        except RerankerError as exc:
+            print(f"错误: 创建 Reranker 失败: {exc}", file=sys.stderr)
+            return 2
+
     print(f"Embedding 模型: {model_name}")
+    print(f"Reranker 模型: {reranker_model or '未启用'}")
     print(f"待评测 PDF: {len(pdf_paths)} 份")
     print("=" * 70)
 
@@ -322,8 +357,17 @@ def run_evaluation(
         # 每组实验重新切分所有 PDF（参数不同，切分结果不同）
         all_chunks, _ = _parse_and_chunk_pdfs(pdf_paths, chunker_config)
         print(f"\n[{config.name}] 共 {len(all_chunks)} chunks ({len(pdf_paths)} 份 PDF)")
+
+        # 基线（无重排）
         result = run_experiment(config, entries, all_chunks, embeddings)
         all_results.append(result)
+
+        # 带 reranker 的对比实验
+        if reranker is not None:
+            result_reranked = run_experiment(
+                config, entries, all_chunks, embeddings, reranker=reranker
+            )
+            all_results.append(result_reranked)
 
     print("\n" + "=" * 70)
     print("汇总结果\n")
@@ -462,6 +506,16 @@ def main(argv: list[str] | None = None) -> int:
             "BAAI/bge-small-en-v1.5 等英文模型以获得更准确结果"
         ),
     )
+    p_run.add_argument(
+        "--reranker-model",
+        type=str,
+        default=None,
+        help=(
+            "Reranker 模型名（HuggingFace），默认不启用重排。指定时对每组实验"
+            "额外运行一次带 Cross-Encoder 重排的评测，方便对比有/无 reranker "
+            f"的指标差异。推荐用 {DEFAULT_RERANKER_MODEL}"
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -482,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
             experiments,
             args.only,
             embedding_model=args.embedding_model,
+            reranker_model=args.reranker_model,
         )
 
     return 1

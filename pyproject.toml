@@ -184,6 +184,13 @@ strict = false
 module = ["streamlit.*"]
 ignore_missing_imports = true
 
+# sentence_transformers 是可选依赖（embedding extra），CI 只装 dev extra 不装它，
+# 且该库无 type stubs。reranker.py 在运行时惰性导入 CrossEncoder，mypy 静态检查
+# 时找不到该模块会报 import-not-found。与 streamlit 同理，忽略缺失导入。
+[[tool.mypy.overrides]]
+module = ["sentence_transformers.*"]
+ignore_missing_imports = true
+
 # ---------------------------------------------------------------------------
 # pytest
 # ---------------------------------------------------------------------------
