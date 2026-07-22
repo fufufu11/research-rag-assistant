@@ -1,0 +1,62 @@
+"""SQLAlchemy Session 配置。
+
+依据 PROJECT_PLAN.md 第 709 节（阶段 5 交付物）、第 11 节（DATABASE_URL）。
+
+设计取舍（初学者向说明）：
+- 用工厂函数而非模块级单例：``create_session_factory(database_url)`` 接受
+  URL 参数，测试时可注入临时 SQLite（``sqlite:///:memory:`` 或 ``tmp_path``
+  下的文件），不污染全局状态。真实运行时由调用方用 ``get_database_url()``
+  读环境变量后调用，避免导入本模块就建立连接池。
+- ``expire_on_commit=False``：commit 后对象属性不过期，避免在请求处理过程中
+  访问属性触发额外查询（FastAPI 场景常见配置）。
+- ``future=True``：强制使用 SQLAlchemy 2.0 风格 API，与 ``models.py`` 一致。
+- SQLite 的 ``check_same_thread`` 暂不处理：本 Issue 不实现 HTTP 接口（无
+  多线程），阶段 5 后续 HTTP Issue 再为 SQLite 添加
+  ``connect_args={"check_same_thread": False}``。
+- 不在本模块创建模块级 engine / sessionmaker：测试中每个测试函数需要独立
+  数据库，模块级单例会让测试互相干扰。应用启动时（后续 Issue）再在
+  ``api/dependencies.py`` 中创建单例。
+"""
+
+from __future__ import annotations
+
+import os
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+# 默认数据库 URL（PROJECT_PLAN.md 第 11 节、.env.example）
+# ``sqlite:///./data/app.db``：相对当前工作目录的 data/ 目录
+# （.gitignore 已忽略 data/，不提交 SQLite 文件）
+DEFAULT_DATABASE_URL = "sqlite:///./data/app.db"
+
+
+def get_database_url() -> str:
+    """从环境变量读取 ``DATABASE_URL``，未设置时返回默认值。
+
+    默认值与 ``.env.example`` 一致，确保不配置 ``.env`` 也能本地运行。
+    """
+
+    return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+
+
+def create_session_factory(database_url: str | None = None) -> sessionmaker[Session]:
+    """创建 session 工厂。
+
+    Args:
+        database_url: 数据库 URL。``None`` 时用 ``get_database_url()``。
+            测试时可传 ``sqlite:///:memory:`` 或临时文件 URL，隔离数据库。
+
+    Returns:
+        ``sessionmaker[Session]``，调用返回 ``Session`` 实例。
+        ``expire_on_commit=False`` 让 commit 后对象属性仍可用。
+
+    Note:
+        返回的 factory 持有自己的 engine，多次调用 ``create_session_factory``
+        会创建多个 engine。生产环境通常只调用一次（应用启动时），测试环境
+        每个测试函数调用一次（隔离数据库）。
+    """
+
+    url = database_url or get_database_url()
+    engine = create_engine(url, future=True)
+    return sessionmaker(bind=engine, expire_on_commit=False, future=True)

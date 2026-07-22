@@ -42,6 +42,9 @@ uv run python scripts/parse_pdf.py <pdf_path>
 # 检索评测脚本（阶段 3，需先安装推理后端）
 uv sync --extra embedding
 uv run python scripts/evaluate_retrieval.py --demo
+
+# 数据库迁移（阶段 5，首次运行或拉取新代码后执行）
+uv run alembic upgrade head
 ```
 
 PDF 解析 CLI 会输出文件总页数，以及每页的页码、字符数和前 200 字预览。退出码：0 成功，2 文件不存在，3 文件损坏，4 空 PDF。
