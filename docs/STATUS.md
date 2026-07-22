@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0、1、2、3、4 已合并到 `main`；阶段 5 第一个 Issue「文档和 Chunk 数据模型」代码完成，待提交 PR）
+`v0.0.0`（阶段 0、1、2、3、4 已合并到 `main`；阶段 5 第一个 Issue「文档和 Chunk 数据模型」已合并 PR #15；阶段 5 第二个 Issue「文档存储与状态管理服务层」代码完成，待提交 PR）
 
 ## 已完成
 
@@ -69,9 +69,9 @@
 - 新增依赖：`langchain-openai>=1.2.0`（OpenAI 兼容协议客户端）
 - `.env.example` 新增：`LLM_TIMEOUT=30`、`LLM_MAX_RETRIES=2`
 
-### 阶段 5：FastAPI 与数据库（Issue #14，分支 `feat/db-models`，待提交 PR）
+### 阶段 5：FastAPI 与数据库（Issue #14 已合并 PR #15；Issue #16 进行中）
 
-第一个 Issue 范围：建立文档和 Chunk 数据模型（SQLAlchemy 2 + Alembic 迁移）。
+#### Issue #14：建立文档和 Chunk 数据模型（已合并 PR #15）
 
 - `src/research_rag/db/`：数据库包
   - `db/models.py`：`Base`（DeclarativeBase）+ `DocumentStatus` enum + `Document` + `Chunk` + 异常
@@ -95,6 +95,32 @@
 
 **本 Issue 不实现**：HTTP 接口、文档存储逻辑、向量库写入、QueryLog 模型、repository 服务层（后续 Issue 处理）。
 
+#### Issue #16：实现文档存储与状态管理服务层（分支 `feat/doc-storage`，待提交 PR）
+
+第二个 Issue 范围：在已有 `Document` / `Chunk` 数据模型基础上，实现 repository 层（纯 DB CRUD）与 service 层（业务编排：sha256 去重、文件落盘、调用 `parse_pdf` / `chunk_pages`、status 状态机）。
+
+- `src/research_rag/db/repositories.py`：`DocumentRepository` 数据访问层
+  - 封装 `Document` / `Chunk` 表的 CRUD：`create` / `get_by_id` / `get_by_sha256` / `list_all` / `delete` / `update_status` / `update_page_count` / `add_chunks`
+  - 只 `flush` 不 `commit`，事务边界由 service 层控制（Repository 模式常见做法）
+  - `update_status` 同时更新 `error_message`（状态和错误信息总是一起变化）
+  - `add_chunks` 用 `relationship.extend` 关联 chunks 到 document
+- `src/research_rag/services/document_service.py`：`DocumentService` 业务编排层
+  - `upload_document(file_bytes, original_name)`：sha256 去重 → 创建 PENDING 记录 → 落盘 → PROCESSING → `parse_pdf` + `chunk_pages` → 持久化 chunks → READY（失败转 FAILED + error_message）
+  - `get_document(doc_id)`：不存在抛 `DocumentNotFoundError`
+  - `list_documents()`：按创建时间降序
+  - `delete_document(doc_id)`：先删 DB 记录（事务，级联删 chunks），再删文件（best-effort，`suppress(OSError)`）
+  - `stored_name = sha256[:16] + 小写扩展名`，避免路径遍历攻击（PROJECT_PLAN 第 11 节）
+  - 状态机：`pending → processing → ready / failed`，每次转换都 `commit`，进程崩溃也保留最后状态
+  - 失败处理：`rollback` 清除 pending 改动 → 重新查询 → 标记 FAILED + error_message → commit
+  - `vector_id` 保留 `None`（阶段 6 才写向量库）
+  - `UPLOAD_DIR` 从环境变量读，默认 `./data/uploads`
+- `tests/unit/test_repositories.py`：14 条测试（CRUD、级联删除、状态更新、add_chunks）
+- `tests/unit/test_document_service.py`：27 条测试
+  - Mock `parse_pdf` / `chunk_pages`（`monkeypatch`），用内存 SQLite + `tmp_path` 隔离
+  - 覆盖：成功上传、重复上传（DuplicateDocumentError）、损坏/空 PDF（FAILED 状态）、空 chunks、查询、列表、删除（含文件和 chunks 级联）、文件已缺失、stored_name 安全性
+
+**本 Issue 不实现**：FastAPI 路由、向量库写入、QueryLog、文件大小限制/MIME 校验（下一个 Issue 处理）。
+
 ## 当前Issue与分支
 
 - Issue #1（初始化Python项目与质量工具）：已关闭（PR #3 合并）
@@ -103,11 +129,12 @@
 - Issue #8（feat: 实现页内文本切分器）：已关闭（PR #9 合并）
 - Issue #10（feat: 基于LangChain实现Embedding适配器）：已关闭（PR #11 合并）
 - Issue #12（feat: 大模型回答与可靠引用）：已关闭（PR #13 合并）
-- Issue #14（feat: 建立文档和Chunk数据模型）：进行中，分支 `feat/db-models`（本地，未推送）
+- Issue #14（feat: 建立文档和Chunk数据模型）：已关闭（PR #15 合并）
+- Issue #16（feat: 实现文档存储与状态管理服务层）：进行中，分支 `feat/doc-storage`（本地，未推送）
 
 ## 正在处理的问题
 
-无。阶段 5 第一个 Issue 代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过，mypy 因本机 `librt` C 扩展策略限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR。
+无。阶段 5 第二个 Issue 代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过，mypy 因本机 `librt` C 扩展策略限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR。
 
 ## 本地运行命令
 
@@ -137,7 +164,7 @@ uv run pre-commit install
 
 ## 测试状态
 
-- pytest：104 passed（2 冒烟 + 5 PDF 解析 + 14 切分器 + 17 Embedding + 42 qa_service + 17 db_models + 7 alembic_migration）
+- pytest：145 passed（2 冒烟 + 5 PDF 解析 + 14 切分器 + 17 Embedding + 42 qa_service + 17 db_models + 7 alembic_migration + 14 repositories + 27 document_service）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：本机因 `librt` C 扩展被应用程序控制策略阻止无法运行，CI 环境（Linux）正常
@@ -146,31 +173,23 @@ uv run pre-commit install
 
 按 [PROJECT_PLAN.md 阶段 5](../PROJECT_PLAN.md#L709)：
 
-1. **提交并推送 `feat/db-models` 分支**，开 PR 关联 Issue #14（`Closes #14`）
+1. **提交并推送 `feat/doc-storage` 分支**，开 PR 关联 Issue #16（`Closes #16`）
 2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
 3. **继续阶段 5 后续 Issue**：
-   - 文档存储逻辑（sha256 去重、文件落盘、status 状态机）
-   - FastAPI 路由（上传/列表/详情/删除）
+   - FastAPI 路由（上传/列表/详情/删除）—— 接入 `DocumentService`
    - 问答 API（接入阶段 4 的 qa_service）
    - 集成测试（Mock LLM 与 Embedding，CI 不消耗真实 Token）
 
 ## 尚未提交的改动
 
-`feat/db-models` 分支上的改动（均未提交）：
+`feat/doc-storage` 分支上的改动（均未提交）：
 
-- 修改：`pyproject.toml`（新增 `sqlalchemy>=2.0` + `alembic>=1.13` 依赖 + 必要性说明）
-- 修改：`uv.lock`（依赖解析结果，含 sqlalchemy / alembic / greenlet / mako / markupsafe）
-- 修改：`.env.example`（DATABASE_URL 注释更新为"阶段 5 已启用"）
-- 修改：`README.md`（新增 `alembic upgrade head` 迁移命令）
 - 修改：`docs/STATUS.md`（本次更新）
-- 新增：`src/research_rag/db/__init__.py`
-- 新增：`src/research_rag/db/models.py`
-- 新增：`src/research_rag/db/session.py`
-- 新增：`alembic.ini`
-- 新增：`alembic/env.py`、`alembic/script.py.mako`、`alembic/README`
-- 新增：`alembic/versions/2026_07_22_1113-91c0c0df60b0_create_documents_and_chunks_tables.py`
-- 新增：`tests/unit/test_db_models.py`
-- 新增：`tests/unit/test_alembic_migration.py`
+- 新增：`src/research_rag/db/repositories.py`（`DocumentRepository` 数据访问层）
+- 新增：`src/research_rag/services/__init__.py`（services 包初始化）
+- 新增：`src/research_rag/services/document_service.py`（`DocumentService` 业务编排层）
+- 新增：`tests/unit/test_repositories.py`（14 条 repository 测试）
+- 新增：`tests/unit/test_document_service.py`（27 条 service 测试）
 
 ## 已知问题
 
@@ -180,7 +199,6 @@ uv run pre-commit install
 4. **PyMuPDF 类型存根不完整**：`pymupdf.open` / `page.get_text` / `doc.close` 在 mypy strict 下报 `no-untyped-call`，已在调用处用 `# type: ignore[no-untyped-call]` 精确抑制。
 5. **测试 PDF 用英文文本**：PyMuPDF 的 `insert_text` 默认字体不含中文字形，CI 环境（Linux）也不一定有中文字体，故测试用英文。解析器本身对中文无特殊处理。
 6. **SQLite inspector 反射限制**：`inspector.get_foreign_keys()` 对 SQLite 的 `ondelete` 反射不稳定（不同版本可能不返回该字段），迁移测试用 `PRAGMA foreign_key_list` 直接查询。`unique` 在 SQLite 中返回 0/1 整数而非 Python bool，测试用 `bool()` 归一化。
-7. **本地 `main` 比 `origin/main` 领先 4 个 commits**：历史 merge commits，已包含在远程 PR 历史中。需要在合适时机 `git push` 同步（不阻塞当前 Issue）。
 
 ## 最近学到的内容
 
@@ -198,3 +216,11 @@ uv run pre-commit install
 - SQLite 的 `inspector.get_indexes()` 返回的 `unique` 是 0/1 整数而非 Python bool，断言时用 `bool()` 归一化
 - `sessionmaker[Session]` 是泛型类型标注，让 mypy 能检查 `factory()` 返回的 Session 类型
 - `expire_on_commit=False` 是 FastAPI + SQLAlchemy 常见配置：commit 后对象属性不过期，避免请求处理中访问属性触发额外查询
+- Repository 模式：把数据访问集中到一个类，业务层只调方法不写 SQL，便于换数据库和测试。Repository 只 `flush` 不 `commit`，事务边界由 service 层控制
+- `session.rollback()` 后 ORM 对象属性会过期，需要 `get_by_id` 重新查询才能安全访问（避免访问过期属性触发隐式查询）
+- 状态机 + 多次 commit：每个状态转换都 commit，即使进程崩溃也保留最后状态。失败时先 rollback 清除 pending 改动，再重新查询记录标记 FAILED
+- `Path.suffix.lower()` 提取小写扩展名，配合 sha256 前缀生成安全文件名，从源头杜绝路径遍历（用户文件名不作为磁盘路径）
+- `contextlib.suppress(OSError)` 比 `try/except/pass` 更简洁，语义明确表达"忽略此异常"
+- `unittest.mock.patch` / `monkeypatch.setattr` 替换模块级函数，测试中 Mock `parse_pdf` / `chunk_pages` 避免真实 PDF 解析
+- `tmp_path` fixture 隔离文件 IO，每个测试用独立临时目录，不污染真实磁盘
+- `from __future__ import annotations` 让类型标注变为字符串，ruff TCH 规则会把仅用于标注的导入移到 `TYPE_CHECKING` 块，减少运行时导入开销
