@@ -160,7 +160,8 @@ def create_app(
     # 挂载 session_factory 到 app.state，供 lifespan 和 get_session_factory 读取
     app.state.session_factory = session_factory
     # vector_store 初始为 None，lifespan 中按需创建（测试时不创建）
-    app.state.vector_store: QdrantVectorStore | None = None
+    # 注意：app.state 是 Starlette.State，不支持类型标注赋值，只能直接赋值
+    app.state.vector_store = None
 
     # CORS 中间件（开发环境允许 localhost）
     app.add_middleware(

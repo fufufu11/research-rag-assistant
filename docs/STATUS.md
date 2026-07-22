@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0-4 已合并到 `main`；阶段 5 四个 Issue 全部合并：文档模型 PR #15、存储服务 PR #17、文档管理路由 PR #19、问答 API 路由 PR #21；Ollama 本地 LLM 集成 PR #23 已合并；get_db 依赖注入修复 PR #25 已合并。阶段 6 Qdrant 向量库迁移进行中，分支 `feat/qdrant`）
+`v0.0.0`（阶段 0-4 已合并到 `main`；阶段 5 四个 Issue 全部合并：文档模型 PR #15、存储服务 PR #17、文档管理路由 PR #19、问答 API 路由 PR #21；Ollama 本地 LLM 集成 PR #23 已合并（后删除）；get_db 依赖注入修复 PR #25 已合并。阶段 6 Qdrant 向量库迁移进行中，分支 `feat/qdrant`）
 
 ## 已完成
 
@@ -233,7 +233,7 @@
 
 ## 正在处理的问题
 
-Issue #26（Qdrant 向量数据库迁移）。将阶段 3 的 InMemoryVectorStore 替换为 Qdrant 持久化向量库，支持 Payload 过滤检索和批量删除。`vector_store.py` 适配器模块已创建（`create_vector_store` 支持 `:memory:` 内存测试 + 自动建集合），`DocumentService` / `QaService` / `api/dependencies` / `api/app` 已接入向量库写入/删除/检索路径。17 条 vector_store 单元测试 + 211 条全量测试通过，ruff format/check 通过，mypy 本机不可用。
+Issue #26（Qdrant 向量数据库迁移）。将阶段 3 的 InMemoryVectorStore 替换为 Qdrant 持久化向量库，支持 Payload 过滤检索和批量删除。`vector_store.py` 适配器模块已创建（`create_vector_store` 支持 `:memory:` 内存测试 + 自动建集合），`DocumentService` / `QaService` / `api/dependencies` / `api/app` 已接入向量库写入/删除/检索路径。同时修复 CI mypy 失败（`vector_store` 类型收窄 + `app.state` 类型声明），并彻底删除 Ollama 本地 LLM 集成（`langchain-ollama` 依赖、`_create_ollama_chat_model`、`provider` 字段、相关测试和配置项）。202 条全量测试通过，ruff format/check 通过，mypy 本机不可用。
 
 ## 本地运行命令
 
@@ -266,7 +266,7 @@ uv run pre-commit install
 
 ## 测试状态
 
-- pytest：211 passed（含 17 条 vector_store 测试）
+- pytest：202 passed（含 17 条 vector_store 测试，已删除 9 条 Ollama 测试）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：本机因 `librt` C 扩展被应用程序控制策略阻止无法运行，CI 环境（Linux）正常
@@ -286,11 +286,14 @@ uv run pre-commit install
 - 新增：`src/research_rag/vector_store.py`（Qdrant 适配器：`QdrantConfig` / `create_vector_store` / `upsert_chunks` / `delete_by_document` / `search`，支持 `:memory:` 内存测试 + 自动建集合）
 - 新增：`tests/unit/test_vector_store.py`（17 条测试：配置、创建、写入、删除、检索、集成验收"删除后无残留向量"）
 - 修改：`src/research_rag/services/document_service.py`（`upload_document` 写入 Qdrant + 回填 `vector_id`；`delete_document` 按 payload 清理 Qdrant 向量，best-effort）
-- 修改：`src/research_rag/services/qa_service.py`（新增 `vector_store` 参数 + `_retrieve_with_qdrant` 单库检索路径；未注入时回退到 InMemory）
-- 修改：`src/research_rag/api/dependencies.py`（新增 `get_vector_store` 依赖；`get_document_service` / `get_qa_service` 注入 `vector_store`）
-- 修改：`src/research_rag/api/app.py`（`lifespan` 中 best-effort 创建 `QdrantVectorStore`；新增 `_create_vector_store` 支持 `QDRANT_ENABLED=false` 显式禁用）
-- 修改：`pyproject.toml`（新增依赖 `langchain-qdrant>=0.2.0`）
-- 修改：`.env.example`（新增 `QDRANT_ENABLED` 配置项）
+- 修改：`src/research_rag/services/qa_service.py`（新增 `vector_store` 参数 + `_retrieve_with_qdrant` 单库检索路径；未注入时回退到 InMemory；修复 mypy 类型收窄）
+- 修改：`src/research_rag/api/dependencies.py`（新增 `get_vector_store` 依赖；`get_document_service` / `get_qa_service` 注入 `vector_store`；删除 Ollama 分支）
+- 修改：`src/research_rag/api/app.py`（`lifespan` 中 best-effort 创建 `QdrantVectorStore`；新增 `_create_vector_store` 支持 `QDRANT_ENABLED=false` 显式禁用；修复 `app.state` 类型声明）
+- 修改：`src/research_rag/qa_service.py`（删除 Ollama 集成：`_create_ollama_chat_model` / `DEFAULT_OLLAMA_BASE_URL` / `SUPPORTED_LLM_PROVIDERS` / `provider` 字段；简化 `create_chat_model`）
+- 修改：`tests/unit/test_qa_service.py`（删除 5 条 Ollama 测试）
+- 修改：`tests/unit/test_llm_config.py`（重写，只测试 OpenAI 路径，6 条测试）
+- 修改：`pyproject.toml`（新增 `langchain-qdrant>=0.2.0`，删除 `langchain-ollama>=0.3.0`）
+- 修改：`.env.example`（新增 `QDRANT_ENABLED`；删除 `LLM_PROVIDER` / `OLLAMA_BASE_URL` / `OLLAMA_MODEL`）
 - 修改：`docs/STATUS.md`（本次更新）
 
 ## 已知问题

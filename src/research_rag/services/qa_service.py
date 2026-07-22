@@ -272,6 +272,9 @@ class QaService:
         # 未清理的残留向量）
         doc_ids = [doc.id for doc in docs]
 
+        # 本方法只在 self.vector_store is not None 时被 answer 调用，
+        # 用 assert 帮助 mypy 收窄类型（本项目不用 -O 优化，assert 不会被移除）
+        assert self.vector_store is not None
         results = search(self.vector_store, question, doc_ids, top_k=top_k)
 
         contexts: list[ContextPiece] = []

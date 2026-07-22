@@ -37,13 +37,6 @@ dependencies = [
     "langchain>=1.3.14",
     "langchain-core>=1.5.0",
     "langchain-huggingface>=1.2.2",
-    # 阶段 5 引入：LangChain 官方 Ollama 集成，支持本地 LLM 离线调用（免费）。
-    # 必要性：Ollama 是免费本地 LLM 运行时，ChatOllama 继承 BaseChatModel，
-    # 与 ChatOpenAI invoke 接口一致，通过 LLM_PROVIDER=ollama 切换。
-    # 让用户无需 API Key 即可用本地模型（如 qwen2.5:3b-instruct）做 PDF 问答测试。
-    # 替代方案：① 用 Ollama 的 OpenAI 兼容端点 + ChatOpenAI → 不支持本地特有参数；
-    # ② langchain-community → 体积大；③ 手写 HTTP → 违反 LangChain 抽象。
-    "langchain-ollama>=0.3.0",
     # 阶段 4 引入：LangChain 官方维护的 OpenAI 兼容客户端。
     # 必要性：所有 OpenAI 兼容服务（DeepSeek、Moonshot、Together、本地 vLLM 等）
     # 都用同一个 ChatOpenAI 类，与已装的 langchain-huggingface 风格一致。
