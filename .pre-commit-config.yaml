@@ -1,7 +1,6 @@
 # Pre-commit 钩子配置
 # 安装：uv run pre-commit install
 # 手动运行：uv run pre-commit run --all-files
-# 配置依据：PROJECT_PLAN.md 第 5 节、第 13.4 节
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
