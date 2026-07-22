@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -36,6 +37,7 @@ from research_rag.db.models import (
 )
 from research_rag.db.session import (
     DEFAULT_DATABASE_URL,
+    create_engine_for_url,
     create_session_factory,
     get_database_url,
 )
@@ -423,3 +425,61 @@ def test_create_session_factory_uses_env_url(monkeypatch: pytest.MonkeyPatch) ->
         sess.execute(select(1))
     finally:
         sess.close()
+
+
+def test_create_engine_for_url_sqlite_disables_check_same_thread() -> None:
+    """SQLite engine 自动添加 check_same_thread=False（FastAPI 线程池场景必需）。
+
+    用行为测试验证：SQLite 默认 ``check_same_thread=True`` 会禁止连接跨线程
+    使用，在线程里用 engine 取连接会抛 ``ProgrammingError``。本函数应关闭此
+    检查，使跨线程访问不报错（FastAPI 同步路由运行在线程池，必需此行为）。
+    """
+
+    engine = create_engine_for_url("sqlite:///:memory:")
+    try:
+        import threading
+
+        result: list[str] = []
+
+        def use_in_thread() -> None:
+            # 若 check_same_thread 仍为 True，此处会抛 ProgrammingError
+            with engine.connect() as conn:
+                conn.execute(select(1))
+                result.append("ok")
+
+        t = threading.Thread(target=use_in_thread)
+        t.start()
+        t.join()
+        assert result == ["ok"]
+    finally:
+        engine.dispose()
+
+
+def test_create_engine_for_url_non_sqlite_no_check_same_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非 SQLite URL 不添加 ``check_same_thread`` 参数。
+
+    用 ``monkeypatch`` 替换 ``create_engine``，避免 ``create_engine`` 实际
+    尝试导入 dialect 驱动（如 ``psycopg``），从而无需安装 PostgreSQL 驱动
+    即可验证函数对非 SQLite URL 的处理逻辑。捕获调用参数，断言
+    ``connect_args`` 为空 dict（即未注入 SQLite 专属参数）。
+    """
+
+    captured: dict[str, object] = {}
+
+    def fake_create_engine(url: str, **kwargs: object) -> object:
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return MagicMock()
+
+    monkeypatch.setattr("research_rag.db.session.create_engine", fake_create_engine)
+
+    create_engine_for_url("postgresql+psycopg://u:p@localhost/db")
+
+    assert captured["url"] == "postgresql+psycopg://u:p@localhost/db"
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    connect_args = kwargs.get("connect_args")
+    assert connect_args == {}
+    assert "check_same_thread" not in (connect_args or {})

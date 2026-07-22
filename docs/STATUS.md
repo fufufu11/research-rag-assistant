@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-`v0.0.0`（阶段 0、1、2、3、4 已合并到 `main`；阶段 5 第一个 Issue「文档和 Chunk 数据模型」已合并 PR #15；阶段 5 第二个 Issue「文档存储与状态管理服务层」代码完成，待提交 PR）
+`v0.0.0`（阶段 0、1、2、3、4 已合并到 `main`；阶段 5 第一个 Issue「文档和 Chunk 数据模型」已合并 PR #15；阶段 5 第二个 Issue「文档存储与状态管理服务层」已合并 PR #17；阶段 5 第三个 Issue「文档管理 FastAPI 路由」代码完成，待提交 PR）
 
 ## 已完成
 
@@ -69,7 +69,7 @@
 - 新增依赖：`langchain-openai>=1.2.0`（OpenAI 兼容协议客户端）
 - `.env.example` 新增：`LLM_TIMEOUT=30`、`LLM_MAX_RETRIES=2`
 
-### 阶段 5：FastAPI 与数据库（Issue #14 已合并 PR #15；Issue #16 进行中）
+### 阶段 5：FastAPI 与数据库（Issue #14 已合并 PR #15；Issue #16 已合并 PR #17；Issue #18 进行中）
 
 #### Issue #14：建立文档和 Chunk 数据模型（已合并 PR #15）
 
@@ -95,7 +95,7 @@
 
 **本 Issue 不实现**：HTTP 接口、文档存储逻辑、向量库写入、QueryLog 模型、repository 服务层（后续 Issue 处理）。
 
-#### Issue #16：实现文档存储与状态管理服务层（分支 `feat/doc-storage`，待提交 PR）
+#### Issue #16：实现文档存储与状态管理服务层（已合并 PR #17）
 
 第二个 Issue 范围：在已有 `Document` / `Chunk` 数据模型基础上，实现 repository 层（纯 DB CRUD）与 service 层（业务编排：sha256 去重、文件落盘、调用 `parse_pdf` / `chunk_pages`、status 状态机）。
 
@@ -121,6 +121,52 @@
 
 **本 Issue 不实现**：FastAPI 路由、向量库写入、QueryLog、文件大小限制/MIME 校验（下一个 Issue 处理）。
 
+#### Issue #18：实现文档管理 FastAPI 路由（分支 `feat/api-routes`，待提交 PR）
+
+第三个 Issue 范围：在已有 `DocumentService` 基础上，实现 FastAPI 应用工厂、文档管理 HTTP 路由（上传/列表/详情/删除）、Pydantic schema、异常处理器、依赖注入链。
+
+- `src/research_rag/api/`：FastAPI API 包
+  - `api/app.py`：`create_app(session_factory=None, cors_origins=None)` 应用工厂
+    - `lifespan` async context manager：启动建 engine + session_factory，关闭 `engine.dispose()`；调用方已注入 factory 时跳过（测试场景）
+    - CORS 中间件（`DEFAULT_CORS_ORIGINS` 包含 localhost:3000/5173/8000/8501 等开发端口）
+    - 全局异常处理器：`DuplicateDocumentError → 409`、`DocumentNotFoundError → 404`，统一返回 `ErrorResponse`（`{"detail": "..."}`）
+  - `api/schemas.py`：Pydantic v2 schema
+    - `DocumentRead`（id / original_name / stored_name / sha256 / page_count / status / error_message / created_at / updated_at），`ConfigDict(from_attributes=True)` 从 ORM 属性读值
+    - `DocumentList`（items: list[DocumentRead]），包裹数组便于后续加分页
+    - `ErrorResponse`（detail: str），与 FastAPI 默认 `HTTPException` 格式一致
+  - `api/dependencies.py`：三层依赖链
+    - `get_session_factory(request)`：从 `app.state` 取应用启动时创建的工厂
+    - `get_db(session_factory)`：每请求一个 Session，`yield` 后 `close`（FastAPI 推荐的"每请求一会话"模式）
+    - `get_document_service(session)`：用当前请求 Session 构造 `DocumentService`
+  - `api/routes/documents.py`：文档管理路由（`prefix=/api/v1/documents`）
+    - `POST ""` → 201 + `DocumentRead`：接收 `UploadFile`，调 `service.upload_document(file_bytes, filename or "unknown")`
+    - `GET ""` → 200 + `DocumentList`：调 `service.list_documents()`，逐项 `model_validate` 转 `DocumentRead`
+    - `GET "/{doc_id}"` → 200 + `DocumentRead`：路径参数 `uuid.UUID` 类型注解，FastAPI 自动校验非法 UUID → 422
+    - `DELETE "/{doc_id}"` → 204 无响应体：调 `service.delete_document(doc_id)`
+- `src/research_rag/db/session.py`：新增 `create_engine_for_url(database_url)` 帮助函数
+  - 自动为 SQLite URL 添加 `connect_args={"check_same_thread": False}`（FastAPI 同步路由运行在线程池，必需）
+  - 非 SQLite URL 不注入 SQLite 专属参数，`create_session_factory` 内部复用
+- `tests/unit/test_api_documents.py`：10 条 API 测试
+  - 用 `fastapi.testclient.TestClient`（基于 httpx，不起真实 uvicorn）
+  - `app.dependency_overrides[get_document_service]` 把 service 换成 `MagicMock(spec=DocumentService)`，完全跳过真实 DB/文件 IO/PDF 解析
+  - 覆盖：上传成功（201）、重复上传（409）、空列表（200）、多条列表（200）、详情成功（200）、详情不存在（404）、详情非法 UUID（422）、删除成功（204）、删除不存在（404）、删除非法 UUID（422）
+  - `make_document(**overrides)` 辅助函数显式提供 `id`/`created_at`/`updated_at`（未持久化实例的 ORM 默认值只在 flush 时触发）
+- `tests/unit/test_db_models.py`：新增 2 条 `create_engine_for_url` 测试
+  - SQLite URL 跨线程访问不报错（验证 `check_same_thread=False` 生效）
+  - 非 SQLite URL 不添加 `check_same_thread`（用 `monkeypatch` mock `create_engine`，避免实际导入 psycopg）
+- `pyproject.toml`：
+  - 新增主依赖 `fastapi>=0.115`、`python-multipart>=0.0.18`、`uvicorn>=0.32`
+  - dev 依赖 `httpx>=0.27` 替换为 `httpx2>=0.27`（starlette 1.x TestClient 弃用 httpx）
+  - 新增 `per-file-ignores`：`"src/research_rag/api/**" = ["TC001", "TC002", "TC003", "B008"]`（FastAPI/Pydantic 需运行时访问类型注解）
+
+**依赖必要性说明**：
+- `fastapi`：本 Issue 核心，实现 HTTP 路由、依赖注入、异常处理、Pydantic schema 集成。无替代方案能更好满足"快速构建 RESTful API + 自动 OpenAPI 文档 + 类型安全"的需求。
+- `uvicorn`：ASGI 服务器，用于生产运行 FastAPI 应用。开发/测试用 `TestClient` 不需要它，但部署必需。
+- `python-multipart`：FastAPI `UploadFile` 的硬性依赖，处理 `multipart/form-data` 文件上传。未安装时 FastAPI 在导入 `UploadFile` 时报错。
+- `httpx2`（dev 依赖）：starlette 1.x 的 `TestClient` 弃用 `httpx`，改用 `httpx2`（API 兼容 httpx）。仅测试用。
+
+**本 Issue 不实现**：问答 API（`/qa` 路由，下个 Issue）、向量库写入、QueryLog、认证/鉴权、文件大小限制/MIME 强制校验（验收标准"可选简单校验，不强制"）。
+
 ## 当前Issue与分支
 
 - Issue #1（初始化Python项目与质量工具）：已关闭（PR #3 合并）
@@ -130,11 +176,12 @@
 - Issue #10（feat: 基于LangChain实现Embedding适配器）：已关闭（PR #11 合并）
 - Issue #12（feat: 大模型回答与可靠引用）：已关闭（PR #13 合并）
 - Issue #14（feat: 建立文档和Chunk数据模型）：已关闭（PR #15 合并）
-- Issue #16（feat: 实现文档存储与状态管理服务层）：进行中，分支 `feat/doc-storage`（本地，未推送）
+- Issue #16（feat: 实现文档存储与状态管理服务层）：已关闭（PR #17 合并）
+- Issue #18（feat: 实现文档管理 FastAPI 路由）：进行中，分支 `feat/api-routes`（本地，未推送）
 
 ## 正在处理的问题
 
-无。阶段 5 第二个 Issue 代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过，mypy 因本机 `librt` C 扩展策略限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR。
+无。阶段 5 第三个 Issue 代码与测试已完成，四项检查中 ruff format/check 和 pytest 通过，mypy 因本机 `librt` C 扩展策略限制无法运行（CI 无此问题），等待用户确认后提交、推送并开 PR。
 
 ## 本地运行命令
 
@@ -158,13 +205,16 @@ uv run python scripts/evaluate_retrieval.py --demo
 # 数据库迁移（阶段 5，首次运行或拉取新代码后执行）
 uv run alembic upgrade head
 
+# 启动 FastAPI 开发服务器（阶段 5 第三个 Issue 起）
+uv run uvicorn research_rag.api.app:create_app --factory --reload --port 8000
+
 # 安装 pre-commit 钩子（一次性）
 uv run pre-commit install
 ```
 
 ## 测试状态
 
-- pytest：145 passed（2 冒烟 + 5 PDF 解析 + 14 切分器 + 17 Embedding + 42 qa_service + 17 db_models + 7 alembic_migration + 14 repositories + 27 document_service）
+- pytest：157 passed（2 冒烟 + 5 PDF 解析 + 14 切分器 + 17 Embedding + 42 qa_service + 19 db_models + 7 alembic_migration + 14 repositories + 27 document_service + 10 api_documents）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：本机因 `librt` C 扩展被应用程序控制策略阻止无法运行，CI 环境（Linux）正常
@@ -173,23 +223,28 @@ uv run pre-commit install
 
 按 [PROJECT_PLAN.md 阶段 5](../PROJECT_PLAN.md#L709)：
 
-1. **提交并推送 `feat/doc-storage` 分支**，开 PR 关联 Issue #16（`Closes #16`）
+1. **提交并推送 `feat/api-routes` 分支**，开 PR 关联 Issue #18（`Closes #18`）
 2. **CI 通过后合并 PR**，切回 `main` 并 `git pull`
 3. **继续阶段 5 后续 Issue**：
-   - FastAPI 路由（上传/列表/详情/删除）—— 接入 `DocumentService`
    - 问答 API（接入阶段 4 的 qa_service）
    - 集成测试（Mock LLM 与 Embedding，CI 不消耗真实 Token）
 
 ## 尚未提交的改动
 
-`feat/doc-storage` 分支上的改动（均未提交）：
+`feat/api-routes` 分支上的改动（均未提交）：
 
+- 修改：`pyproject.toml`（新增 fastapi/python-multipart/uvicorn 主依赖、httpx2 dev 依赖、api 包 per-file-ignores）
+- 修改：`src/research_rag/db/session.py`（新增 `create_engine_for_url` 帮助函数）
+- 修改：`tests/unit/test_db_models.py`（新增 2 条 `create_engine_for_url` 测试）
+- 修改：`uv.lock`（依赖锁文件更新）
 - 修改：`docs/STATUS.md`（本次更新）
-- 新增：`src/research_rag/db/repositories.py`（`DocumentRepository` 数据访问层）
-- 新增：`src/research_rag/services/__init__.py`（services 包初始化）
-- 新增：`src/research_rag/services/document_service.py`（`DocumentService` 业务编排层）
-- 新增：`tests/unit/test_repositories.py`（14 条 repository 测试）
-- 新增：`tests/unit/test_document_service.py`（27 条 service 测试）
+- 新增：`src/research_rag/api/__init__.py`（api 包初始化）
+- 新增：`src/research_rag/api/app.py`（`create_app` 应用工厂 + lifespan + 异常处理器）
+- 新增：`src/research_rag/api/dependencies.py`（三层依赖链：session_factory → db → service）
+- 新增：`src/research_rag/api/schemas.py`（`DocumentRead` / `DocumentList` / `ErrorResponse`）
+- 新增：`src/research_rag/api/routes/__init__.py`（routes 包初始化）
+- 新增：`src/research_rag/api/routes/documents.py`（文档管理路由）
+- 新增：`tests/unit/test_api_documents.py`（10 条 API 测试）
 
 ## 已知问题
 
@@ -224,3 +279,14 @@ uv run pre-commit install
 - `unittest.mock.patch` / `monkeypatch.setattr` 替换模块级函数，测试中 Mock `parse_pdf` / `chunk_pages` 避免真实 PDF 解析
 - `tmp_path` fixture 隔离文件 IO，每个测试用独立临时目录，不污染真实磁盘
 - `from __future__ import annotations` 让类型标注变为字符串，ruff TCH 规则会把仅用于标注的导入移到 `TYPE_CHECKING` 块，减少运行时导入开销
+- FastAPI 应用工厂模式（`create_app()` 返回新实例）比模块级 `app = FastAPI()` 单例更灵活：测试可注入不同配置（内存 SQLite factory、Mock service），未来可同进程跑多实例
+- FastAPI `lifespan` async context manager 替代弃用的 `@app.on_event("startup"/"shutdown")`：`@asynccontextmanager` + `yield` 前后分别做启动/关闭，资源生命周期清晰
+- FastAPI `dependency_overrides` 是测试的核心利器：`app.dependency_overrides[get_document_service] = lambda: mock_service` 完全跳过真实 DB/文件 IO/PDF 解析，路由逻辑被隔离测试
+- `MagicMock(spec=DocumentService)` 限定 mock 只能调 DocumentService 的方法，调不存在的方法抛 AttributeError，既断言调用参数又防止误用
+- Pydantic v2 `ConfigDict(from_attributes=True)` 让 `DocumentRead.model_validate(orm_doc)` 直接读 ORM 属性，无需手写字段映射；但 ORM 对象的 `default` 字段（如 `id`/`created_at`）只在 `flush` 时触发，未持久化实例这些属性为 `None`，会触发 Pydantic 校验失败
+- FastAPI 同步路由（`def` 而非 `async def`）运行在线程池，多请求可能用不同线程访问同一 engine；SQLite 默认 `check_same_thread=True` 禁止跨线程使用连接，必须用 `create_engine(connect_args={"check_same_thread": False})` 关闭
+- FastAPI 路径参数类型注解（`doc_id: uuid.UUID`）自动校验格式，非法 UUID 返回 422，合法 UUID 直接传入 service，无需手动解析
+- `@app.exception_handler(BusinessError)` 集中映射业务异常到 HTTP 状态码，路由代码保持线性（不写 try/except），新增异常只需加一个 handler
+- FastAPI `UploadFile` 硬性依赖 `python-multipart` 处理 `multipart/form-data`，未安装时导入即报错；`file.filename or "unknown"` 兜底空文件名
+- starlette 1.x 的 `TestClient` 弃用 `httpx`，改用 `httpx2`（API 兼容 httpx）；用 `with TestClient(app)` 触发 `lifespan`，否则 `app.state` 可能未初始化
+- ruff `TC001/TC002/TC003` 规则把仅用于类型标注的导入移到 `TYPE_CHECKING` 块；但 FastAPI 路由的返回类型注解（`-> Document`）和 `Depends` 参数注解（`service: DocumentService`）需运行时可访问，故 `api/**` 用 `per-file-ignores` 关闭这些规则

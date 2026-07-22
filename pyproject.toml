@@ -27,6 +27,13 @@ dependencies = [
     # 替代方案：① Base.metadata.create_all → 只建不改，无法演进；
     # ② 手写 SQL 迁移 → 不可控、易出错、跨数据库不兼容。
     "alembic>=1.13",
+    # 阶段 5 引入：Web 框架（PROJECT_PLAN 第 5 节选型）。
+    # 必要性：基于 Starlette + Pydantic，原生支持类型标注驱动的参数校验、
+    # 依赖注入和 OpenAPI 文档；UploadFile / Form / APIRouter 直接覆盖本 Issue
+    # 的文档上传/列表/详情/删除需求。
+    # 替代方案：① Flask + Flask-RESTful → 无原生类型校验和异步支持；
+    # ② Litestar → 生态小；③ 手写 ASGI → 违反第 2.2 节学习目标。
+    "fastapi>=0.115",
     "langchain>=1.3.14",
     "langchain-core>=1.5.0",
     "langchain-huggingface>=1.2.2",
@@ -40,6 +47,11 @@ dependencies = [
     "langchain-text-splitters>=1.1.2",
     "numpy>=2.4.6",
     "pymupdf>=1.28.0",
+    # 阶段 5 引入：FastAPI 的 UploadFile / Form 解析 multipart/form-data 的硬性依赖。
+    # 必要性：FastAPI 实现文件上传端点（POST /documents）时，缺少 python-multipart
+    # 会直接抛 RuntimeError: Form data requires "python-multipart"。
+    # 替代方案：无（这是 FastAPI 的硬性要求，非可选）。
+    "python-multipart>=0.0.18",
     # 阶段 5 引入：ORM 与数据库抽象层，PROJECT_PLAN 第 5 节选型。
     # 必要性：2.0 的 Mapped/mapped_column 提供类型安全的字段定义；
     # Session 抽象让业务代码与 SQL 解耦，便于切换 SQLite → PostgreSQL。
@@ -47,6 +59,13 @@ dependencies = [
     # ② Tortoise ORM → 异步优先但生态小；③ 裸 SQL → 违反 PROJECT_PLAN
     # 第 2.2 节"数据模型、事务和数据库迁移"学习目标。
     "sqlalchemy>=2.0",
+    # 阶段 5 引入：ASGI 服务器，运行 FastAPI 应用。
+    # 必要性：FastAPI 本身只是 ASGI 应用，需要 ASGI 服务器才能启动；
+    # `uv run uvicorn research_rag.api.app:create_app --factory --reload` 启动开发服务必需。
+    # 替代方案：① hypercorn → 同为 ASGI，无明显优势；
+    # ② gunicorn → 不直接支持 ASGI（需 uvicorn worker，Windows 也不支持 fork）。
+    # uvicorn 是 FastAPI 官方推荐，本 Issue 必需。
+    "uvicorn>=0.32",
 ]
 
 [project.optional-dependencies]
@@ -55,7 +74,12 @@ dev = [
     "mypy>=1.11",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    "httpx>=0.27",
+    # starlette 1.x 的 TestClient 弃用 httpx，改用 httpx2。
+    # 必要性：fastapi.testclient.TestClient 底层用 starlette.testclient，
+    # starlette 1.3.1 首选 ``import httpx2``，缺失时 fallback 到 httpx 并抛
+    # StarletteDeprecationWarning（被 pytest filterwarnings=error 升级为错误）。
+    # 替代方案：降级 starlette → 失去 fastapi 0.139 兼容；忽略 warning → 治标不治本。
+    "httpx2>=0.27",
     "pre-commit>=3.8",
 ]
 # 本地 Embedding 模型推理后端（阶段 3）。
@@ -106,6 +130,13 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B011"]  # 测试中允许 assert False
+# FastAPI / Pydantic 需要运行时访问类型：
+# - FastAPI 通过类型注解识别 Request（依赖注入）、uuid.UUID（路径参数转换）
+# - Pydantic 模型字段类型运行时必须可访问（uuid/datetime/enum）
+# - FastAPI 惯例在参数默认值调用 File()/Depends()（B008）
+# ruff 的 TC001/TC002/TC003 会误判这些导入"仅用于类型标注"而建议移入
+# TYPE_CHECKING 块，移入后会导致运行时 NameError，故在 api 层忽略。
+"src/research_rag/api/**" = ["TC001", "TC002", "TC003", "B008"]
 
 [tool.ruff.format]
 quote-style = "double"
