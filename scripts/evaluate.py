@@ -75,7 +75,9 @@ from typing import TYPE_CHECKING
 
 from research_rag.chunker import Chunk, ChunkerConfig, chunk_pages
 from research_rag.embedding import (
+    DASHSCOPE_DEFAULT_MODEL,
     DEFAULT_EMBEDDING_MODEL,
+    JINA_DEFAULT_MODEL,
     EmbeddingConfig,
     EmbeddingServiceError,
     create_embeddings,
@@ -324,6 +326,7 @@ def run_evaluation(
     experiments: Sequence[ExperimentConfig],
     only: str | None,
     embedding_model: str | None = None,
+    embedding_provider: str | None = None,
     reranker_model: str | None = None,
     cross_page: bool = True,
     bm25_enabled: bool = False,
@@ -345,11 +348,16 @@ def run_evaluation(
         dataset_path: 数据集 JSON 文件路径。
         experiments: 实验配置列表。
         only: 仅运行指定名称的实验（None 表示全部）。
-        embedding_model: Embedding 模型名（HuggingFace）。为 ``None`` 时用
-            生产默认（``DEFAULT_EMBEDDING_MODEL``，中文优化 bge-small-zh-v1.5）。
-            评测纯英文论文时建议传 ``BAAI/bge-small-en-v1.5``（英文专用小模型，
-            实测优于默认中文模型和多语言 bge-m3）；中英文混合场景可传
-            ``BAAI/bge-m3``（多语言，dense 1024 维，体积约 2.2GB）。
+        embedding_model: Embedding 模型名。``provider="local"``（默认）时为
+            HuggingFace 模型名，为 ``None`` 用生产默认（``DEFAULT_EMBEDDING_MODEL``，
+            中文优化 bge-small-zh-v1.5）；评测纯英文论文时建议传
+            ``BAAI/bge-small-en-v1.5``，混合场景可传 ``BAAI/bge-m3``（dense 1024 维，
+            约 2.2GB，CPU 推理慢）。``provider="dashscope"`` 时为阿里百炼模型名，
+            为 ``None`` 用 ``text-embedding-v4``（Qwen3-Embedding，1024 维）。
+        embedding_provider: Embedding 提供方，``"local"``（默认，本地 HuggingFace）
+            或 ``"dashscope"``（阿里百炼 OpenAI 兼容 API）。``"dashscope"`` 适合本地
+            CPU 推理慢或需更大模型但不想本地部署的场景；API Key 从环境变量
+            ``DASHSCOPE_API_KEY`` 读取（绝不硬编码）。
         reranker_model: Reranker 模型名（HuggingFace）。为 ``None`` 时跳过
             重排评测。指定时对每组实验额外运行一次带 reranker 的评测。
         cross_page: 是否启用跨页切分（阶段 8.2，默认 ``True``）。传 ``False``
@@ -363,9 +371,18 @@ def run_evaluation(
     entries = load_dataset(dataset_path)
     print(f"已加载数据集：{len(entries)} 条")
 
-    model_name = embedding_model or DEFAULT_EMBEDDING_MODEL
+    provider = (embedding_provider or "local").strip().lower()
+    if provider == "dashscope":
+        model_name = embedding_model or DASHSCOPE_DEFAULT_MODEL
+        emb_config = EmbeddingConfig(provider="dashscope", model_name=model_name)
+    elif provider == "jina":
+        model_name = embedding_model or JINA_DEFAULT_MODEL
+        emb_config = EmbeddingConfig(provider="jina", model_name=model_name)
+    else:
+        model_name = embedding_model or DEFAULT_EMBEDDING_MODEL
+        emb_config = EmbeddingConfig(model_name=model_name)
     try:
-        embeddings = create_embeddings(EmbeddingConfig(model_name=model_name))
+        embeddings = create_embeddings(emb_config)
     except EmbeddingServiceError as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return 2
@@ -379,7 +396,7 @@ def run_evaluation(
             print(f"错误: 创建 Reranker 失败: {exc}", file=sys.stderr)
             return 2
 
-    print(f"Embedding 模型: {model_name}")
+    print(f"Embedding 模型: {model_name} (provider={provider})")
     print(f"Reranker 模型: {reranker_model or '未启用'}")
     print(f"跨页切分: {'启用' if cross_page else '关闭（按页独立切分）'}")
     print(f"BM25 混合检索: {'启用' if bm25_enabled else '未启用'}")
@@ -569,10 +586,24 @@ def main(argv: list[str] | None = None) -> int:
         type=str,
         default=None,
         help=(
-            "Embedding 模型名（HuggingFace），默认用生产配置 "
-            f"({DEFAULT_EMBEDDING_MODEL}，中文优化)。评测纯英文论文时建议传 "
-            "BAAI/bge-small-en-v1.5（实测优于默认和多语言 bge-m3）；"
-            "中英文混合场景可传 BAAI/bge-m3（多语言，约 2.2GB）"
+            "Embedding 模型名。provider=local（默认）时为 HuggingFace 模型名，"
+            f"默认用生产配置 ({DEFAULT_EMBEDDING_MODEL}，中文优化)。评测纯英文论文时"
+            "建议传 BAAI/bge-small-en-v1.5（实测优于默认和多语言 bge-m3）；"
+            "中英文混合场景可传 BAAI/bge-m3（多语言，约 2.2GB）。"
+            "provider=dashscope 时为阿里百炼模型名，默认 text-embedding-v4"
+            "（Qwen3-Embedding，1024 维）"
+        ),
+    )
+    p_run.add_argument(
+        "--embedding-provider",
+        type=str,
+        default=None,
+        choices=["local", "dashscope", "jina"],
+        help=(
+            "Embedding 提供方：local（默认，本地 HuggingFace 推理）、dashscope"
+            "（阿里百炼 OpenAI 兼容 API）或 jina（Jina AI OpenAI 兼容 API）。"
+            "API 模式适合本地 CPU 推理慢或需更大模型但不想本地部署的场景；"
+            "API Key 从环境变量 DASHSCOPE_API_KEY 或 JINA_API_KEY 读取"
         ),
     )
     p_run.add_argument(
@@ -625,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
             experiments,
             args.only,
             embedding_model=args.embedding_model,
+            embedding_provider=args.embedding_provider,
             reranker_model=args.reranker_model,
             cross_page=not args.no_cross_page,
             bm25_enabled=args.bm25,

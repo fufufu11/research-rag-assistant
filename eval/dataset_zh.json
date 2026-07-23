@@ -1,0 +1,242 @@
+[
+  {
+    "question": "CNN-ELM 混合短文本分类模型使用什么作为分类器？",
+    "expected_page": 1,
+    "expected_substring": "误差最小化极速学习机(EM-ELM)作为分类器完成短文本分类任务",
+    "category": "method",
+    "note": "模型分类器选择",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "CNN-ELM 模型用什么网络对卷积特征进行优化？",
+    "expected_page": 1,
+    "expected_substring": "使用卷积神经网络提取特征并使用Highway 网络进行特征优化",
+    "category": "method",
+    "note": "特征优化网络",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "极速学习机（ELM）是什么类型的神经网络？",
+    "expected_page": 2,
+    "expected_substring": "它是一种可以随机选择隐层节点数并计算输出权重的单隐层前馈神经网络（SLFNs）",
+    "category": "definition",
+    "note": "ELM 定义",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "极速学习机相比其他模型有什么特点？",
+    "expected_page": 2,
+    "expected_substring": "它的特点是泛化能力强且拥有非常快的学习速度",
+    "category": "definition",
+    "note": "ELM 特点",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "本文使用什么模型训练词向量？",
+    "expected_page": 3,
+    "expected_substring": "本文使用Skip-gram 模型来训练词向量",
+    "category": "method",
+    "note": "词向量训练模型",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "词向量被训练为多少维？",
+    "expected_page": 3,
+    "expected_substring": "文本词汇被训练为300 维的词向量",
+    "category": "detail",
+    "note": "词向量维度",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "卷积操作中使用什么非线性激活函数？",
+    "expected_page": 3,
+    "expected_substring": "f 是非线性激活函数诸如ReLU 或者Tanh",
+    "category": "detail",
+    "note": "激活函数选择",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "CNN 模型的 Dropout 参数设置为多少？",
+    "expected_page": 5,
+    "expected_substring": "Dropout 参数：0.5",
+    "category": "detail",
+    "note": "Dropout 超参数",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "Highway 网络的最佳层数是多少？",
+    "expected_page": 6,
+    "expected_substring": "在之后的模型中本文都使用2 层Highway 网络进行特征优化操作",
+    "category": "result",
+    "note": "Highway 层数实验结论",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "本文模型在 Description 数据集上的分类精度是多少？",
+    "expected_page": 6,
+    "expected_substring": "最终将分类结果提高到了97.3%",
+    "category": "result",
+    "note": "Description 数据集最佳结果",
+    "pdf": "cnn-elm-short-text-classification.pdf"
+  },
+  {
+    "question": "本文模型能识别几种典型的群体情绪？",
+    "expected_page": 1,
+    "expected_substring": "本文模型可有效地识别4 种典型的群体情绪",
+    "category": "method",
+    "note": "情绪类别数",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "多流 CNN-LSTM 模型的三个通道输入分别是什么？",
+    "expected_page": 1,
+    "expected_substring": "以视频序列的原始图像、视觉显著图形和叠加的光流图像分别作为三个通道的输入",
+    "category": "method",
+    "note": "三通道输入",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "群体情绪分为哪四个类别？",
+    "expected_page": 3,
+    "expected_substring": "群体情绪分为Bored、Excited、Frantic、Relaxed4 个类别",
+    "category": "definition",
+    "note": "情绪类别定义",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "空间流的两个通道采用什么 CNN 网络模型？",
+    "expected_page": 2,
+    "expected_substring": "空间流的两个通道利用VGG-19 网络模型进行特征的自动学习",
+    "category": "method",
+    "note": "空间流 CNN 选择",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "时间流的 CNN 采用什么网络模型？",
+    "expected_page": 2,
+    "expected_substring": "本文时间流的CNN 采用AlexNet 模型",
+    "category": "method",
+    "note": "时间流 CNN 选择",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "叠加光流图像的叠加帧数是多少？",
+    "expected_page": 2,
+    "expected_substring": "本文采用叠加光流图像作为输入，叠加的帧数为10",
+    "category": "detail",
+    "note": "光流叠加帧数",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "LSTM 网络的输入视频帧数固定为多少？",
+    "expected_page": 3,
+    "expected_substring": "LSTM 网络的输入视频帧数T 被固定为16 帧",
+    "category": "detail",
+    "note": "LSTM 输入帧数",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "每个 LSTM 网络含有多少个记忆单元？",
+    "expected_page": 3,
+    "expected_substring": "每个LSTM 网络都含有512 记忆单元",
+    "category": "detail",
+    "note": "LSTM 记忆单元数",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "训练集包含多少个视频？",
+    "expected_page": 3,
+    "expected_substring": "训练集包含863 个视频",
+    "category": "detail",
+    "note": "训练集规模",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "本文模型的最高准确度（ACC）是多少？",
+    "expected_page": 1,
+    "expected_substring": "准确度（ACC）和宏平均精度（MAP）分别最高可达82.6%、84.1%",
+    "category": "result",
+    "note": "最高 ACC 和 MAP",
+    "pdf": "group-emotion-cnn-lstm.pdf"
+  },
+  {
+    "question": "本文提出的船舶检测方法 mAP 达到多少？",
+    "expected_page": 1,
+    "expected_substring": "均值的平均精度(Mean Average Precision, mAP)可达84.80%",
+    "category": "result",
+    "note": "mAP 结果",
+    "pdf": "ship-detection-multiscale.pdf"
+  },
+  {
+    "question": "本文的骨干网络采用什么框架？",
+    "expected_page": 1,
+    "expected_substring": "通过改进的基于CSPDarkNet 骨干网络以及多尺度网络",
+    "category": "method",
+    "note": "骨干网络选择",
+    "pdf": "ship-detection-multiscale.pdf"
+  },
+  {
+    "question": "改进的基本构建块引入了什么尺寸的深度卷积？",
+    "expected_page": 3,
+    "expected_substring": "在其基本构建块中保留3×3 的卷积并且采用5×5 的深度卷积",
+    "category": "method",
+    "note": "构建块改进",
+    "pdf": "ship-detection-multiscale.pdf"
+  },
+  {
+    "question": "数据增强使用什么方法？",
+    "expected_page": 3,
+    "expected_substring": "在开始训练之前的输入层中使用Mosaic 方法进行数据增强",
+    "category": "method",
+    "note": "数据增强方法",
+    "pdf": "ship-detection-multiscale.pdf"
+  },
+  {
+    "question": "本文采用什么作为损失函数？",
+    "expected_page": 5,
+    "expected_substring": "采用 Focal Loss[12] 作为本文的损失函数",
+    "category": "method",
+    "note": "损失函数选择",
+    "pdf": "ship-detection-multiscale.pdf"
+  },
+  {
+    "question": "非极大值抑制的阈值普遍设置为多少？",
+    "expected_page": 6,
+    "expected_substring": "普遍设置为0.5，目标检测中常设置为0.7",
+    "category": "detail",
+    "note": "NMS 阈值",
+    "pdf": "ship-detection-multiscale.pdf"
+  },
+  {
+    "question": "标签平滑化的作用是什么？",
+    "expected_page": 1,
+    "expected_substring": "利用标签平滑化来防止模型陷入过拟合",
+    "category": "method",
+    "note": "标签平滑作用",
+    "pdf": "ship-detection-multiscale.pdf"
+  },
+  {
+    "question": "训练集包含多少个样本？",
+    "expected_page": 7,
+    "expected_substring": "5600",
+    "category": "detail",
+    "note": "训练集样本数（表格数据）",
+    "pdf": "ship-detection-multiscale.pdf"
+  },
+  {
+    "question": "本文使用什么深度学习框架？",
+    "expected_page": 7,
+    "expected_substring": "本文采用 PyTorch[14]作为本模型方法的深度学习框架",
+    "category": "detail",
+    "note": "深度学习框架",
+    "pdf": "ship-detection-multiscale.pdf"
+  },
+  {
+    "question": "模型训练的初始学习率是多少？",
+    "expected_page": 7,
+    "expected_substring": "初始学习率为0.0003 和Adam[15]的优化器",
+    "category": "detail",
+    "note": "初始学习率",
+    "pdf": "ship-detection-multiscale.pdf"
+  }
+]

@@ -44,7 +44,13 @@ from typing import TYPE_CHECKING
 
 from fastapi import Depends, Request
 
-from research_rag.embedding import DEFAULT_EMBEDDING_MODEL, EmbeddingConfig
+from research_rag.embedding import (
+    DASHSCOPE_DEFAULT_MODEL,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_PROVIDER,
+    JINA_DEFAULT_MODEL,
+    EmbeddingConfig,
+)
 from research_rag.qa_service import (
     DEFAULT_LLM_MAX_RETRIES,
     DEFAULT_LLM_TIMEOUT,
@@ -178,21 +184,60 @@ def get_llm_config() -> LlmConfig:
 def get_embedding_config() -> EmbeddingConfig:
     """从环境变量构造 ``EmbeddingConfig``（阶段 8.4、.env.example）。
 
-    读 ``EMBEDDING_MODEL``（HuggingFace 模型名）。未设置或为空时用
-    ``DEFAULT_EMBEDDING_MODEL``（``BAAI/bge-small-zh-v1.5``，中文优化，生产
-    面向中文用户）。评测英文论文时可传 ``BAAI/bge-small-en-v1.5``（英文专用
-    小模型，实测优于默认和多语言 bge-m3）；中英文混合场景可传
-    ``BAAI/bge-m3``（多语言，dense 1024 维，体积约 2.2GB）。
+    读 ``EMBEDDING_PROVIDER`` 选择后端（默认 ``local``）：
+
+    - ``local``（默认）：本地 HuggingFace 推理。读 ``EMBEDDING_MODEL``（模型名），
+      未设置用 ``DEFAULT_EMBEDDING_MODEL``（``BAAI/bge-small-zh-v1.5``，中文优化，
+      生产面向中文用户）。英文场景可传 ``BAAI/bge-small-en-v1.5``，混合场景可传
+      ``BAAI/bge-m3``（dense 1024 维，约 2.2GB，CPU 推理慢）。
+    - ``dashscope``：阿里百炼 OpenAI 兼容 API。读 ``EMBEDDING_MODEL``（百炼模型名，
+      未设置用 ``text-embedding-v4``，Qwen3-Embedding 系列，1024 维）、
+      ``DASHSCOPE_API_KEY``（API Key，**绝不硬编码**）、``EMBEDDING_BASE_URL``
+      （可选，默认百炼 endpoint）、``EMBEDDING_DIMENSIONS``（可选，默认 1024）、
+      ``EMBEDDING_BATCH_SIZE``（可选，默认 10，受百炼单次请求行数限制）。
+    - ``jina``：Jina AI OpenAI 兼容 API。读 ``EMBEDDING_MODEL``（Jina 模型名，
+      未设置用 ``jina-embeddings-v3``，多语言含中文，1024 维）、``JINA_API_KEY``
+      （API Key，**绝不硬编码**）、``EMBEDDING_BASE_URL``（可选，默认 Jina endpoint）、
+      ``EMBEDDING_DIMENSIONS`` / ``EMBEDDING_BATCH_SIZE``（可选）。
+
+    适合本地 CPU 推理慢（如 bge-m3）或需更大模型但不想本地部署的场景。.env 不会被
+    FastAPI 自动加载，API Key 需显式设置环境变量。
 
     注：阶段 8.4 实测 bge-m3 在纯英文论文评测下不及 bge-small-en（Hit@5
-    70.0% vs 76.7%），故默认仍保留小模型，bge-m3 作为多语言场景的可选项。
+    70.0% vs 76.7%），故本地默认仍保留小模型；中文场景的 API 对比见
+    ``docs/evaluation_report_zh.md``。
 
     测试时通过 ``app.dependency_overrides[get_embedding_config]`` 替换为固定配置，
     或用 ``monkeypatch`` 修改环境变量。
     """
 
-    model_name = os.environ.get("EMBEDDING_MODEL", "").strip() or DEFAULT_EMBEDDING_MODEL
-    return EmbeddingConfig(model_name=model_name)
+    provider = (
+        os.environ.get("EMBEDDING_PROVIDER", "").strip().lower() or DEFAULT_EMBEDDING_PROVIDER
+    )
+    model_name = os.environ.get("EMBEDDING_MODEL", "").strip()
+
+    if provider == "dashscope":
+        return EmbeddingConfig(
+            provider="dashscope",
+            model_name=model_name or DASHSCOPE_DEFAULT_MODEL,
+            api_key=os.environ.get("DASHSCOPE_API_KEY", ""),
+            base_url=os.environ.get("EMBEDDING_BASE_URL", ""),
+            dimensions=_parse_int(os.environ.get("EMBEDDING_DIMENSIONS", ""), 0),
+            batch_size=_parse_int(os.environ.get("EMBEDDING_BATCH_SIZE", ""), 0),
+        )
+
+    if provider == "jina":
+        return EmbeddingConfig(
+            provider="jina",
+            model_name=model_name or JINA_DEFAULT_MODEL,
+            api_key=os.environ.get("JINA_API_KEY", ""),
+            base_url=os.environ.get("EMBEDDING_BASE_URL", ""),
+            dimensions=_parse_int(os.environ.get("EMBEDDING_DIMENSIONS", ""), 0),
+            batch_size=_parse_int(os.environ.get("EMBEDDING_BATCH_SIZE", ""), 0),
+        )
+
+    # local（默认）
+    return EmbeddingConfig(model_name=model_name or DEFAULT_EMBEDDING_MODEL)
 
 
 def get_qa_service(

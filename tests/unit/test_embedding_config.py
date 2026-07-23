@@ -11,10 +11,23 @@ from __future__ import annotations
 import pytest
 
 from research_rag.api.dependencies import get_embedding_config
-from research_rag.embedding import DEFAULT_EMBEDDING_MODEL, EmbeddingConfig
+from research_rag.embedding import (
+    DASHSCOPE_DEFAULT_MODEL,
+    DEFAULT_EMBEDDING_MODEL,
+    JINA_DEFAULT_MODEL,
+    EmbeddingConfig,
+)
 
 # 相关 Embedding 环境变量清单（测试间清理用，避免本机 .env 污染）
-_EMBEDDING_ENV_KEYS = ("EMBEDDING_MODEL",)
+_EMBEDDING_ENV_KEYS = (
+    "EMBEDDING_MODEL",
+    "EMBEDDING_PROVIDER",
+    "DASHSCOPE_API_KEY",
+    "JINA_API_KEY",
+    "EMBEDDING_BASE_URL",
+    "EMBEDDING_DIMENSIONS",
+    "EMBEDDING_BATCH_SIZE",
+)
 
 
 @pytest.fixture
@@ -82,3 +95,234 @@ def test_get_embedding_config_returns_embedding_config_instance(
     """get_embedding_config 应返回 EmbeddingConfig 实例（类型检查）。"""
     config = get_embedding_config()
     assert isinstance(config, EmbeddingConfig)
+
+
+# ---------------------------------------------------------------------------
+# EMBEDDING_PROVIDER 切换（阶段 8.4：接入阿里百炼 API）
+# ---------------------------------------------------------------------------
+
+
+def test_get_embedding_config_default_provider_is_local(clean_embedding_env: None) -> None:
+    """未设 EMBEDDING_PROVIDER 时默认 local。"""
+    config = get_embedding_config()
+
+    assert config.provider == "local"
+
+
+def test_get_embedding_config_reads_provider_dashscope(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EMBEDDING_PROVIDER=dashscope 时应切换到 dashscope 模式。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "dashscope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+
+    config = get_embedding_config()
+
+    assert config.provider == "dashscope"
+
+
+def test_get_embedding_config_provider_case_insensitive(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EMBEDDING_PROVIDER 大小写不敏感（DashScope → dashscope）。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "DashScope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+
+    config = get_embedding_config()
+
+    assert config.provider == "dashscope"
+
+
+def test_get_embedding_config_dashscope_defaults_model(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dashscope 模式下 EMBEDDING_MODEL 未设时应默认 text-embedding-v4。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "dashscope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+
+    config = get_embedding_config()
+
+    assert config.model_name == DASHSCOPE_DEFAULT_MODEL
+    assert config.model_name == "text-embedding-v4"
+
+
+def test_get_embedding_config_dashscope_reads_model(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dashscope 模式下 EMBEDDING_MODEL 应覆盖默认模型名。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "dashscope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+    monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-v3")
+
+    config = get_embedding_config()
+
+    assert config.model_name == "text-embedding-v3"
+
+
+def test_get_embedding_config_dashscope_reads_api_key(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dashscope 模式应从 DASHSCOPE_API_KEY 读取 API Key。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "dashscope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-from-env")
+
+    config = get_embedding_config()
+
+    assert config.api_key == "sk-from-env"
+
+
+def test_get_embedding_config_dashscope_reads_base_url(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dashscope 模式应从 EMBEDDING_BASE_URL 读取自定义 endpoint。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "dashscope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://custom.example.com/v1")
+
+    config = get_embedding_config()
+
+    assert config.base_url == "https://custom.example.com/v1"
+
+
+def test_get_embedding_config_dashscope_dimensions_and_batch(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dashscope 模式应从 EMBEDDING_DIMENSIONS / EMBEDDING_BATCH_SIZE 读取配置。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "dashscope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "768")
+    monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "8")
+
+    config = get_embedding_config()
+
+    assert config.dimensions == 768
+    assert config.batch_size == 8
+
+
+def test_get_embedding_config_dashscope_invalid_dimensions_falls_back(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EMBEDDING_DIMENSIONS 格式错误时应回退到 0（用 dashscope 默认维度）。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "dashscope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "not-a-number")
+
+    config = get_embedding_config()
+
+    assert config.dimensions == 0
+
+
+def test_get_embedding_config_local_ignores_dashscope_vars(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """provider=local 时 dashscope 相关变量应被忽略，走本地 HuggingFace 路径。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-ignored")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "999")
+    monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "999")
+
+    config = get_embedding_config()
+
+    assert config.provider == "local"
+    assert config.api_key == ""
+    assert config.dimensions == 0
+    assert config.batch_size == 0
+    assert config.model_name == DEFAULT_EMBEDDING_MODEL
+
+
+# ---------------------------------------------------------------------------
+# EMBEDDING_PROVIDER=jina（阶段 8.4：接入 Jina AI API）
+# ---------------------------------------------------------------------------
+
+
+def test_get_embedding_config_reads_provider_jina(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EMBEDDING_PROVIDER=jina 时应切换到 jina 模式。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "jina")
+    monkeypatch.setenv("JINA_API_KEY", "jina-test")
+
+    config = get_embedding_config()
+
+    assert config.provider == "jina"
+
+
+def test_get_embedding_config_jina_defaults_model(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """jina 模式下 EMBEDDING_MODEL 未设时应默认 jina-embeddings-v3。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "jina")
+    monkeypatch.setenv("JINA_API_KEY", "jina-test")
+
+    config = get_embedding_config()
+
+    assert config.model_name == JINA_DEFAULT_MODEL
+    assert config.model_name == "jina-embeddings-v3"
+
+
+def test_get_embedding_config_jina_reads_api_key(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """jina 模式应从 JINA_API_KEY 读取 API Key。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "jina")
+    monkeypatch.setenv("JINA_API_KEY", "jina-from-env")
+
+    config = get_embedding_config()
+
+    assert config.api_key == "jina-from-env"
+
+
+def test_get_embedding_config_jina_reads_base_url(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """jina 模式应从 EMBEDDING_BASE_URL 读取自定义 endpoint。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "jina")
+    monkeypatch.setenv("JINA_API_KEY", "jina-test")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://custom.jina.example/v1")
+
+    config = get_embedding_config()
+
+    assert config.base_url == "https://custom.jina.example/v1"
+
+
+def test_get_embedding_config_jina_reads_dimensions_and_batch(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """jina 模式应从 EMBEDDING_DIMENSIONS / EMBEDDING_BATCH_SIZE 读取配置。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "jina")
+    monkeypatch.setenv("JINA_API_KEY", "jina-test")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "768")
+    monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "8")
+
+    config = get_embedding_config()
+
+    assert config.dimensions == 768
+    assert config.batch_size == 8
+
+
+def test_get_embedding_config_jina_ignores_dashscope_key(
+    clean_embedding_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """jina 模式应忽略 DASHSCOPE_API_KEY，只读 JINA_API_KEY。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "jina")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-ignored")
+    monkeypatch.setenv("JINA_API_KEY", "jina-used")
+
+    config = get_embedding_config()
+
+    assert config.api_key == "jina-used"
