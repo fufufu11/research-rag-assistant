@@ -40,10 +40,12 @@ from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+
 from research_rag.api.schemas import CitationRead, QueryResponse
 from research_rag.chunker import Chunk as ChunkerChunk
-from research_rag.db.models import Document, DocumentNotFoundError, DocumentStatus
-from research_rag.db.repositories import DocumentRepository
+from research_rag.db.models import Document, DocumentNotFoundError, DocumentStatus, MessageRole
+from research_rag.db.repositories import ConversationRepository, DocumentRepository
 from research_rag.embedding import (
     DEFAULT_TOP_K,
     EmbeddingConfig,
@@ -58,9 +60,13 @@ from research_rag.qa_service import (
     ContextPiece,
     LlmConfig,
     answer_question,
+    answer_with_messages,
     build_prompt,
+    build_prompt_with_history,
     create_chat_model,
     parse_citation_indices,
+    rewrite_query,
+    truncate_history_messages,
 )
 
 if TYPE_CHECKING:
@@ -71,6 +77,7 @@ if TYPE_CHECKING:
     from langchain_qdrant import QdrantVectorStore
     from sqlalchemy.orm import Session
 
+    from research_rag.db.models import Conversation, Message
     from research_rag.reranker import BaseReranker
 
 
@@ -81,6 +88,14 @@ class NoAvailableDocumentsError(RuntimeError):
     时抛出。对应 PROJECT_PLAN.md 第 13.6 节异常清单的扩展（"无可用文档"场景）。
 
     API 层捕获后映射为 HTTP 404（语义：没有可问答的内容）。
+    """
+
+
+class ConversationNotFoundError(RuntimeError):
+    """会话未找到异常（阶段 9.2 多轮对话）。
+
+    当请求传入的 ``conversation_id`` 在 DB 中不存在时抛出。API 层捕获后
+    映射为 HTTP 404（与 ``DocumentNotFoundError`` 语义一致：资源不存在）。
     """
 
 
@@ -108,11 +123,14 @@ class StreamDoneEvent:
         citations: 服务端根据答案中的 ``[C1]`` 编号映射的真实引用列表。
         request_id: 本次问答的唯一 ID。
         elapsed_ms: 本次问答总耗时（毫秒）。
+        conversation_id: 本次问答所属会话 ID（阶段 9.2）。``None`` 表示单轮
+            问答未关联会话。前端据此维护会话状态。
     """
 
     citations: list[CitationRead]
     request_id: uuid.UUID
     elapsed_ms: int
+    conversation_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +175,7 @@ class QaService:
     ) -> None:
         self.session = session
         self.repo = DocumentRepository(session)
+        self.conv_repo = ConversationRepository(session)
         self.llm_config = llm_config
         self.embedding_config = embedding_config or EmbeddingConfig()
         self._embeddings = embeddings
@@ -174,29 +193,42 @@ class QaService:
         question: str,
         document_ids: Sequence[uuid.UUID] | None = None,
         top_k: int = DEFAULT_TOP_K,
+        conversation_id: uuid.UUID | None = None,
     ) -> QueryResponse:
-        """完整问答流程：查文档 → 索引检索 → LLM 问答 → 组装响应。
+        """完整问答流程：查文档 → 索引检索 → LLM 问答 → 组装响应（阶段 9.2 多轮）。
 
-        流程（PROJECT_PLAN.md 第 6.2 节）：
-        1. 查询符合条件的 READY 文档（全部或按 ``document_ids`` 过滤）
-        2. 收集这些文档的 Chunk
-        3. 每文档单独 ``index_chunks`` + ``retrieve``，合并后取全局 top_k
-        4. 构造 ``ContextPiece`` 列表（含 document_name / start_page / end_page 等）
-        5. 调 ``answer_question`` 让 LLM 基于上下文作答
-        6. 用 ``citation_indices`` 映射到 ``CitationRead`` 列表
-        7. 组装 ``QueryResponse``（含 request_id 和 elapsed_ms）
+        流程（PROJECT_PLAN.md 第 6.2 节 + 阶段 9.2 多轮扩展）：
+        1. 若 ``conversation_id`` 非 None：加载会话历史 + 用会话锁定的文档范围
+        2. 查询符合条件的 READY 文档（全部或按 ``document_ids`` 过滤）
+        3. 收集这些文档的 Chunk，检索 + 重排（``_prepare_contexts``）
+        4. 若有历史：查询改写（解析指代）→ 用改写后的问题检索
+        5. 构造 messages（带历史时用 ``build_prompt_with_history``）
+        6. 调 ``answer_question`` / ``answer_with_messages`` 让 LLM 作答
+        7. 用 ``citation_indices`` 映射到 ``CitationRead`` 列表
+        8. 若关联会话：持久化 user + assistant 消息到 DB
+        9. 组装 ``QueryResponse``（含 request_id / elapsed_ms / conversation_id）
+
+        多轮设计要点：
+        - 会话级 ``document_ids`` 锁定后优先于请求传入的 ``document_ids``，
+          保证多轮上下文一致性。
+        - 查询改写用历史把"那篇"等指代解析为独立问题再做检索（历史参与检索）。
+        - 每轮引用编号独立（``[C1]`` 只指代当前轮 contexts）。
+        - 历史截断在 ``_load_history_messages`` 内完成（轮数 + token 双重保护）。
 
         Args:
             question: 用户问题。
             document_ids: 限定查询的文档 UUID 列表。``None`` 或空列表表示
-                查询全库 READY 文档。列表中有不存在的 UUID 会抛
-                ``DocumentNotFoundError``。
+                查询全库 READY 文档。``conversation_id`` 非 None 且会话已锁定
+                ``document_ids`` 时，以此会话锁定范围为准（忽略请求传入值）。
             top_k: 检索返回的最相关片段数。
+            conversation_id: 会话 ID（阶段 9.2）。``None`` 表示单轮问答；
+                传入已存在会话 ID 时加载历史并持久化本轮消息。
 
         Returns:
-            ``QueryResponse`` 实例。
+            ``QueryResponse`` 实例（含 ``conversation_id`` 字段）。
 
         Raises:
+            ConversationNotFoundError: ``conversation_id`` 不存在。
             DocumentNotFoundError: ``document_ids`` 中有不存在的 UUID。
             NoAvailableDocumentsError: 无可用 READY 文档。
             LlmServiceError: LLM 调用失败。
@@ -208,16 +240,46 @@ class QaService:
         request_id = uuid.uuid4()
         start = time.perf_counter()
 
-        # 检索 + 重排（与非流式共享 ``_prepare_contexts``）
-        contexts, context_doc_ids, chat_model = self._prepare_contexts(
-            question, document_ids, top_k
+        # 1. 解析会话：加载历史 + 确定文档范围（阶段 9.2）
+        history_messages: list[BaseMessage] = []
+        effective_doc_ids = document_ids
+        conv: Conversation | None = None
+        if conversation_id is not None:
+            conv = self.conv_repo.get_by_id(conversation_id)
+            if conv is None:
+                msg = f"会话不存在：{conversation_id}"
+                raise ConversationNotFoundError(msg)
+            # 会话级 document_ids 优先（若已锁定），保证多轮上下文一致性
+            if conv.document_ids is not None:
+                effective_doc_ids = [uuid.UUID(d) for d in conv.document_ids]
+            history_messages = self._load_history_messages(conversation_id)
+
+        # 2. 确保 chat_model 就绪（查询改写和 LLM 调用都需要）
+        chat_model = self._ensure_chat_model()
+
+        # 3. 查询改写（若有历史）：用改写后的问题检索，提升多轮检索质量
+        search_query = question
+        if history_messages:
+            search_query = rewrite_query(question, history_messages, chat_model)
+
+        # 4. 检索 + 重排（用改写后的问题；与非流式共享 ``_prepare_contexts``）
+        contexts, context_doc_ids, _ = self._prepare_contexts(
+            search_query, effective_doc_ids, top_k
         )
 
-        # 4. 调 LLM 问答
-        result = answer_question(question, contexts, chat_model)
+        # 5. 调 LLM 问答（带历史用 ``answer_with_messages``，否则单轮）
+        if history_messages:
+            messages = build_prompt_with_history(question, contexts, history_messages)
+            result = answer_with_messages(messages, contexts, chat_model)
+        else:
+            result = answer_question(question, contexts, chat_model)
 
-        # 5. 映射引用
+        # 6. 映射引用
         citations = self._map_citations(result, contexts, context_doc_ids)
+
+        # 7. 持久化消息（若关联会话）
+        if conv is not None:
+            self._persist_turn(conv, question, result.answer_text, citations)
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
@@ -226,6 +288,7 @@ class QaService:
             citations=citations,
             request_id=request_id,
             elapsed_ms=elapsed_ms,
+            conversation_id=conversation_id,
         )
 
     async def answer_stream(
@@ -233,20 +296,22 @@ class QaService:
         question: str,
         document_ids: Sequence[uuid.UUID] | None = None,
         top_k: int = DEFAULT_TOP_K,
+        conversation_id: uuid.UUID | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        """流式问答流程：检索 + 重排 → LLM 逐 token 流式生成 → 引用映射。
+        """流式问答流程：检索 + 重排 → LLM 逐 token 流式生成 → 引用映射（阶段 9.2 多轮）。
 
-        与 ``answer`` 共享检索与重排逻辑（``_prepare_contexts``），区别仅在 LLM
-        生成阶段用 ``chat_model.astream`` 逐 token 推送 ``StreamTokenEvent``，
-        流结束后用 ``parse_citation_indices`` + ``_map_citations`` 映射引用，
-        并发 ``StreamDoneEvent`` 携带元数据。
+        与 ``answer`` 共享检索与重排逻辑（``_prepare_contexts``）和多轮逻辑
+        （会话解析、查询改写、历史注入），区别仅在 LLM 生成阶段用
+        ``chat_model.astream`` 逐 token 推送 ``StreamTokenEvent``，流结束后
+        用 ``parse_citation_indices`` + ``_map_citations`` 映射引用，并发
+        ``StreamDoneEvent`` 携带元数据（含 ``conversation_id``）。
 
         事件序列（正常）：
             ``StreamTokenEvent`` * N → ``StreamDoneEvent``
 
-        事件序列（异常）：检索/LLM 异常或证据不足时发 ``StreamErrorEvent`` 并终止。
-        流式路径下业务异常不再抛出到 API 层全局处理器（SSE 已开始则无法改 HTTP
-        状态码），改为在流中发 ``error`` 事件，前端据此展示错误。
+        事件序列（异常）：会话不存在/检索/LLM 异常或证据不足时发
+        ``StreamErrorEvent`` 并终止。流式路径下业务异常不再抛出到 API 层全局
+        处理器（SSE 已开始则无法改 HTTP 状态码），改为在流中发 ``error`` 事件。
 
         证据不足处理：模型被要求证据不足时仅输出 ``[INSUFFICIENT_EVIDENCE]``。
         为避免把标记原文推给用户，在确认输出非该标记前缀前缓冲首段 token；
@@ -254,8 +319,10 @@ class QaService:
 
         Args:
             question: 用户问题。
-            document_ids: 限定查询的文档 UUID 列表。
+            document_ids: 限定查询的文档 UUID 列表。``conversation_id`` 非 None
+                且会话已锁定 ``document_ids`` 时，以会话锁定范围为准。
             top_k: 检索返回的最相关片段数。
+            conversation_id: 会话 ID（阶段 9.2）。``None`` 表示单轮问答。
 
         Yields:
             ``StreamEvent``：``StreamTokenEvent`` / ``StreamDoneEvent`` /
@@ -265,16 +332,39 @@ class QaService:
         request_id = uuid.uuid4()
         start = time.perf_counter()
 
-        # 检索 + 重排：异常映射为 error 事件（不抛出，保持流式契约）
+        # 1. 解析会话 + 确保 chat_model + 查询改写 + 检索（异常映射为 error 事件）
+        history_messages: list[BaseMessage] = []
+        effective_doc_ids = document_ids
+        conv: Conversation | None = None
         try:
-            contexts, context_doc_ids, chat_model = self._prepare_contexts(
-                question, document_ids, top_k
+            if conversation_id is not None:
+                conv = self.conv_repo.get_by_id(conversation_id)
+                if conv is None:
+                    msg = f"会话不存在：{conversation_id}"
+                    raise ConversationNotFoundError(msg)
+                if conv.document_ids is not None:
+                    effective_doc_ids = [uuid.UUID(d) for d in conv.document_ids]
+                history_messages = self._load_history_messages(conversation_id)
+
+            chat_model = self._ensure_chat_model()
+
+            search_query = question
+            if history_messages:
+                search_query = rewrite_query(question, history_messages, chat_model)
+
+            contexts, context_doc_ids, _ = self._prepare_contexts(
+                search_query, effective_doc_ids, top_k
             )
         except Exception as exc:  # 流式契约需把所有异常转为事件
             yield StreamErrorEvent(detail=str(exc))
             return
 
-        messages = build_prompt(question, contexts)
+        # 2. 构造 messages（带历史用 ``build_prompt_with_history``）
+        if history_messages:
+            messages = build_prompt_with_history(question, contexts, history_messages)
+        else:
+            messages = build_prompt(question, contexts)
+
         parts: list[str] = []
         # 证据不足标记缓冲：见上方 docstring 说明
         buffer = ""
@@ -321,11 +411,189 @@ class QaService:
             citations=[],
         )
         citations = self._map_citations(result, contexts, context_doc_ids)
+
+        # 3. 持久化消息（若关联会话）
+        if conv is not None:
+            self._persist_turn(conv, question, answer_text, citations)
+
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         yield StreamDoneEvent(
             citations=citations,
             request_id=request_id,
             elapsed_ms=elapsed_ms,
+            conversation_id=conversation_id,
+        )
+
+    # ------------------------------------------------------------------
+    # 会话管理（阶段 9.2，供 API 路由层调用）
+    # ------------------------------------------------------------------
+
+    def create_conversation(
+        self,
+        *,
+        title: str | None = None,
+        document_ids: Sequence[uuid.UUID] | None = None,
+    ) -> Conversation:
+        """创建会话（阶段 9.2）。
+
+        Args:
+            title: 会话标题（可空）。未提供时由 ``_persist_turn`` 在首条消息
+                后用问题截取自动设置。
+            document_ids: 会话级文档范围锁定。``None`` 或空列表表示查询全库
+                READY 文档。锁定后后续问答以此范围为准，避免多轮上下文不一致。
+
+        Returns:
+            已持久化（flush 后 id 已生成）的 ``Conversation`` 实例。
+            事务提交由调用方（API 层 ``get_db``）控制。
+        """
+
+        # document_ids 存为字符串列表（JSON 序列化），读取时再转回 UUID
+        doc_ids_str = [str(d) for d in document_ids] if document_ids else None
+        return self.conv_repo.create(title=title, document_ids=doc_ids_str)
+
+    def get_conversation(self, conversation_id: uuid.UUID) -> Conversation:
+        """按 ID 查询会话，不存在抛 ``ConversationNotFoundError``。
+
+        Args:
+            conversation_id: 会话 UUID。
+
+        Returns:
+            ``Conversation`` 实例。
+
+        Raises:
+            ConversationNotFoundError: 会话不存在。
+        """
+
+        conv = self.conv_repo.get_by_id(conversation_id)
+        if conv is None:
+            msg = f"会话不存在：{conversation_id}"
+            raise ConversationNotFoundError(msg)
+        return conv
+
+    def list_conversations(self) -> list[Conversation]:
+        """列出所有会话，按 ``updated_at`` 降序（最近活跃在前）。"""
+
+        return self.conv_repo.list_all()
+
+    def delete_conversation(self, conversation_id: uuid.UUID) -> None:
+        """删除会话（级联删除其消息）。
+
+        Args:
+            conversation_id: 会话 UUID。
+
+        Raises:
+            ConversationNotFoundError: 会话不存在。
+        """
+
+        conv = self.get_conversation(conversation_id)
+        self.conv_repo.delete(conv)
+
+    def list_messages(self, conversation_id: uuid.UUID) -> list[Message]:
+        """列出会话内消息，按 ``created_at`` 升序（对话时间顺序）。
+
+        供 API 路由层在会话详情接口调用，返回 ORM ``Message`` 列表，由路由层
+        用 ``MessageRead.model_validate`` 转 schema。
+
+        Args:
+            conversation_id: 会话 UUID。
+
+        Returns:
+            ORM ``Message`` 列表（升序）。
+
+        Raises:
+            ConversationNotFoundError: 会话不存在。
+        """
+
+        # 先校验会话存在（避免返回空列表误导调用方认为会话存在但无消息）
+        self.get_conversation(conversation_id)
+        return self.conv_repo.list_messages(conversation_id)
+
+    # ------------------------------------------------------------------
+    # 私有：会话与多轮辅助（阶段 9.2）
+    # ------------------------------------------------------------------
+
+    def _ensure_chat_model(self) -> BaseChatModel:
+        """惰性创建 ``chat_model``（测试时已注入，跳过创建）。
+
+        抽取自原 ``_prepare_contexts`` 的惰性创建逻辑，供 ``answer`` /
+        ``answer_stream`` / 查询改写 ``rewrite_query`` 复用，避免在多个
+        入口重复写 ``if self._chat_model is None: ...``。
+
+        Returns:
+            ``BaseChatModel`` 实例（已确保非 None）。
+        """
+
+        if self._chat_model is None:
+            self._chat_model = create_chat_model(self.llm_config)
+        assert self._chat_model is not None
+        return self._chat_model
+
+    def _load_history_messages(self, conversation_id: uuid.UUID) -> list[BaseMessage]:
+        """加载会话历史并截断为 LangChain ``BaseMessage`` 列表（阶段 9.2）。
+
+        流程：从 DB 取所有消息（升序）→ 转 ``HumanMessage`` / ``AIMessage`` →
+        用 ``truncate_history_messages`` 做轮数 + token 双重保护截断。
+
+        Args:
+            conversation_id: 会话 UUID。
+
+        Returns:
+            截断后的历史消息列表（按时间升序，``HumanMessage`` / ``AIMessage``
+            交替），可能为空。``assistant`` 消息保留 ``[C1]`` 等标记原文（
+            历史轮引用编号不参与当前轮映射，仅作上下文让模型理解指代）。
+        """
+
+        msgs = self.conv_repo.list_messages(conversation_id)
+        history: list[BaseMessage] = []
+        for m in msgs:
+            if m.role == MessageRole.USER:
+                history.append(HumanMessage(content=m.content))
+            elif m.role == MessageRole.ASSISTANT:
+                history.append(AIMessage(content=m.content))
+        return truncate_history_messages(history)
+
+    def _persist_turn(
+        self,
+        conv: Conversation,
+        question: str,
+        answer_text: str,
+        citations: list[CitationRead],
+    ) -> None:
+        """持久化一轮问答到 DB（阶段 9.2）。
+
+        写入两条消息（user + assistant），assistant 消息的 ``citations``
+        字段存引用元数据快照（JSON）。首条消息时（会话标题为空）用问题
+        截取设置标题，便于 UI 列表展示。
+
+        事务提交由调用方（API 层 ``get_db``）控制，本方法只 flush。
+
+        Args:
+            conv: 所属会话 ORM 实例（已持久化）。
+            question: 用户问题原文。
+            answer_text: 模型生成的答案文本（含 ``[C1]`` 等标记原文）。
+            citations: 服务端映射后的引用列表（结构对齐 ``CitationRead``）。
+        """
+
+        # 首条消息时设置标题（截取前 30 字符，避免过长）
+        if conv.title is None:
+            title = question[:30].strip() or "新会话"
+            self.conv_repo.update_title(conv, title)
+
+        # user 消息（无 citations）
+        self.conv_repo.add_message(
+            conv.id,
+            role=MessageRole.USER,
+            content=question,
+            citations=None,
+        )
+        # assistant 消息（含 citations 快照）
+        # CitationRead 是 Pydantic BaseModel，转 dict 存 JSON
+        citations_snapshot = [c.model_dump(mode="json") for c in citations] if citations else None
+        self.conv_repo.add_message(
+            conv.id,
+            role=MessageRole.ASSISTANT,
+            content=answer_text,
+            citations=citations_snapshot,
         )
 
     # ------------------------------------------------------------------
@@ -358,15 +626,8 @@ class QaService:
             raise NoAvailableDocumentsError(msg)
 
         # 2. 惰性创建 ChatModel（测试时已注入，跳过创建）
-        # Qdrant 路径不需要 Embeddings（QdrantVectorStore 内部有），
-        # InMemory 路径在 _retrieve_contexts 中按需创建
-        if self._chat_model is None:
-            self._chat_model = create_chat_model(self.llm_config)
-
-        # 此时 chat_model 已确保非 None（惰性创建或测试注入）
-        # 用 assert 帮助 mypy 收窄类型，本项目不使用 -O 优化，assert 不会被移除
-        assert self._chat_model is not None
-        chat_model = self._chat_model
+        # 复用 _ensure_chat_model（与 answer / answer_stream / rewrite_query 共用）
+        chat_model = self._ensure_chat_model()
 
         # 3. 检索：根据配置选择路径
         # - ``bm25_enabled=True``：混合检索（BM25 + 向量 + RRF 融合），阶段 8.3
