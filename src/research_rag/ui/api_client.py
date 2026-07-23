@@ -325,7 +325,7 @@ class ApiClient:
             ``StreamEvent``：``StreamToken`` / ``StreamDone`` / ``StreamError``。
         """
 
-        payload: dict[str, object] = {"question": question, "stream": True}
+        payload: dict[str, Any] = {"question": question, "stream": True}
         if document_ids:
             payload["document_ids"] = document_ids
         if top_k is not None:
@@ -403,11 +403,11 @@ def _parse_sse_stream(response: requests.Response) -> Iterator[StreamEvent]:
         data_lines = []
 
     for raw_line in response.iter_lines(decode_unicode=True):
-        # ``iter_lines`` 在 ``decode_unicode=True`` 下返回 str，但类型标注保留
-        # ``bytes | str``，故做类型守卫。
+        # ``iter_lines`` 类型标注为 ``Iterator[bytes | str]``，``decode_unicode=True``
+        # 运行时返回 str，但存根未精确反映，故做类型守卫。
         if not isinstance(raw_line, str):
             # 理论上 decode_unicode=True 不会走到这里，防御性处理
-            raw_line = raw_line.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+            raw_line = raw_line.decode("utf-8", errors="replace")
 
         if raw_line == "":
             # 空行：事件结束

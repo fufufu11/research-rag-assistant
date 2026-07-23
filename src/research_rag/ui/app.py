@@ -27,7 +27,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import streamlit as st
 
@@ -197,7 +197,8 @@ def _render_qa(client: ApiClient) -> None:
 
         st.subheader("💡 答案")
         with st.spinner("正在检索和生成答案…"):
-            answer = st.write_stream(_token_generator())
+            # ``_token_generator`` 只 yield str，``st.write_stream`` 返回 str。
+            answer = cast("str", st.write_stream(_token_generator()))
 
         error = holder["error"]
         if error is not None:
