@@ -135,6 +135,7 @@ def test_create_query_success(client: TestClient, mock_service: MagicMock) -> No
         question="深度学习是什么？",
         document_ids=[],
         top_k=DEFAULT_TOP_K,
+        conversation_id=None,
     )
 
 
@@ -152,6 +153,7 @@ def test_create_query_with_document_ids(client: TestClient, mock_service: MagicM
         question="问题",
         document_ids=[doc_id],
         top_k=3,
+        conversation_id=None,
     )
 
 
@@ -335,6 +337,7 @@ def test_create_query_stream_returns_sse(client: TestClient, mock_service: Magic
         question="问题",
         document_ids=[],
         top_k=DEFAULT_TOP_K,
+        conversation_id=None,
     )
     # 非流式路径不应被调用
     mock_service.answer.assert_not_called()
@@ -377,6 +380,7 @@ def test_create_query_stream_passes_document_ids_and_top_k(
         question="问题",
         document_ids=[doc_id],
         top_k=3,
+        conversation_id=None,
     )
 
 

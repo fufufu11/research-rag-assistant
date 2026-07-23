@@ -110,12 +110,15 @@ class QueryResult:
         citations: 引用列表，按模型引用顺序排列。
         request_id: 本次问答的唯一 ID，便于日志追踪。
         elapsed_ms: 本次问答总耗时（毫秒）。
+        conversation_id: 本次问答所属会话 ID（阶段 9.2）。``None`` 表示单轮
+            问答未关联会话；非 None 时前端据此维护会话状态。
     """
 
     answer: str
     citations: list[Citation] = field(default_factory=list)
     request_id: str = ""
     elapsed_ms: int = 0
+    conversation_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,11 +145,14 @@ class StreamDone:
         citations: 服务端根据答案中的 ``[C1]`` 编号映射的真实引用列表。
         request_id: 本次问答的唯一 ID。
         elapsed_ms: 本次问答总耗时（毫秒）。
+        conversation_id: 本次问答所属会话 ID（阶段 9.2）。``None`` 表示单轮
+            问答未关联会话；非 None 时前端据此维护会话状态。
     """
 
     citations: list[Citation] = field(default_factory=list)
     request_id: str = ""
     elapsed_ms: int = 0
+    conversation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +164,52 @@ class StreamError:
 
 StreamEvent = StreamToken | StreamDone | StreamError
 """流式事件联合类型，``ask_question_stream`` 的产出单元。"""
+
+
+# ---------------------------------------------------------------------------
+# 会话与消息（阶段 9.2 多轮对话）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MessageInfo:
+    """会话消息（对应 API 的 ``MessageRead`` schema）。
+
+    Attributes:
+        id: 消息 UUID。
+        role: 消息角色（``user`` / ``assistant``）。
+        content: 消息文本。``assistant`` 消息含 ``[C1]`` 等引用标记原文。
+        citations: ``assistant`` 消息的引用元数据快照；``user`` 消息为 ``None``。
+        created_at: 创建时间（ISO 字符串）。
+    """
+
+    id: str
+    role: str
+    content: str
+    citations: list[Citation] | None = None
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
+class ConversationInfo:
+    """会话信息（对应 API 的 ``ConversationRead`` schema）。
+
+    Attributes:
+        id: 会话 UUID。
+        title: 会话标题（可空）。
+        document_ids: 会话级文档范围（UUID 字符串列表快照）；``None`` 表示全库。
+        created_at: 创建时间（ISO 字符串）。
+        updated_at: 最后更新时间（ISO 字符串）。
+        messages: 会话内消息列表（按 ``created_at`` 升序）。``None`` 表示未加载
+            （列表接口为节省体积不返回消息，详情接口返回完整消息）。
+    """
+
+    id: str
+    title: str | None
+    document_ids: list[str] | None = None
+    created_at: str = ""
+    updated_at: str = ""
+    messages: list[MessageInfo] | None = None
 
 
 class ApiClient:
@@ -262,16 +314,21 @@ class ApiClient:
         question: str,
         document_ids: list[str] | None = None,
         top_k: int | None = None,
+        conversation_id: str | None = None,
     ) -> QueryResult:
         """提交问答请求（POST /queries）。
 
         Args:
             question: 用户问题。
             document_ids: 限定查询的文档 ID 列表。``None`` 或空列表表示查询全库。
+                ``conversation_id`` 非 None 且会话已锁定 ``document_ids`` 时，
+                以会话锁定范围为准（API 端处理，客户端只透传）。
             top_k: 检索返回的最相关片段数。``None`` 用 API 端默认值。
+            conversation_id: 会话 ID（阶段 9.2）。``None`` 表示单轮问答；
+                传入已存在会话 ID 时，API 端加载历史注入 prompt 并持久化本轮消息。
 
         Returns:
-            问答结果（答案 + 引用列表）。
+            问答结果（答案 + 引用列表 + conversation_id）。
         """
 
         payload: dict[str, object] = {"question": question}
@@ -279,25 +336,19 @@ class ApiClient:
             payload["document_ids"] = document_ids
         if top_k is not None:
             payload["top_k"] = top_k
+        if conversation_id is not None:
+            payload["conversation_id"] = conversation_id
 
         response = self._request("POST", "/queries", json=payload)
         data = response.json()
         return QueryResult(
             answer=data.get("answer", ""),
             citations=[
-                Citation(
-                    document_id=c["document_id"],
-                    document_name=c["document_name"],
-                    start_page=c["start_page"],
-                    end_page=c["end_page"],
-                    chunk_index=c["chunk_index"],
-                    snippet=c["snippet"],
-                    score=c["score"],
-                )
-                for c in data.get("citations", [])
+                _parse_citation(c) for c in data.get("citations", []) if isinstance(c, dict)
             ],
             request_id=data.get("request_id", ""),
             elapsed_ms=data.get("elapsed_ms", 0),
+            conversation_id=data.get("conversation_id"),
         )
 
     def ask_question_stream(
@@ -305,6 +356,7 @@ class ApiClient:
         question: str,
         document_ids: list[str] | None = None,
         top_k: int | None = None,
+        conversation_id: str | None = None,
     ) -> Iterator[StreamEvent]:
         """流式问答请求（POST /queries with ``stream=true``）。
 
@@ -319,10 +371,14 @@ class ApiClient:
         Args:
             question: 用户问题。
             document_ids: 限定查询的文档 ID 列表。``None`` 或空列表表示查询全库。
+                ``conversation_id`` 非 None 且会话已锁定 ``document_ids`` 时，
+                以会话锁定范围为准（API 端处理，客户端只透传）。
             top_k: 检索返回的最相关片段数。``None`` 用 API 端默认值。
+            conversation_id: 会话 ID（阶段 9.2）。``None`` 表示单轮问答。
 
         Yields:
             ``StreamEvent``：``StreamToken`` / ``StreamDone`` / ``StreamError``。
+            ``StreamDone`` 携带 ``conversation_id`` 字段。
         """
 
         payload: dict[str, Any] = {"question": question, "stream": True}
@@ -330,6 +386,8 @@ class ApiClient:
             payload["document_ids"] = document_ids
         if top_k is not None:
             payload["top_k"] = top_k
+        if conversation_id is not None:
+            payload["conversation_id"] = conversation_id
 
         url = f"{self.base_url}/queries"
         try:
@@ -348,6 +406,75 @@ class ApiClient:
 
         yield from _parse_sse_stream(response)
 
+    # ------------------------------------------------------------------
+    # 会话管理（阶段 9.2 多轮对话）
+    # ------------------------------------------------------------------
+
+    def create_conversation(
+        self,
+        title: str | None = None,
+        document_ids: list[str] | None = None,
+    ) -> ConversationInfo:
+        """创建会话（POST /conversations）。
+
+        Args:
+            title: 会话标题（可空）。未提供时 API 端在首条消息后用问题截取自动设置。
+            document_ids: 会话级文档范围锁定（UUID 字符串列表）。``None`` 或空
+                列表表示查询全库 READY 文档。锁定后后续问答以此范围为准。
+
+        Returns:
+            新建的会话信息（无消息，``messages`` 为 ``None``）。
+        """
+
+        payload: dict[str, object] = {}
+        if title is not None:
+            payload["title"] = title
+        if document_ids:
+            payload["document_ids"] = document_ids
+        response = self._request("POST", "/conversations", json=payload)
+        return _parse_conversation(response.json())
+
+    def list_conversations(self) -> list[ConversationInfo]:
+        """列出所有会话（GET /conversations），按 ``updated_at`` 降序。
+
+        列表接口不返回 ``messages``（节省体积），需要消息列表请用
+        ``get_conversation``。
+        """
+
+        response = self._request("GET", "/conversations")
+        data = response.json()
+        items = data.get("items", []) if isinstance(data, dict) else data
+        return [_parse_conversation(item) for item in items]
+
+    def get_conversation(self, conversation_id: str) -> ConversationInfo:
+        """查询会话详情（GET /conversations/{id}），含完整消息列表。
+
+        不存在抛 ``ApiClientError``（404）。
+        """
+
+        response = self._request("GET", f"/conversations/{conversation_id}")
+        return _parse_conversation(response.json())
+
+    def delete_conversation(self, conversation_id: str) -> None:
+        """删除会话（DELETE /conversations/{id}），级联删除其消息。
+
+        不存在抛 ``ApiClientError``（404）。
+        """
+
+        self._request("DELETE", f"/conversations/{conversation_id}")
+
+    def list_messages(self, conversation_id: str) -> list[MessageInfo]:
+        """列出会话内消息（GET /conversations/{id}/messages），按时间升序。
+
+        独立端点便于在不重新拉取整个会话详情的情况下刷新消息列表。
+        不存在抛 ``ApiClientError``（404）。
+        """
+
+        response = self._request("GET", f"/conversations/{conversation_id}/messages")
+        data = response.json()
+        items = data if isinstance(data, list) else data.get("items", [])
+        return [_parse_message(item) for item in items]
+
 
 def _parse_document(data: Mapping[str, Any]) -> DocumentInfo:
     """从 API 响应 JSON 解析 ``DocumentInfo``。"""
@@ -361,6 +488,58 @@ def _parse_document(data: Mapping[str, Any]) -> DocumentInfo:
         error_message=error_message if isinstance(error_message, str) else None,
         created_at=str(data["created_at"]),
         updated_at=str(data["updated_at"]),
+    )
+
+
+def _parse_citation(data: Mapping[str, Any]) -> Citation:
+    """从 API 响应 JSON 解析单条 ``Citation``。"""
+
+    return Citation(
+        document_id=str(data["document_id"]),
+        document_name=str(data["document_name"]),
+        start_page=int(data["start_page"]),
+        end_page=int(data["end_page"]),
+        chunk_index=int(data["chunk_index"]),
+        snippet=str(data["snippet"]),
+        score=float(data["score"]),
+    )
+
+
+def _parse_message(data: Mapping[str, Any]) -> MessageInfo:
+    """从 API 响应 JSON 解析 ``MessageInfo``。"""
+
+    citations_raw = data.get("citations")
+    citations = (
+        [_parse_citation(c) for c in citations_raw if isinstance(c, dict)]
+        if isinstance(citations_raw, list)
+        else None
+    )
+    return MessageInfo(
+        id=str(data["id"]),
+        role=str(data["role"]),
+        content=str(data["content"]),
+        citations=citations,
+        created_at=str(data.get("created_at", "")),
+    )
+
+
+def _parse_conversation(data: Mapping[str, Any]) -> ConversationInfo:
+    """从 API 响应 JSON 解析 ``ConversationInfo``。"""
+
+    document_ids = data.get("document_ids")
+    messages_raw = data.get("messages")
+    messages = (
+        [_parse_message(m) for m in messages_raw if isinstance(m, dict)]
+        if isinstance(messages_raw, list)
+        else None
+    )
+    return ConversationInfo(
+        id=str(data["id"]),
+        title=data.get("title"),
+        document_ids=([str(d) for d in document_ids] if isinstance(document_ids, list) else None),
+        created_at=str(data.get("created_at", "")),
+        updated_at=str(data.get("updated_at", "")),
+        messages=messages,
     )
 
 
@@ -437,22 +616,13 @@ def _build_stream_event(event_name: str, data_str: str) -> StreamEvent:
     if event_name == "token":
         return StreamToken(text=str(data.get("text", "")))
     if event_name == "done":
-        citations = [
-            Citation(
-                document_id=c["document_id"],
-                document_name=c["document_name"],
-                start_page=c["start_page"],
-                end_page=c["end_page"],
-                chunk_index=c["chunk_index"],
-                snippet=c["snippet"],
-                score=c["score"],
-            )
-            for c in data.get("citations", [])
-        ]
+        citations = [_parse_citation(c) for c in data.get("citations", []) if isinstance(c, dict)]
+        conversation_id_raw = data.get("conversation_id")
         return StreamDone(
             citations=citations,
             request_id=str(data.get("request_id", "")),
             elapsed_ms=int(data.get("elapsed_ms", 0)),
+            conversation_id=(str(conversation_id_raw) if conversation_id_raw is not None else None),
         )
     if event_name == "error":
         return StreamError(detail=str(data.get("detail", "未知错误")))

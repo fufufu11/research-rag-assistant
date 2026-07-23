@@ -34,8 +34,8 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import JSON, ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -50,6 +50,17 @@ class DocumentStatus(enum.Enum):
     PROCESSING = "processing"  # 正在解析 / 切分 / Embedding
     READY = "ready"  # 处理完成，可问答
     FAILED = "failed"  # 处理失败，error_message 存原因
+
+
+class MessageRole(enum.Enum):
+    """会话消息角色（阶段 9.2 多轮对话）。
+
+    值用小写字符串，与 OpenAI/LangChain 消息角色命名一致（``user`` / ``assistant``），
+    便于历史消息直接映射为 LangChain ``HumanMessage`` / ``AIMessage``。
+    """
+
+    USER = "user"  # 用户提问
+    ASSISTANT = "assistant"  # 模型回答
 
 
 class DuplicateDocumentError(RuntimeError):
@@ -181,4 +192,86 @@ class Chunk(Base):
             f"Chunk(id={self.id!r}, document_id={self.document_id!r}, "
             f"start_page={self.start_page!r}, end_page={self.end_page!r}, "
             f"chunk_index={self.chunk_index!r})"
+        )
+
+
+class Conversation(Base):
+    """会话模型（阶段 9.2 多轮对话）。
+
+    一个会话对应一组连续的多轮问答。会话级文档范围（``document_ids``）在创建时
+    锁定，避免中途切换导致历史上下文不一致。会话内消息按 ``created_at`` 升序
+    构成对话历史。
+
+    Attributes:
+        id: UUID 主键，业务层生成（``default=uuid.uuid4``）。
+        title: 会话标题（可空），用于 UI 展示。通常从首条用户问题截取。
+        document_ids: 会话级文档范围（UUID 字符串列表）。``None`` 表示查询全库
+            READY 文档。存 JSON 而非外键，因为这是会话创建时的快照，不随文档
+            删除而级联（文档删除后会话历史仍保留，新问答会因文档不存在而报错）。
+        created_at: 创建时间（UTC）。
+        updated_at: 更新时间（UTC），每次新增消息时由 ``onupdate`` 自动维护。
+    """
+
+    __tablename__ = "conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    document_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    messages: Mapped[list[Message]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="Message.created_at",
+    )
+
+    def __repr__(self) -> str:
+        return f"Conversation(id={self.id!r}, title={self.title!r})"
+
+
+class Message(Base):
+    """会话消息模型（阶段 9.2 多轮对话）。
+
+    一条消息对应一轮对话中的一方（用户或模型）。``assistant`` 消息的
+    ``citations`` 字段存引用元数据快照（JSON），便于前端历史回看，不随文档
+    删除而级联（快照语义）。
+
+    Attributes:
+        id: UUID 主键。
+        conversation_id: 所属会话的 UUID（外键，``ondelete="CASCADE"``）。
+        role: 消息角色（``user`` / ``assistant``）。
+        content: 消息文本内容。``assistant`` 消息含 ``[C1]`` 等引用标记原文。
+        citations: ``assistant`` 消息的引用元数据快照（list[dict]），结构对齐
+            ``CitationRead`` schema。``user`` 消息为 ``None``。
+        created_at: 创建时间（UTC），用于消息排序。
+    """
+
+    __tablename__ = "messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[MessageRole] = mapped_column(
+        SAEnum(
+            MessageRole,
+            values_callable=lambda e: [x.value for x in e],
+            length=20,
+            native_enum=False,
+        ),
+        nullable=False,
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list[dict[str, object]] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, default=_utcnow)
+
+    conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+    def __repr__(self) -> str:
+        return (
+            f"Message(id={self.id!r}, conversation_id={self.conversation_id!r}, role={self.role!r})"
         )

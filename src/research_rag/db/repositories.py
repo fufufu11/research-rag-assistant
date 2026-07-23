@@ -33,7 +33,14 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from research_rag.db.models import Chunk, Document, DocumentStatus
+from research_rag.db.models import (
+    Chunk,
+    Conversation,
+    Document,
+    DocumentStatus,
+    Message,
+    MessageRole,
+)
 
 if TYPE_CHECKING:
     import uuid
@@ -167,3 +174,138 @@ class DocumentRepository:
         # 并在 flush 时 INSERT。比 session.add_all 更直观（明确归属关系）。
         doc.chunks.extend(chunks)
         self.session.flush()
+
+
+class ConversationRepository:
+    """会话与消息的数据访问对象（阶段 9.2 多轮对话）。
+
+    封装 ``Conversation`` / ``Message`` 表的 CRUD 操作。与
+    ``DocumentRepository`` 风格一致：所有方法都不 ``commit``，只 ``flush``，
+    事务边界由调用方（service 层）控制。
+
+    Attributes:
+        session: SQLAlchemy Session，由调用方传入。
+    """
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    # ------------------------------------------------------------------
+    # Conversation CRUD
+    # ------------------------------------------------------------------
+
+    def create(
+        self,
+        *,
+        title: str | None = None,
+        document_ids: Sequence[str] | None = None,
+    ) -> Conversation:
+        """创建一条 Conversation 记录并 flush（不 commit）。
+
+        Args:
+            title: 会话标题（可空），通常从首条用户问题截取。
+            document_ids: 会话级文档范围（UUID 字符串列表）。``None`` 表示查询
+                全库 READY 文档。在会话创建时锁定，避免中途切换导致历史上下文
+                不一致。
+
+        Returns:
+            已持久化（flush 后 id 已生成）的 Conversation 实例。
+        """
+
+        conv = Conversation(
+            title=title,
+            document_ids=list(document_ids) if document_ids is not None else None,
+        )
+        self.session.add(conv)
+        self.session.flush()
+        return conv
+
+    def get_by_id(self, conv_id: uuid.UUID) -> Conversation | None:
+        """按主键查询 Conversation，不存在返回 None。"""
+
+        return self.session.get(Conversation, conv_id)
+
+    def list_all(self) -> list[Conversation]:
+        """返回所有 Conversation，按 ``updated_at`` 降序（最近活跃的在前）。"""
+
+        return list(
+            self.session.scalars(
+                select(Conversation).order_by(Conversation.updated_at.desc())
+            ).all()
+        )
+
+    def delete(self, conv: Conversation) -> None:
+        """删除 Conversation（级联删除其 Message，由 ORM cascade 保证）。
+
+        注意：调用方需在之后 ``commit`` 才真正生效。
+        """
+
+        self.session.delete(conv)
+        self.session.flush()
+
+    def update_title(self, conv: Conversation, title: str) -> Conversation:
+        """更新 Conversation 标题，flush（不 commit）。
+
+        通常在首条用户消息后用问题截取设置标题，便于 UI 列表展示。
+        """
+
+        conv.title = title
+        self.session.flush()
+        return conv
+
+    # ------------------------------------------------------------------
+    # Message 持久化
+    # ------------------------------------------------------------------
+
+    def add_message(
+        self,
+        conversation_id: uuid.UUID,
+        *,
+        role: MessageRole,
+        content: str,
+        citations: Sequence[dict[str, object]] | None = None,
+    ) -> Message:
+        """追加一条 Message 到指定会话并持久化（flush，不 commit）。
+
+        Args:
+            conversation_id: 所属会话 UUID（调用方负责确保会话存在）。
+            role: 消息角色（``user`` / ``assistant``）。
+            content: 消息文本。``assistant`` 消息含 ``[C1]`` 等引用标记原文。
+            citations: ``assistant`` 消息的引用元数据快照（list[dict]），结构
+                对齐 ``CitationRead`` schema。``user`` 消息传 ``None``。
+        """
+
+        msg = Message(
+            conversation_id=conversation_id,
+            role=role,
+            content=content,
+            citations=list(citations) if citations is not None else None,
+        )
+        self.session.add(msg)
+        self.session.flush()
+        return msg
+
+    def list_messages(
+        self,
+        conversation_id: uuid.UUID,
+        *,
+        limit: int | None = None,
+    ) -> list[Message]:
+        """查询指定会话的消息列表，按 ``created_at`` 升序（对话时间顺序）。
+
+        Args:
+            conversation_id: 会话 UUID。
+            limit: 最多返回条数。``None`` 表示全部。用于历史截断时取最近 N 条
+                （配合 ``limit`` + 倒序查询后翻转，但本方法直接升序返回全部，
+                截断逻辑由 service 层处理）。
+        """
+
+        stmt = select(Message).where(Message.conversation_id == conversation_id)
+        if limit is not None and limit > 0:
+            # 取最近 limit 条：先按时间降序取 limit 条，再翻转为升序
+            stmt = stmt.order_by(Message.created_at.desc()).limit(limit)
+            msgs = list(self.session.scalars(stmt).all())
+            msgs.reverse()
+            return msgs
+        stmt = stmt.order_by(Message.created_at.asc())
+        return list(self.session.scalars(stmt).all())

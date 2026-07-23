@@ -283,6 +283,172 @@ def build_prompt(question: str, contexts: Sequence[ContextPiece]) -> list[BaseMe
     return [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
 
 
+# ---------------------------------------------------------------------------
+# 多轮对话：历史注入、token 估算、历史截断、查询改写（阶段 9.2）
+# ---------------------------------------------------------------------------
+
+
+def build_prompt_with_history(
+    question: str,
+    contexts: Sequence[ContextPiece],
+    history: Sequence[BaseMessage],
+) -> list[BaseMessage]:
+    """构造带历史对话的 Prompt（阶段 9.2 多轮对话）。
+
+    在 ``build_prompt`` 的基础上，于 SystemMessage 和当前 HumanMessage 之间
+    插入历史对话消息（``HumanMessage`` / ``AIMessage`` 交替），让模型理解
+    "那篇""刚才"等指代。当前轮上下文仍注入最后一条 HumanMessage，引用编号
+    ``[C1]`` 只指代当前轮 contexts（每轮独立编号，避免历史轮引用混入）。
+
+    复用 ``build_prompt`` 构造 SystemMessage 和当前 HumanMessage，保持单轮与
+    多轮路径的 prompt 约束完全一致。
+
+    Args:
+        question: 当前轮用户问题。
+        contexts: 当前轮检索到的上下文片段列表（按相关度降序）。
+        history: 历史对话消息列表（``HumanMessage`` / ``AIMessage`` 交替），
+            已由调用方截断到合适长度。空列表时等价于 ``build_prompt``。
+
+    Returns:
+        LangChain 消息列表：``[SystemMessage, *history, HumanMessage]``。
+    """
+
+    base = build_prompt(question, contexts)  # [SystemMessage, HumanMessage]
+    # 在 SystemMessage 和当前 HumanMessage 之间插入历史
+    return [base[0], *history, base[1]]
+
+
+def _message_content(message: BaseMessage) -> str:
+    """提取 ``BaseMessage`` 的文本内容（用于 token 估算）。
+
+    LangChain 消息 ``content`` 通常是 ``str``，部分模型可能返回复杂结构
+    （如 tool call），此处统一转 ``str`` 做粗估，不追求精确。
+    """
+
+    content = getattr(message, "content", "")
+    return content if isinstance(content, str) else str(content)
+
+
+def estimate_tokens(text: str) -> int:
+    """粗估文本的 token 数（阶段 9.2 历史截断用）。
+
+    用 ``len(text) // 3`` 粗估：中文约 1 字 ≈ 1.5 token，英文约 4 字 ≈ 1 token，
+    取折中系数 3。不引入 tiktoken 依赖，精度足够用于截断阈值判断。
+
+    Args:
+        text: 待估文本。
+
+    Returns:
+        估算 token 数，至少为 1（避免空消息被忽略导致截断失效）。
+    """
+
+    return max(1, len(text) // 3)
+
+
+# 默认历史截断参数（阶段 9.2）：
+# - 保留最近 5 轮（10 条消息），覆盖验收要求的 3 轮指代场景并留余量。
+# - token 上限 4000，给当前轮上下文和答案生成留出 LLM 上下文窗口空间
+#   （常见模型 8k/16k/32k 窗口，4000 历史占比合理）。
+DEFAULT_MAX_HISTORY_TURNS = 5
+DEFAULT_MAX_HISTORY_TOKENS = 4000
+
+
+def truncate_history_messages(
+    history: Sequence[BaseMessage],
+    *,
+    max_turns: int = DEFAULT_MAX_HISTORY_TURNS,
+    max_tokens: int = DEFAULT_MAX_HISTORY_TOKENS,
+) -> list[BaseMessage]:
+    """截断历史消息（阶段 9.2 轮数 + token 双重保护）。
+
+    先按轮数粗筛（保留最近 ``max_turns`` 轮，一轮 = user + assistant = 2 条），
+    再按 token 数精裁（从最老消息开始裁，直到总 token 数 ≤ ``max_tokens``）。
+    双重保护避免：① 历史无限增长；② 单条超长消息撑爆 LLM 上下文窗口。
+
+    Args:
+        history: 历史消息列表（``HumanMessage`` / ``AIMessage`` 交替，按时间升序）。
+        max_turns: 保留的最大轮数（一轮 = 2 条消息）。
+        max_tokens: 历史消息总 token 数上限。
+
+    Returns:
+        截断后的历史消息列表（按时间升序），可能为空。
+    """
+
+    # 1. 按轮数粗筛：保留最近 max_turns * 2 条
+    max_messages = max_turns * 2
+    truncated = list(history[-max_messages:]) if max_messages > 0 else []
+
+    # 2. 按 token 数精裁：从最老开始裁，直到总 token 数 ≤ max_tokens
+    total_tokens = sum(estimate_tokens(_message_content(m)) for m in truncated)
+    while total_tokens > max_tokens and truncated:
+        oldest = truncated.pop(0)
+        total_tokens -= estimate_tokens(_message_content(oldest))
+
+    return truncated
+
+
+def rewrite_query(
+    question: str,
+    history: Sequence[BaseMessage],
+    chat_model: BaseChatModel,
+) -> str:
+    """用历史对话改写当前问题（阶段 9.2 查询改写）。
+
+    把"那篇""刚才"等指代解析为独立问题，提升多轮检索质量。用 LLM 根据历史
+    对话和当前问题生成一个独立的、可脱离上下文理解的问题，再用改写后的问题
+    做检索（历史参与检索）。
+
+    设计取舍：
+    - 改写失败时回退到原 ``question``，不阻塞问答流程（降级为不改写检索）。
+    - 用同一个 ``chat_model``（不引入第二个 LLM 客户端配置，降低复杂度）。
+    - 无历史时直接返回原问题（首轮无需改写）。
+
+    Args:
+        question: 当前轮用户问题（可能含指代）。
+        history: 历史对话消息列表（已截断）。
+        chat_model: LangChain ``BaseChatModel`` 实例。
+
+    Returns:
+        改写后的独立问题。改写失败或无历史时返回原 ``question``。
+    """
+
+    if not history:
+        # 无历史无需改写（首轮问题已是独立问题）
+        return question
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    system_prompt = (
+        "你是一个查询改写助手。根据历史对话，把用户当前问题改写为一个独立的、"
+        "可脱离上下文理解的完整问题。要求：\n"
+        '1. 解析"那篇""刚才"等指代为具体实体（如论文标题、方法名）。\n'
+        "2. 若当前问题已是独立问题，原样输出。\n"
+        "3. 只输出改写后的问题，不要任何解释或前缀。"
+    )
+
+    # 构造历史对话摘要（用于改写参考）
+    history_text = "\n".join(
+        f"{'用户' if isinstance(m, HumanMessage) else '助手'}: {_message_content(m)}"
+        for m in history
+    )
+
+    user_prompt = f"历史对话：\n{history_text}\n\n当前问题：{question}\n\n改写后的问题："
+
+    try:
+        response = chat_model.invoke(
+            [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+        )
+    except Exception:
+        # 改写失败回退到原问题，不阻塞问答（降级为不改写检索）
+        return question
+
+    content = getattr(response, "content", None)
+    if not isinstance(content, str) or not content.strip():
+        return question
+
+    return content.strip()
+
+
 def parse_citation_indices(text: str) -> list[int]:
     """从答案文本中提取引用编号（去重保序）。
 
@@ -351,31 +517,29 @@ def map_citations(
     return citations
 
 
-def answer_question(
-    question: str,
-    contexts: Sequence[ContextPiece],
+def _invoke_and_parse(
     chat_model: BaseChatModel,
+    messages: Sequence[BaseMessage],
+    contexts: Sequence[ContextPiece],
 ) -> AnswerWithCitations:
-    """完整问答流程：构造 Prompt → 调用 LLM → 解析引用 → 映射真实引用。
+    """调用 LLM 并解析答案（``answer_question`` 与多轮路径共享的内部逻辑）。
+
+    执行：``invoke`` → 类型守卫 → 证据不足检测 → 引用编号解析 → 引用映射。
+    抽取此函数让单轮（``answer_question``）和多轮（``answer_with_messages``）
+    路径共享同一套检测与解析逻辑，避免行为分叉。
 
     Args:
-        question: 用户问题。
-        contexts: 检索到的上下文片段列表（按相关度降序，非空）。
-        chat_model: LangChain ``BaseChatModel`` 实例（如 ``ChatOpenAI``）。
-            测试时可传入 ``FakeListChatModel`` 等假模型 Mock。
+        chat_model: LangChain ``BaseChatModel`` 实例。
+        messages: 已构造的 LangChain 消息列表。
+        contexts: 检索到的上下文片段列表（用于引用映射，非空）。
 
     Returns:
         结构化答案（答案文本 + 引用编号 + 真实引用列表）。
 
     Raises:
-        LlmServiceError: 上下文为空、模型调用失败或返回无法解析。
+        LlmServiceError: 模型调用失败或返回无法解析。
         InsufficientEvidenceError: 模型判定证据不足（输出 ``[INSUFFICIENT_EVIDENCE]``）。
     """
-    if not contexts:
-        msg = "上下文为空，无法构造问答 Prompt。"
-        raise LlmServiceError(msg)
-
-    messages = build_prompt(question, contexts)
 
     try:
         response = chat_model.invoke(messages)
@@ -405,6 +569,65 @@ def answer_question(
         citation_indices=citation_indices,
         citations=citations,
     )
+
+
+def answer_question(
+    question: str,
+    contexts: Sequence[ContextPiece],
+    chat_model: BaseChatModel,
+) -> AnswerWithCitations:
+    """完整问答流程：构造 Prompt → 调用 LLM → 解析引用 → 映射真实引用。
+
+    Args:
+        question: 用户问题。
+        contexts: 检索到的上下文片段列表（按相关度降序，非空）。
+        chat_model: LangChain ``BaseChatModel`` 实例（如 ``ChatOpenAI``）。
+            测试时可传入 ``FakeListChatModel`` 等假模型 Mock。
+
+    Returns:
+        结构化答案（答案文本 + 引用编号 + 真实引用列表）。
+
+    Raises:
+        LlmServiceError: 上下文为空、模型调用失败或返回无法解析。
+        InsufficientEvidenceError: 模型判定证据不足（输出 ``[INSUFFICIENT_EVIDENCE]``）。
+    """
+    if not contexts:
+        msg = "上下文为空，无法构造问答 Prompt。"
+        raise LlmServiceError(msg)
+
+    messages = build_prompt(question, contexts)
+    return _invoke_and_parse(chat_model, messages, contexts)
+
+
+def answer_with_messages(
+    messages: Sequence[BaseMessage],
+    contexts: Sequence[ContextPiece],
+    chat_model: BaseChatModel,
+) -> AnswerWithCitations:
+    """用预先构造的 messages 调用 LLM（阶段 9.2 多轮对话路径）。
+
+    与 ``answer_question`` 的区别：调用方预先用
+    ``build_prompt_with_history`` 构造带历史对话的 messages，本函数只负责
+    调用 LLM 和解析引用。共享 ``_invoke_and_parse`` 保证检测与解析逻辑一致。
+
+    Args:
+        messages: 已构造的 LangChain 消息列表（含 SystemMessage + 历史 + 当前
+            HumanMessage）。
+        contexts: 当前轮检索到的上下文片段列表（用于引用映射，非空）。
+        chat_model: LangChain ``BaseChatModel`` 实例。
+
+    Returns:
+        结构化答案（答案文本 + 引用编号 + 真实引用列表）。
+
+    Raises:
+        LlmServiceError: 上下文为空、模型调用失败或返回无法解析。
+        InsufficientEvidenceError: 模型判定证据不足（输出 ``[INSUFFICIENT_EVIDENCE]``）。
+    """
+    if not contexts:
+        msg = "上下文为空，无法构造问答 Prompt。"
+        raise LlmServiceError(msg)
+
+    return _invoke_and_parse(chat_model, messages, contexts)
 
 
 # ---------------------------------------------------------------------------

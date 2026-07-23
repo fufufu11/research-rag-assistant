@@ -84,6 +84,7 @@ def create_query(
                 question=query_request.question,
                 document_ids=query_request.document_ids,
                 top_k=query_request.top_k,
+                conversation_id=query_request.conversation_id,
             ),
             media_type="text/event-stream",
             headers={
@@ -96,6 +97,7 @@ def create_query(
         question=query_request.question,
         document_ids=query_request.document_ids,
         top_k=query_request.top_k,
+        conversation_id=query_request.conversation_id,
     )
 
 
@@ -105,18 +107,23 @@ async def _stream_answer(
     question: str,
     document_ids: list[uuid.UUID],
     top_k: int,
+    conversation_id: uuid.UUID | None,
 ) -> AsyncIterator[str]:
     """把 ``QaService.answer_stream`` 的 ``StreamEvent`` 序列化为 SSE 文本。
 
     SSE 事件格式（``event: <type>\\ndata: <json>\\n\\n``）：
     - ``token``：``{"text": "..."}``，逐字 LLM 生成内容。
-    - ``done``：``{"citations": [...], "request_id": "...", "elapsed_ms": N}``，
-      流结束元数据，``citations`` 为服务端映射后的真实引用。
+    - ``done``：``{"citations": [...], "request_id": "...", "elapsed_ms": N,
+      "conversation_id": "..."}``，流结束元数据，``citations`` 为服务端映射
+      后的真实引用，``conversation_id`` 为本次问答所属会话（阶段 9.2，可空）。
     - ``error``：``{"detail": "..."}``，检索/LLM/证据不足等异常。
     """
 
     async for event in service.answer_stream(
-        question=question, document_ids=document_ids, top_k=top_k
+        question=question,
+        document_ids=document_ids,
+        top_k=top_k,
+        conversation_id=conversation_id,
     ):
         yield _format_sse(event)
 
@@ -133,6 +140,9 @@ def _format_sse(event: StreamEvent) -> str:
                 "citations": [c.model_dump(mode="json") for c in event.citations],
                 "request_id": str(event.request_id),
                 "elapsed_ms": event.elapsed_ms,
+                "conversation_id": (
+                    str(event.conversation_id) if event.conversation_id is not None else None
+                ),
             },
         )
     if isinstance(event, StreamErrorEvent):
