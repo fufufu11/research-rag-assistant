@@ -106,7 +106,7 @@ def get_conversation(
     msgs = service.list_messages(conversation_id)
     # 把消息列表挂到会话上，让 ConversationRead.model_validate 能读到
     # （ORM relationship 也能读到，但显式传入避免依赖懒加载行为）
-    conv.messages = msgs  # type: ignore[assignment]
+    conv.messages = msgs
     return conv
 
 
