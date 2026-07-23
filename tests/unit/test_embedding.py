@@ -131,7 +131,7 @@ def test_create_embeddings_raises_on_missing_langchain_huggingface(
 
 
 def test_embedding_config_default_values() -> None:
-    """默认配置应符合 PROJECT_PLAN 第 9.2 节。"""
+    """默认配置应为 bge-small-zh-v1.5（中文优化，生产面向中文用户）。"""
     config = EmbeddingConfig()
     assert config.model_name == DEFAULT_EMBEDDING_MODEL
     assert config.model_name == "BAAI/bge-small-zh-v1.5"

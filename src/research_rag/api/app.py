@@ -126,13 +126,15 @@ def _create_vector_store() -> QdrantVectorStore | None:
         return None
 
     try:
-        from research_rag.embedding import EmbeddingConfig, create_embeddings
+        from research_rag.api.dependencies import get_embedding_config
+        from research_rag.embedding import create_embeddings
         from research_rag.vector_store import create_vector_store, get_qdrant_config
     except ImportError:
         return None
 
     try:
-        embeddings = create_embeddings(EmbeddingConfig())
+        # 阶段 8.4：从 EMBEDDING_MODEL 环境变量读取模型名（默认 bge-small-zh-v1.5 中文优化）
+        embeddings = create_embeddings(get_embedding_config())
         config = get_qdrant_config()
         return create_vector_store(config, embeddings)
     except Exception:
