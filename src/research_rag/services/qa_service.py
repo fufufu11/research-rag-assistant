@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING
 
@@ -52,15 +53,18 @@ from research_rag.embedding import (
     retrieve,
 )
 from research_rag.qa_service import (
+    INSUFFICIENT_EVIDENCE_MARKER,
     AnswerWithCitations,
     ContextPiece,
     LlmConfig,
     answer_question,
+    build_prompt,
     create_chat_model,
+    parse_citation_indices,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
     from langchain_core.embeddings import Embeddings
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -78,6 +82,52 @@ class NoAvailableDocumentsError(RuntimeError):
 
     API 层捕获后映射为 HTTP 404（语义：没有可问答的内容）。
     """
+
+
+# ---------------------------------------------------------------------------
+# 流式事件（阶段 9.1 SSE）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StreamTokenEvent:
+    """流式 token 事件：携带一段 LLM 生成的文本片段。
+
+    answer 文本含 ``[C1]`` 等引用标记原文，前端逐字渲染；引用元数据由
+    ``StreamDoneEvent`` 在流结束后统一下发。
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
+class StreamDoneEvent:
+    """流式完成事件：携带服务端映射后的引用与耗时元数据。
+
+    Attributes:
+        citations: 服务端根据答案中的 ``[C1]`` 编号映射的真实引用列表。
+        request_id: 本次问答的唯一 ID。
+        elapsed_ms: 本次问答总耗时（毫秒）。
+    """
+
+    citations: list[CitationRead]
+    request_id: uuid.UUID
+    elapsed_ms: int
+
+
+@dataclass(frozen=True)
+class StreamErrorEvent:
+    """流式错误事件：检索/LLM/证据不足等异常的 detail。
+
+    流式路径下业务异常不再抛出到 API 层全局处理器（SSE 已开始则无法改 HTTP
+    状态码），改为在流中发 ``error`` 事件，前端据此展示错误。
+    """
+
+    detail: str
+
+
+StreamEvent = StreamTokenEvent | StreamDoneEvent | StreamErrorEvent
+"""流式事件联合类型，``QaService.answer_stream`` 的产出单元。"""
 
 
 class QaService:
@@ -158,6 +208,149 @@ class QaService:
         request_id = uuid.uuid4()
         start = time.perf_counter()
 
+        # 检索 + 重排（与非流式共享 ``_prepare_contexts``）
+        contexts, context_doc_ids, chat_model = self._prepare_contexts(
+            question, document_ids, top_k
+        )
+
+        # 4. 调 LLM 问答
+        result = answer_question(question, contexts, chat_model)
+
+        # 5. 映射引用
+        citations = self._map_citations(result, contexts, context_doc_ids)
+
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+        return QueryResponse(
+            answer=result.answer_text,
+            citations=citations,
+            request_id=request_id,
+            elapsed_ms=elapsed_ms,
+        )
+
+    async def answer_stream(
+        self,
+        question: str,
+        document_ids: Sequence[uuid.UUID] | None = None,
+        top_k: int = DEFAULT_TOP_K,
+    ) -> AsyncIterator[StreamEvent]:
+        """流式问答流程：检索 + 重排 → LLM 逐 token 流式生成 → 引用映射。
+
+        与 ``answer`` 共享检索与重排逻辑（``_prepare_contexts``），区别仅在 LLM
+        生成阶段用 ``chat_model.astream`` 逐 token 推送 ``StreamTokenEvent``，
+        流结束后用 ``parse_citation_indices`` + ``_map_citations`` 映射引用，
+        并发 ``StreamDoneEvent`` 携带元数据。
+
+        事件序列（正常）：
+            ``StreamTokenEvent`` * N → ``StreamDoneEvent``
+
+        事件序列（异常）：检索/LLM 异常或证据不足时发 ``StreamErrorEvent`` 并终止。
+        流式路径下业务异常不再抛出到 API 层全局处理器（SSE 已开始则无法改 HTTP
+        状态码），改为在流中发 ``error`` 事件，前端据此展示错误。
+
+        证据不足处理：模型被要求证据不足时仅输出 ``[INSUFFICIENT_EVIDENCE]``。
+        为避免把标记原文推给用户，在确认输出非该标记前缀前缓冲首段 token；
+        一旦缓冲可判定不会变成完整标记即 flush 并停止缓冲，后续直接推送。
+
+        Args:
+            question: 用户问题。
+            document_ids: 限定查询的文档 UUID 列表。
+            top_k: 检索返回的最相关片段数。
+
+        Yields:
+            ``StreamEvent``：``StreamTokenEvent`` / ``StreamDoneEvent`` /
+            ``StreamErrorEvent``。
+        """
+
+        request_id = uuid.uuid4()
+        start = time.perf_counter()
+
+        # 检索 + 重排：异常映射为 error 事件（不抛出，保持流式契约）
+        try:
+            contexts, context_doc_ids, chat_model = self._prepare_contexts(
+                question, document_ids, top_k
+            )
+        except Exception as exc:  # 流式契约需把所有异常转为事件
+            yield StreamErrorEvent(detail=str(exc))
+            return
+
+        messages = build_prompt(question, contexts)
+        parts: list[str] = []
+        # 证据不足标记缓冲：见上方 docstring 说明
+        buffer = ""
+        buffering = True
+
+        try:
+            async for chunk in chat_model.astream(messages):
+                token = getattr(chunk, "content", "")
+                if not isinstance(token, str) or not token:
+                    continue
+                parts.append(token)
+                if buffering:
+                    buffer += token
+                    if INSUFFICIENT_EVIDENCE_MARKER in buffer:
+                        yield StreamErrorEvent(detail="上下文证据不足以回答该问题。")
+                        return
+                    if not INSUFFICIENT_EVIDENCE_MARKER.startswith(buffer):
+                        # 缓冲不可能再变成标记，flush 并停止缓冲
+                        buffering = False
+                        yield StreamTokenEvent(text=buffer)
+                        buffer = ""
+                else:
+                    yield StreamTokenEvent(text=token)
+        except Exception as exc:
+            yield StreamErrorEvent(detail=f"调用大模型失败：{exc}")
+            return
+
+        # flush 残留缓冲（流结束时仍缓冲，说明输出短于标记且是其前缀；
+        # 已由上方 in 检查排除完整标记，故为正常短答案）
+        if buffering and buffer:
+            yield StreamTokenEvent(text=buffer)
+            buffer = ""
+
+        answer_text = "".join(parts)
+        # 安全兜底：标记出现在已 flush 的文本中（设计上不应发生）→ error
+        if INSUFFICIENT_EVIDENCE_MARKER in answer_text:
+            yield StreamErrorEvent(detail="上下文证据不足以回答该问题。")
+            return
+
+        citation_indices = parse_citation_indices(answer_text)
+        result = AnswerWithCitations(
+            answer_text=answer_text,
+            citation_indices=citation_indices,
+            citations=[],
+        )
+        citations = self._map_citations(result, contexts, context_doc_ids)
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+        yield StreamDoneEvent(
+            citations=citations,
+            request_id=request_id,
+            elapsed_ms=elapsed_ms,
+        )
+
+    # ------------------------------------------------------------------
+    # 私有：检索 + 重排（非流式与流式共享）
+    # ------------------------------------------------------------------
+
+    def _prepare_contexts(
+        self,
+        question: str,
+        document_ids: Sequence[uuid.UUID] | None,
+        top_k: int,
+    ) -> tuple[list[ContextPiece], list[uuid.UUID], BaseChatModel]:
+        """检索 + 重排，返回 ``(contexts, context_doc_ids, chat_model)``。
+
+        抽取自 ``answer`` 的步骤 1-3.5（查 READY 文档 → 惰性创建 ChatModel →
+        检索 → 重排），供非流式 ``answer`` 与流式 ``answer_stream`` 共享，
+        保证两条路径的检索/重排行为完全一致。
+
+        Raises:
+            DocumentNotFoundError: ``document_ids`` 中有不存在的 UUID。
+            NoAvailableDocumentsError: 无可用 READY 文档或检索上下文为空。
+            EmbeddingServiceError: Embedding 模型加载失败。
+            VectorStoreError: 向量索引或检索失败。
+        """
+
         # 1. 查询 READY 文档
         docs = self._get_ready_documents(document_ids)
         if not docs:
@@ -206,20 +399,7 @@ class QaService:
             contexts = [dataclass_replace(contexts[idx], score=score) for idx, score in scored]
             context_doc_ids = [context_doc_ids[idx] for idx, _ in scored]
 
-        # 4. 调 LLM 问答
-        result = answer_question(question, contexts, chat_model)
-
-        # 5. 映射引用
-        citations = self._map_citations(result, contexts, context_doc_ids)
-
-        elapsed_ms = int((time.perf_counter() - start) * 1000)
-
-        return QueryResponse(
-            answer=result.answer_text,
-            citations=citations,
-            request_id=request_id,
-            elapsed_ms=elapsed_ms,
-        )
+        return contexts, context_doc_ids, chat_model
 
     # ------------------------------------------------------------------
     # 私有：文档查询

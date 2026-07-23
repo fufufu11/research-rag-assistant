@@ -27,9 +27,22 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 import streamlit as st
 
-from research_rag.ui.api_client import ApiClient, ApiClientError, DocumentInfo, QueryResult
+from research_rag.ui.api_client import (
+    ApiClient,
+    ApiClientError,
+    DocumentInfo,
+    QueryResult,
+    StreamDone,
+    StreamError,
+    StreamToken,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # 缓存 ApiClient 实例，避免每次 rerun 重建
 _CLIENT_KEY = "_api_client"
@@ -125,7 +138,13 @@ def _render_document_list(client: ApiClient) -> None:
 
 
 def _render_qa(client: ApiClient) -> None:
-    """渲染问答区：输入框 + 答案 + 引用展示。"""
+    """渲染问答区：输入框 + 流式答案 + 引用展示。
+
+    阶段 9.1 起默认走流式路径（``ask_question_stream`` + ``st.write_stream``）：
+    用户点击「提问」后，LLM 生成内容逐字渲染到界面；流结束后由 ``done`` 事件
+    携带的引用元数据补充渲染引用详情。问答结果存入 ``session_state``，后续
+    rerun（无按钮点击）时由 ``_render_query_result`` 从存储结果完整重渲染。
+    """
 
     st.header("❓ 文档问答")
 
@@ -151,15 +170,52 @@ def _render_qa(client: ApiClient) -> None:
     )
 
     if st.button("提问", type="primary", disabled=not question.strip()):
-        try:
-            with st.spinner("正在检索和生成答案…"):
-                result = client.ask_question(question.strip(), document_ids=selected_ids)
-            st.session_state["last_query_result"] = result
-        except ApiClientError as exc:
-            st.error(f"问答失败：{exc.detail}")
-            st.session_state.pop("last_query_result", None)
+        # 流式问答：用闭包 holder 捕获 done/error 事件元数据，
+        # token 事件文本 yield 给 st.write_stream 逐字渲染。
+        holder: dict[str, object] = {
+            "citations": [],
+            "request_id": "",
+            "elapsed_ms": 0,
+            "error": None,
+        }
 
-    _render_query_result()
+        def _token_generator() -> Iterator[str]:
+            try:
+                for event in client.ask_question_stream(
+                    question.strip(), document_ids=selected_ids
+                ):
+                    if isinstance(event, StreamToken):
+                        yield event.text
+                    elif isinstance(event, StreamDone):
+                        holder["citations"] = event.citations
+                        holder["request_id"] = event.request_id
+                        holder["elapsed_ms"] = event.elapsed_ms
+                    elif isinstance(event, StreamError):
+                        holder["error"] = event.detail
+            except ApiClientError as exc:
+                holder["error"] = exc.detail
+
+        st.subheader("💡 答案")
+        with st.spinner("正在检索和生成答案…"):
+            # ``_token_generator`` 只 yield str，``st.write_stream`` 返回 str。
+            answer = cast("str", st.write_stream(_token_generator()))
+
+        error = holder["error"]
+        if error is not None:
+            st.error(f"问答失败：{error}")
+            st.session_state.pop("last_query_result", None)
+        else:
+            result = QueryResult(
+                answer=answer,
+                citations=holder["citations"],  # type: ignore[arg-type]
+                request_id=holder["request_id"],  # type: ignore[arg-type]
+                elapsed_ms=holder["elapsed_ms"],  # type: ignore[arg-type]
+            )
+            st.session_state["last_query_result"] = result
+            st.caption(f"耗时 {result.elapsed_ms} ms | 请求 ID: `{result.request_id}`")
+            _render_citations(result)
+    else:
+        _render_query_result()
 
 
 def _format_page_range(start: int, end: int) -> str:
@@ -175,7 +231,7 @@ def _format_page_range(start: int, end: int) -> str:
 
 
 def _render_query_result() -> None:
-    """渲染上一次问答的答案和引用。"""
+    """渲染上一次问答的答案和引用（rerun 时从 session_state 恢复）。"""
 
     result: QueryResult | None = st.session_state.get("last_query_result")
     if result is None:
@@ -184,6 +240,11 @@ def _render_query_result() -> None:
     st.subheader("💡 答案")
     st.markdown(result.answer)
     st.caption(f"耗时 {result.elapsed_ms} ms | 请求 ID: `{result.request_id}`")
+    _render_citations(result)
+
+
+def _render_citations(result: QueryResult) -> None:
+    """渲染引用详情区（答案已由流式或 markdown 渲染，这里只渲染引用）。"""
 
     if not result.citations:
         st.info("本次回答未附带引用。")
