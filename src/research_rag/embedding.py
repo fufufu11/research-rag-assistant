@@ -8,8 +8,9 @@
   PROJECT_PLAN 第 5.1 节明确"直接使用 LangChain 构建 RAG 流程"，不手写余弦
   相似度。``InMemoryVectorStore`` 内部用 NumPy 算余弦相似度，分数越高越相关，
   已按相关度降序返回，我们直接用。
-- ``create_embeddings`` 是唯一接触真实模型的地方：
-  惰性导入 ``HuggingFaceEmbeddings``，未装 ``sentence-transformers`` 时抛
+- ``create_embeddings`` 是唯一接触真实模型的入口：按 ``EmbeddingConfig.provider``
+  分发到 ``_create_local_embeddings``（本地 HuggingFace，默认）或
+  ``_create_api_embeddings``（阿里百炼 OpenAI 兼容 API），未装依赖或配置缺失时抛
   ``EmbeddingServiceError``，把"依赖缺失"这种底层错误归一化成业务异常，
   上层不用关心是 ImportError 还是 RuntimeError。
 - ``sentence-transformers`` 放在可选 extra ``embedding``：
@@ -26,6 +27,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -49,6 +51,33 @@ DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
 # 默认 Top-K（PROJECT_PLAN.md 第 9.2 节：top_k 过大引入噪声、过小漏召回，8 是经验值）
 DEFAULT_TOP_K = 8
 
+# ---------------------------------------------------------------------------
+# Embedding Provider 配置（阶段 8.4：接入阿里百炼 API 跑中文评测）
+# ---------------------------------------------------------------------------
+# 默认 provider 为本地 HuggingFace 推理（生产默认路径）。设为 "dashscope" 时
+# 走阿里百炼 OpenAI 兼容 API（text-embedding-v4 等），设为 "jina" 时走 Jina AI
+# OpenAI 兼容 API（jina-embeddings-v3 等）。两者都适合本地 CPU 推理慢或需要
+# 更大模型（如 bge-m3）但不想本地部署的场景。通过 EMBEDDING_PROVIDER 环境变量切换。
+DEFAULT_EMBEDDING_PROVIDER = "local"
+# 阿里百炼（DashScope）OpenAI 兼容 endpoint
+DASHSCOPE_DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# 默认 API 模型（Qwen3-Embedding 系列，原生支持中英文，1024 维，8192 tokens）
+DASHSCOPE_DEFAULT_MODEL = "text-embedding-v4"
+# text-embedding-v4 默认维度（支持 64/128/256/512/768/1024/1536/2048）
+DASHSCOPE_DEFAULT_DIMENSIONS = 1024
+# 阿里百炼 Embedding 单次请求最大行数限制（超限返回 400），必须分批
+DASHSCOPE_MAX_BATCH_SIZE = 10
+# text-embedding-v4 单次请求最大 token 数
+DASHSCOPE_EMBEDDING_CTX_LENGTH = 8192
+# Jina AI OpenAI 兼容 endpoint（jina-embeddings-v3，多语言含中文，1024 维，8192 tokens）
+# 免费额度：500 RPM + 200 万 TPM，适合评测与低频调用
+JINA_DEFAULT_BASE_URL = "https://api.jina.ai/v1"
+JINA_DEFAULT_MODEL = "jina-embeddings-v3"
+JINA_DEFAULT_DIMENSIONS = 1024
+# Jina API 单次请求行数上限与百炼一致（保守取 10，避免超限）
+JINA_MAX_BATCH_SIZE = 10
+JINA_EMBEDDING_CTX_LENGTH = 8192
+
 
 class EmbeddingServiceError(RuntimeError):
     """Embedding 服务异常。
@@ -70,12 +99,40 @@ class EmbeddingConfig:
     """Embedding 配置。
 
     Attributes:
-        model_name: HuggingFace 模型名，默认 ``BAAI/bge-small-zh-v1.5``（中文优化，
-            生产面向中文用户）。英文或中英文混合场景可通过 ``EMBEDDING_MODEL``
-            环境变量切换为 ``BAAI/bge-small-en-v1.5`` 或 ``BAAI/bge-m3``。
+        model_name: 模型名。``provider="local"`` 时为 HuggingFace 模型名，默认
+            ``BAAI/bge-small-zh-v1.5``（中文优化，生产面向中文用户），英文或中英文
+            混合场景可通过 ``EMBEDDING_MODEL`` 环境变量切换为
+            ``BAAI/bge-small-en-v1.5`` 或 ``BAAI/bge-m3``。``provider="dashscope"``
+            时为阿里百炼模型名，默认 ``text-embedding-v4``。``provider="jina"`` 时
+            为 Jina AI 模型名，默认 ``jina-embeddings-v3``。
+        provider: Embedding 提供方，``"local"``（默认，本地 HuggingFace 推理）、
+            ``"dashscope"``（阿里百炼 OpenAI 兼容 API）或 ``"jina"``（Jina AI
+            OpenAI 兼容 API）。通过 ``EMBEDDING_PROVIDER`` 环境变量切换。API 模式
+            适合本地 CPU 推理慢或需更大模型但不想本地部署的场景。
+        api_key: API 模式所需的 API Key。为空时从 ``DASHSCOPE_API_KEY``（dashscope）
+            或 ``JINA_API_KEY``（jina）环境变量读取。本地模式忽略此字段。
+        base_url: API 模式的 endpoint。为空时用对应 provider 的默认 endpoint。
+        dimensions: API 模式的向量维度。``0`` 表示用模型默认（1024）。本地模式
+            忽略此字段（HuggingFace 模型维度固定）。
+        batch_size: API 模式的单次请求行数上限。``0`` 表示用默认值（10 行/次）。
+            ``OpenAIEmbeddings`` 内部按此值自动分批，无需调用方手动切分。
     """
 
     model_name: str = DEFAULT_EMBEDDING_MODEL
+    provider: str = DEFAULT_EMBEDDING_PROVIDER
+    api_key: str = ""
+    base_url: str = ""
+    dimensions: int = 0
+    batch_size: int = 0
+
+    def __post_init__(self) -> None:
+        # API 模式（dashscope / jina）下，若 model_name 仍是本地默认值（用户未
+        # 显式指定），自动切换到对应 provider 的默认模型，避免把 HuggingFace 模型名
+        # 传给 API。frozen=True 需用 object.__setattr__ 绕过不可变限制。
+        if self.provider == "dashscope" and self.model_name == DEFAULT_EMBEDDING_MODEL:
+            object.__setattr__(self, "model_name", DASHSCOPE_DEFAULT_MODEL)
+        elif self.provider == "jina" and self.model_name == DEFAULT_EMBEDDING_MODEL:
+            object.__setattr__(self, "model_name", JINA_DEFAULT_MODEL)
 
 
 @dataclass(frozen=True)
@@ -99,24 +156,48 @@ class RetrievalResult:
 
 
 def create_embeddings(config: EmbeddingConfig | None = None) -> Embeddings:
-    """创建 LangChain Embedding 适配器（本地 HuggingFace 模型）。
+    """创建 LangChain Embedding 适配器（按 ``provider`` 分支）。
 
-    这是本模块唯一接触真实模型的地方。惰性导入 ``HuggingFaceEmbeddings``：
-    未装 ``langchain-huggingface`` 或 ``sentence-transformers`` 时抛
-    ``EmbeddingServiceError``，把底层依赖错误归一化为业务异常。
+    本模块唯一接触真实模型的入口。根据 ``config.provider`` 选择后端：
+
+    - ``"local"``（默认）：惰性导入 ``HuggingFaceEmbeddings``，本地推理
+    - ``"dashscope"``：惰性导入 ``OpenAIEmbeddings``，调用阿里百炼 OpenAI 兼容 API
+
+    未装对应依赖或配置缺失时抛 ``EmbeddingServiceError``，把底层依赖错误归一化
+    为业务异常，上层不用关心是 ImportError 还是 RuntimeError。
 
     Args:
-        config: Embedding 配置，为 ``None`` 时使用默认值。
+        config: Embedding 配置，为 ``None`` 时使用默认值（本地 bge-small-zh-v1.5）。
 
     Returns:
         LangChain ``Embeddings`` 实例。
 
     Raises:
-        EmbeddingServiceError: 依赖未安装或模型加载失败。
+        EmbeddingServiceError: 依赖未安装、配置缺失（如 API Key 未设）或模型加载失败。
     """
     if config is None:
         config = EmbeddingConfig()
 
+    if config.provider in ("dashscope", "jina"):
+        return _create_api_embeddings(config)
+    return _create_local_embeddings(config)
+
+
+def _create_local_embeddings(config: EmbeddingConfig) -> Embeddings:
+    """本地 HuggingFace Embedding（``provider="local"``，默认路径）。
+
+    惰性导入 ``HuggingFaceEmbeddings``，未装 ``langchain-huggingface`` 或
+    ``sentence-transformers`` 时抛 ``EmbeddingServiceError``。
+
+    Args:
+        config: Embedding 配置（用 ``model_name`` 字段，其余字段忽略）。
+
+    Returns:
+        ``HuggingFaceEmbeddings`` 实例。
+
+    Raises:
+        EmbeddingServiceError: 依赖未安装或模型加载失败。
+    """
     try:
         from langchain_huggingface import HuggingFaceEmbeddings
     except ImportError as exc:
@@ -135,6 +216,82 @@ def create_embeddings(config: EmbeddingConfig | None = None) -> Embeddings:
         raise EmbeddingServiceError(msg) from exc
     except Exception as exc:
         msg = f"加载 HuggingFace Embedding 失败：{exc}"
+        raise EmbeddingServiceError(msg) from exc
+
+
+def _create_api_embeddings(config: EmbeddingConfig) -> Embeddings:
+    """OpenAI 兼容 API Embedding（``provider="dashscope"`` 或 ``"jina"``）。
+
+    惰性导入 ``langchain_openai.OpenAIEmbeddings``。按 ``config.provider`` 选择
+    默认 endpoint / 模型 / 维度 / API Key 环境变量：
+
+    - ``"dashscope"``（阿里百炼）：默认 ``text-embedding-v4``，读 ``DASHSCOPE_API_KEY``
+    - ``"jina"``（Jina AI）：默认 ``jina-embeddings-v3``，读 ``JINA_API_KEY``
+
+    API Key 优先取 ``config.api_key``，为空时从对应环境变量读取；两者均空时抛
+    ``EmbeddingServiceError``。单次请求行数限制 10（保守值），通过 ``chunk_size``
+    让 ``OpenAIEmbeddings`` 内部自动分批。``check_embedding_ctx_length=False``
+    关闭 tiktoken 分词检查（tiktoken 对非 OpenAI 中文模型分词不准确，会误报超长）。
+
+    Args:
+        config: Embedding 配置（用 ``provider`` / ``model_name`` / ``api_key`` /
+            ``base_url`` / ``dimensions`` / ``batch_size`` 字段，空值回退到 provider 默认）。
+
+    Returns:
+        ``OpenAIEmbeddings`` 实例（实例化不调用 API，首字节请求前不消耗 Token）。
+
+    Raises:
+        EmbeddingServiceError: 依赖未安装、API Key 缺失或实例化失败。
+    """
+    try:
+        from langchain_openai import OpenAIEmbeddings
+    except ImportError as exc:
+        msg = f"无法导入 langchain_openai，请确认已安装 langchain-openai。原始错误：{exc}"
+        raise EmbeddingServiceError(msg) from exc
+
+    # 按 provider 选择默认值与 API Key 环境变量名
+    if config.provider == "jina":
+        default_base_url = JINA_DEFAULT_BASE_URL
+        default_dimensions = JINA_DEFAULT_DIMENSIONS
+        default_batch = JINA_MAX_BATCH_SIZE
+        ctx_length = JINA_EMBEDDING_CTX_LENGTH
+        api_key_env = "JINA_API_KEY"
+        provider_label = "Jina"
+    else:  # dashscope
+        default_base_url = DASHSCOPE_DEFAULT_BASE_URL
+        default_dimensions = DASHSCOPE_DEFAULT_DIMENSIONS
+        default_batch = DASHSCOPE_MAX_BATCH_SIZE
+        ctx_length = DASHSCOPE_EMBEDDING_CTX_LENGTH
+        api_key_env = "DASHSCOPE_API_KEY"
+        provider_label = "DashScope"
+
+    api_key = config.api_key or os.environ.get(api_key_env, "")
+    if not api_key:
+        msg = (
+            f"{provider_label} API 模式缺少 API Key：请在 config.api_key 传入，或设置 "
+            f"环境变量 {api_key_env}。注意 .env 不会被自动加载，需显式设置。"
+        )
+        raise EmbeddingServiceError(msg)
+
+    base_url = config.base_url or default_base_url
+    model_name = config.model_name  # __post_init__ 已保证非空（dashscope/jina 有默认）
+    dimensions = config.dimensions or default_dimensions
+    chunk_size = config.batch_size or default_batch
+
+    try:
+        return OpenAIEmbeddings(
+            api_key=api_key,  # type: ignore[arg-type]
+            base_url=base_url,
+            model=model_name,
+            dimensions=dimensions,
+            chunk_size=chunk_size,
+            embedding_ctx_length=ctx_length,
+            # 关闭 tiktoken 上下文检查：tiktoken 对非 OpenAI 中文模型分词不准确，
+            # 会对正常中文文本误报超长并尝试截断。API 自身会校验 token 上限。
+            check_embedding_ctx_length=False,
+        )
+    except Exception as exc:
+        msg = f"加载 {provider_label} Embedding 失败（model={model_name}）：{exc}"
         raise EmbeddingServiceError(msg) from exc
 
 

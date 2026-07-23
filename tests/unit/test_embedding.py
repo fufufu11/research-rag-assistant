@@ -13,15 +13,24 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 from langchain_core.embeddings import Embeddings
 
 from research_rag.chunker import Chunk
 from research_rag.embedding import (
+    DASHSCOPE_DEFAULT_BASE_URL,
+    DASHSCOPE_DEFAULT_DIMENSIONS,
+    DASHSCOPE_DEFAULT_MODEL,
+    DASHSCOPE_MAX_BATCH_SIZE,
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_PROVIDER,
     DEFAULT_TOP_K,
+    JINA_DEFAULT_BASE_URL,
+    JINA_DEFAULT_DIMENSIONS,
+    JINA_DEFAULT_MODEL,
+    JINA_MAX_BATCH_SIZE,
     EmbeddingConfig,
     EmbeddingServiceError,
     RetrievalResult,
@@ -333,3 +342,220 @@ def test_end_to_end_chunk_pages_to_retrieve() -> None:
         assert r.start_page in (1, 2)
         assert r.end_page in (1, 2)
         assert r.chunk_index in (0, 1, 2)
+
+
+# ---------------------------------------------------------------------------
+# create_embeddings：dashscope API 模式（阶段 8.4）
+# ---------------------------------------------------------------------------
+
+
+class _MockOpenAIEmbeddings:
+    """记录构造参数的 ``OpenAIEmbeddings`` 替身，用于验证 API 模式传参。
+
+    不发真实 HTTP 请求，``embed_documents`` / ``embed_query`` 返回占位向量。
+    """
+
+    instances: ClassVar[list[_MockOpenAIEmbeddings]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs: dict[str, object] = dict(kwargs)
+        _MockOpenAIEmbeddings.instances.append(self)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        del text  # 满足 Embeddings 协议签名，参数本身不使用
+        return [0.0]
+
+
+@pytest.fixture
+def _reset_mock_embeddings() -> None:
+    """每个测试前清空 Mock 实例记录，避免相互污染。"""
+    _MockOpenAIEmbeddings.instances.clear()
+
+
+def test_embedding_config_default_provider_is_local() -> None:
+    """默认 EmbeddingConfig 应为本地模式（向后兼容）。"""
+    config = EmbeddingConfig()
+    assert config.provider == DEFAULT_EMBEDDING_PROVIDER
+    assert config.provider == "local"
+    assert config.api_key == ""
+    assert config.base_url == ""
+    assert config.dimensions == 0
+    assert config.batch_size == 0
+
+
+def test_create_embeddings_dashscope_missing_api_key_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """provider=dashscope 但 API Key 缺失（config 与环境变量均空）时应抛错。"""
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    config = EmbeddingConfig(provider="dashscope", model_name="text-embedding-v4")
+    with pytest.raises(EmbeddingServiceError, match="API Key"):
+        create_embeddings(config)
+
+
+def test_create_embeddings_dashscope_missing_langchain_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """provider=dashscope 但 langchain_openai 不可导入时应抛 EmbeddingServiceError。"""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "langchain_openai", None)
+    config = EmbeddingConfig(provider="dashscope", api_key="sk-test")
+    with pytest.raises(EmbeddingServiceError, match="langchain_openai"):
+        create_embeddings(config)
+
+
+def test_create_embeddings_dashscope_uses_config_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    _reset_mock_embeddings: None,
+) -> None:
+    """config.api_key 非空时优先使用，并按 dashscope 默认填充 base_url/dimensions/batch。"""
+    import langchain_openai
+
+    monkeypatch.setattr(langchain_openai, "OpenAIEmbeddings", _MockOpenAIEmbeddings)
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    config = EmbeddingConfig(
+        provider="dashscope", model_name="text-embedding-v4", api_key="sk-test"
+    )
+    emb = create_embeddings(config)
+
+    assert isinstance(emb, _MockOpenAIEmbeddings)
+    assert emb.kwargs["api_key"] == "sk-test"
+    assert emb.kwargs["model"] == "text-embedding-v4"
+    assert emb.kwargs["base_url"] == DASHSCOPE_DEFAULT_BASE_URL
+    assert emb.kwargs["dimensions"] == DASHSCOPE_DEFAULT_DIMENSIONS
+    assert emb.kwargs["chunk_size"] == DASHSCOPE_MAX_BATCH_SIZE
+    assert emb.kwargs["check_embedding_ctx_length"] is False
+
+
+def test_create_embeddings_dashscope_uses_env_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    _reset_mock_embeddings: None,
+) -> None:
+    """config.api_key 为空时应从 DASHSCOPE_API_KEY 环境变量读取。"""
+    import langchain_openai
+
+    monkeypatch.setattr(langchain_openai, "OpenAIEmbeddings", _MockOpenAIEmbeddings)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-env")
+    config = EmbeddingConfig(provider="dashscope")  # api_key 与 model_name 均空
+
+    emb = create_embeddings(config)
+
+    assert emb.kwargs["api_key"] == "sk-env"
+    assert emb.kwargs["model"] == DASHSCOPE_DEFAULT_MODEL  # 默认 text-embedding-v4
+
+
+def test_create_embeddings_dashscope_custom_dimensions_and_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    _reset_mock_embeddings: None,
+) -> None:
+    """config 显式指定 dimensions/batch_size 时应覆盖 dashscope 默认。"""
+    import langchain_openai
+
+    monkeypatch.setattr(langchain_openai, "OpenAIEmbeddings", _MockOpenAIEmbeddings)
+    config = EmbeddingConfig(provider="dashscope", api_key="sk-test", dimensions=512, batch_size=5)
+
+    emb = create_embeddings(config)
+
+    assert emb.kwargs["dimensions"] == 512
+    assert emb.kwargs["chunk_size"] == 5
+
+
+def test_create_embeddings_dashscope_custom_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+    _reset_mock_embeddings: None,
+) -> None:
+    """config.base_url 非空时应覆盖 dashscope 默认 endpoint。"""
+    import langchain_openai
+
+    monkeypatch.setattr(langchain_openai, "OpenAIEmbeddings", _MockOpenAIEmbeddings)
+    config = EmbeddingConfig(
+        provider="dashscope",
+        api_key="sk-test",
+        base_url="https://custom.example.com/v1",
+    )
+
+    emb = create_embeddings(config)
+
+    assert emb.kwargs["base_url"] == "https://custom.example.com/v1"
+
+
+# ---------------------------------------------------------------------------
+# create_embeddings：jina API 模式（阶段 8.4）
+# ---------------------------------------------------------------------------
+
+
+def test_embedding_config_jina_defaults_model() -> None:
+    """provider=jina 时 model_name 应自动切换到 jina-embeddings-v3。"""
+    config = EmbeddingConfig(provider="jina")
+    assert config.model_name == JINA_DEFAULT_MODEL
+    assert config.model_name == "jina-embeddings-v3"
+
+
+def test_create_embeddings_jina_missing_api_key_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """provider=jina 但 API Key 缺失（config 与 JINA_API_KEY 均空）时应抛错。"""
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    config = EmbeddingConfig(provider="jina", model_name="jina-embeddings-v3")
+    with pytest.raises(EmbeddingServiceError, match="Jina"):
+        create_embeddings(config)
+
+
+def test_create_embeddings_jina_uses_config_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    _reset_mock_embeddings: None,
+) -> None:
+    """jina 模式应使用 config.api_key 并按 jina 默认填充 base_url/dimensions/batch。"""
+    import langchain_openai
+
+    monkeypatch.setattr(langchain_openai, "OpenAIEmbeddings", _MockOpenAIEmbeddings)
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    config = EmbeddingConfig(provider="jina", model_name="jina-embeddings-v3", api_key="jina-test")
+
+    emb = create_embeddings(config)
+
+    assert isinstance(emb, _MockOpenAIEmbeddings)
+    assert emb.kwargs["api_key"] == "jina-test"
+    assert emb.kwargs["model"] == "jina-embeddings-v3"
+    assert emb.kwargs["base_url"] == JINA_DEFAULT_BASE_URL
+    assert emb.kwargs["dimensions"] == JINA_DEFAULT_DIMENSIONS
+    assert emb.kwargs["chunk_size"] == JINA_MAX_BATCH_SIZE
+    assert emb.kwargs["check_embedding_ctx_length"] is False
+
+
+def test_create_embeddings_jina_uses_env_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    _reset_mock_embeddings: None,
+) -> None:
+    """jina 模式 config.api_key 为空时应从 JINA_API_KEY 环境变量读取。"""
+    import langchain_openai
+
+    monkeypatch.setattr(langchain_openai, "OpenAIEmbeddings", _MockOpenAIEmbeddings)
+    monkeypatch.setenv("JINA_API_KEY", "jina-env")
+    config = EmbeddingConfig(provider="jina")
+
+    emb = create_embeddings(config)
+
+    assert emb.kwargs["api_key"] == "jina-env"
+    assert emb.kwargs["model"] == JINA_DEFAULT_MODEL
+    assert emb.kwargs["base_url"] == JINA_DEFAULT_BASE_URL
+
+
+def test_create_embeddings_jina_does_not_use_dashscope_env(
+    monkeypatch: pytest.MonkeyPatch,
+    _reset_mock_embeddings: None,
+) -> None:
+    """jina 模式应忽略 DASHSCOPE_API_KEY，只读 JINA_API_KEY。"""
+    import langchain_openai
+
+    monkeypatch.setattr(langchain_openai, "OpenAIEmbeddings", _MockOpenAIEmbeddings)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-ignored")
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    config = EmbeddingConfig(provider="jina")
+
+    with pytest.raises(EmbeddingServiceError, match="JINA_API_KEY"):
+        create_embeddings(config)

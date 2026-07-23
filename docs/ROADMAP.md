@@ -5,10 +5,10 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成）
-- **测试**：316 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）
+- **测试**：373 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
-- **评测**：BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)
+- **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
 ---
 
@@ -19,7 +19,7 @@
 | 8.1 | BGE Reranker 重排序 | ✅ 已完成（PR #37，Issue #36） | Hit@1 +23%，MRR +33% | 无 | 高 |
 | 8.2 | 跨页切分 | ✅ 已完成（Issue #38） | Hit@5 +3.3%（70%→73.3%），Hit@1 有下降 | 无 | 高 |
 | 8.3 | 混合检索（BM25 + 向量） | ✅ 已完成（PR #41，Issue #40） | Hit@5 +3.3%（73.3%→76.7%），MRR +10%（0.551→0.607） | 无 | 高 |
-| 8.4 | 多语言 Embedding（bge-m3） | ✅ 已完成（调整方案，Issue #42） | 修复 EMBEDDING_MODEL 环境变量读取 gap + bge-m3 可选集成 | 8.2 | 中 |
+| 8.4 | 多语言 Embedding（bge-m3） | ✅ 已完成（调整方案，Issue #42） | 修复 EMBEDDING_MODEL 环境变量读取 gap + bge-m3 可选集成 + 中文论文评测验证配置驱动策略 | 8.2 | 中 |
 
 **验收标准**：Hit@5 提升到 75%+，MRR 提升到 0.65+。
 
@@ -40,18 +40,19 @@
 - **风险**：BM25 对中文需 jieba 分词，英文场景下直接用空格分词即可
 - **评测结果**：Hit@5 在所有 5 组参数中均提升或持平（+3.3% ~ +10.0%），最优组 Hit@1 +6.7%（40%→46.7%），MRR +10%（0.551→0.607）
 
-### 8.4 多语言 Embedding（bge-m3）
+### 8.4 多语言 Embedding（bge-m3）+ 中文论文评测
 
-- **状态**：✅ 已完成（调整方案，Issue #42）
-- **目标**：统一中英文混合检索场景，改善跨论文语义干扰（4 条 Hit@5 未命中）
+- **状态**：✅ 已完成（调整方案，Issue #42；中文评测补充验证完成）
+- **目标**：统一中英文混合检索场景，改善跨论文语义干扰（4 条 Hit@5 未命中）；补充中文论文评测数据集验证配置驱动策略
 - **最终交付**：
   - 修复预存在 gap：`EMBEDDING_MODEL` 环境变量此前声明在 `.env.example` 但从未被代码读取，新增 `get_embedding_config()` 接入 `get_qa_service` 与 `_create_vector_store`，让用户能按场景切换模型
   - 集成 `BAAI/bge-m3` 多语言模型作为可选项（vector_store 维度动态推断已支持 1024 维），通过 `EMBEDDING_MODEL=BAAI/bge-m3` 启用
   - 默认仍保留 `BAAI/bge-small-zh-v1.5`（中文小模型，512 维，体积小、推理快，生产面向中文用户）
+  - 新增中文论文评测数据集 `eval/dataset_zh.json`（3 篇 ChinaXiv 中文 AI 论文，30 条问题）与 `eval/pdfs/zh/`，并完成 bge-small-zh 与 jina-embeddings-v3（API）的 8 组对比评测
 - **方案调整原因**：实测 bge-m3 在纯英文论文评测下不及 bge-small-en（Hit@5 70.0% vs 76.7%，未命中 9 条 vs 7 条），未达 Issue #42 原验收标准。多语言模型在语言专用小模型的优势场景下不占优是预期内的模型特性，强行切换默认会引入英文场景退步。改为配置驱动策略：中文用 bge-small-zh、英文用 bge-small-en、混合用 bge-m3，把语言选择权通过 `EMBEDDING_MODEL` 交给用户
 - **技术方案**：新增 `get_embedding_config()` 读 `EMBEDDING_MODEL` 环境变量；仅用 bge-m3 的 dense 向量，不引入 FlagEmbedding（sparse 与现有 BM25 重复）
 - **风险**：bge-m3 模型体积大（约 2.2GB），推理慢于 bge-small；维度变化（512→1024）需重新索引已上传文档（删除文档后重新上传，或清空 Qdrant 集合）
-- **验收**：环境变量修复 + bge-m3 可选集成交付完成；中文/混合场景的实际收益需补充中文评测数据集后验证（当前评测数据集为纯英文论文，无法直接验证中文场景改善）
+- **验收**：环境变量修复 + bge-m3 可选集成交付完成；中文论文评测补充验证完成，结论支持配置驱动策略——`bge-small-zh-v1.5`（本地中文专用）在中文论文场景显著优于 `jina-embeddings-v3`（多语言 API）：最优 Hit@5 90.0% vs 60.0%、MRR 0.783 vs 0.583，且本地推理延迟低 40-50 倍。详见 [中文评测报告](./evaluation_report_zh.md)
 
 ---
 
