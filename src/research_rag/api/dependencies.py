@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import Depends, Request
 
+from research_rag.embedding import DEFAULT_EMBEDDING_MODEL, EmbeddingConfig
 from research_rag.qa_service import (
     DEFAULT_LLM_MAX_RETRIES,
     DEFAULT_LLM_TIMEOUT,
@@ -174,16 +175,38 @@ def get_llm_config() -> LlmConfig:
     )
 
 
+def get_embedding_config() -> EmbeddingConfig:
+    """从环境变量构造 ``EmbeddingConfig``（阶段 8.4、.env.example）。
+
+    读 ``EMBEDDING_MODEL``（HuggingFace 模型名）。未设置或为空时用
+    ``DEFAULT_EMBEDDING_MODEL``（``BAAI/bge-small-zh-v1.5``，中文优化，生产
+    面向中文用户）。评测英文论文时可传 ``BAAI/bge-small-en-v1.5``（英文专用
+    小模型，实测优于默认和多语言 bge-m3）；中英文混合场景可传
+    ``BAAI/bge-m3``（多语言，dense 1024 维，体积约 2.2GB）。
+
+    注：阶段 8.4 实测 bge-m3 在纯英文论文评测下不及 bge-small-en（Hit@5
+    70.0% vs 76.7%），故默认仍保留小模型，bge-m3 作为多语言场景的可选项。
+
+    测试时通过 ``app.dependency_overrides[get_embedding_config]`` 替换为固定配置，
+    或用 ``monkeypatch`` 修改环境变量。
+    """
+
+    model_name = os.environ.get("EMBEDDING_MODEL", "").strip() or DEFAULT_EMBEDDING_MODEL
+    return EmbeddingConfig(model_name=model_name)
+
+
 def get_qa_service(
     session: Session = Depends(get_db),
     llm_config: LlmConfig = Depends(get_llm_config),
+    embedding_config: EmbeddingConfig = Depends(get_embedding_config),
     vector_store: QdrantVectorStore | None = Depends(get_vector_store),
     reranker: BaseReranker | None = Depends(get_reranker),
 ) -> QaService:
-    """用当前请求的 Session + LlmConfig + VectorStore + Reranker 构造 ``QaService``。
+    """用当前请求的 Session + LlmConfig + EmbeddingConfig + VectorStore + Reranker 构造 ``QaService``。
 
     依赖 ``get_db``（Session）、``get_llm_config``（LlmConfig）、
-    ``get_vector_store``（QdrantVectorStore）和 ``get_reranker``（BaseReranker）。
+    ``get_embedding_config``（EmbeddingConfig）、``get_vector_store``
+    （QdrantVectorStore）和 ``get_reranker``（BaseReranker）。
     ``QaService`` 内部会惰性创建 Embedding 和 ChatModel（第一次调用
     ``answer`` 时），测试时通过 ``app.dependency_overrides[get_qa_service]``
     替换为 Mock，完全跳过真实数据库、LLM 和 Embedding 调用。
@@ -197,6 +220,7 @@ def get_qa_service(
     return QaService(
         session,
         llm_config,
+        embedding_config=embedding_config,
         vector_store=vector_store,
         reranker=reranker,
         bm25_enabled=is_bm25_enabled(),

@@ -346,8 +346,10 @@ def run_evaluation(
         experiments: 实验配置列表。
         only: 仅运行指定名称的实验（None 表示全部）。
         embedding_model: Embedding 模型名（HuggingFace）。为 ``None`` 时用
-            生产默认（``DEFAULT_EMBEDDING_MODEL``，中文优化）。评测英文论文
-            时建议传 ``BAAI/bge-small-en-v1.5`` 等英文模型以获得更准确结果。
+            生产默认（``DEFAULT_EMBEDDING_MODEL``，中文优化 bge-small-zh-v1.5）。
+            评测纯英文论文时建议传 ``BAAI/bge-small-en-v1.5``（英文专用小模型，
+            实测优于默认中文模型和多语言 bge-m3）；中英文混合场景可传
+            ``BAAI/bge-m3``（多语言，dense 1024 维，体积约 2.2GB）。
         reranker_model: Reranker 模型名（HuggingFace）。为 ``None`` 时跳过
             重排评测。指定时对每组实验额外运行一次带 reranker 的评测。
         cross_page: 是否启用跨页切分（阶段 8.2，默认 ``True``）。传 ``False``
@@ -568,8 +570,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Embedding 模型名（HuggingFace），默认用生产配置 "
-            f"({DEFAULT_EMBEDDING_MODEL}，中文优化)。评测英文论文建议传 "
-            "BAAI/bge-small-en-v1.5 等英文模型以获得更准确结果"
+            f"({DEFAULT_EMBEDDING_MODEL}，中文优化)。评测纯英文论文时建议传 "
+            "BAAI/bge-small-en-v1.5（实测优于默认和多语言 bge-m3）；"
+            "中英文混合场景可传 BAAI/bge-m3（多语言，约 2.2GB）"
         ),
     )
     p_run.add_argument(

@@ -14,7 +14,7 @@
 
 ### Embedding 与向量检索
 
-- 基于 LangChain 的 Embedding 适配器（默认 `BAAI/bge-small-zh-v1.5`）
+- 基于 LangChain 的 Embedding 适配器（默认 `BAAI/bge-small-zh-v1.5`，中文优化；英文或中英文混合场景可通过 `EMBEDDING_MODEL` 环境变量切换为 `BAAI/bge-small-en-v1.5` 或 `BAAI/bge-m3` 多语言模型）
 - Top-K 向量检索，按余弦相似度降序
 - Qdrant 向量数据库（未配置时回退到 `InMemoryVectorStore`）
 - BGE Reranker 重排序（Cross-Encoder 两阶段检索，默认关闭，`RERANKER_ENABLED=true` 启用）

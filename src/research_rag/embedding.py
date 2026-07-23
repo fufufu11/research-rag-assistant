@@ -38,8 +38,13 @@ if TYPE_CHECKING:
 
     from research_rag.chunker import Chunk
 
-# 默认 Embedding 模型（PROJECT_PLAN.md 第 9.2 节、.env.example）
-# bge-small-zh-v1.5：中文优化、维度 512、体积小（约 100MB），适合学习与原型
+# 默认 Embedding 模型（中文优化，生产面向中文用户）
+# bge-small-zh-v1.5：BAAI 中文小模型，dense 向量 512 维，体积小、推理快，
+# 中文场景下表现最佳。英文场景或中英文混合场景可通过 EMBEDDING_MODEL 环境变量
+# 切换为 BAAI/bge-small-en-v1.5（英文专用）或 BAAI/bge-m3（多语言，dense
+# 1024 维，体积约 2.2GB，原生支持中英文，推理慢于 bge-small）。
+# 注：阶段 8.4 实测 bge-m3 在纯英文论文评测下不及 bge-small-en，故默认仍保留
+# 小模型，bge-m3 作为多语言场景的可选项（详见 docs/ROADMAP.md 8.4 节）。
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
 # 默认 Top-K（PROJECT_PLAN.md 第 9.2 节：top_k 过大引入噪声、过小漏召回，8 是经验值）
 DEFAULT_TOP_K = 8
@@ -65,7 +70,9 @@ class EmbeddingConfig:
     """Embedding 配置。
 
     Attributes:
-        model_name: HuggingFace 模型名，默认 ``BAAI/bge-small-zh-v1.5``。
+        model_name: HuggingFace 模型名，默认 ``BAAI/bge-small-zh-v1.5``（中文优化，
+            生产面向中文用户）。英文或中英文混合场景可通过 ``EMBEDDING_MODEL``
+            环境变量切换为 ``BAAI/bge-small-en-v1.5`` 或 ``BAAI/bge-m3``。
     """
 
     model_name: str = DEFAULT_EMBEDDING_MODEL

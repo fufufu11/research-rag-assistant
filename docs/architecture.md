@@ -42,7 +42,7 @@
 | Web 框架 | FastAPI + Pydantic | 类型校验、自动 OpenAPI 文档、异步接口 |
 | PDF 解析 | PyMuPDF | 按页提取文本并保留页码 |
 | 向量数据库 | Qdrant | 支持 Payload 过滤，Docker 部署方便；未配置时回退到 `InMemoryVectorStore` |
-| Embedding | `BAAI/bge-small-zh-v1.5` | 本地中文模型；模型名可通过环境变量配置 |
+| Embedding | `BAAI/bge-small-zh-v1.5` | 中文小模型（512 维，生产面向中文用户）；英文或中英文混合场景可通过 `EMBEDDING_MODEL` 环境变量切换为 `BAAI/bge-small-en-v1.5` 或 `BAAI/bge-m3`（多语言，1024 维） |
 | 大模型 | OpenAI 兼容协议模型服务 | 通过环境变量切换 `base_url` / `api_key` / `model` |
 | 元数据数据库 | SQLite（默认）/ PostgreSQL | SQLite 降低本地部署难度，生产可切 PostgreSQL |
 | ORM 与迁移 | SQLAlchemy 2 + Alembic | 类型安全的数据模型与数据库迁移 |
