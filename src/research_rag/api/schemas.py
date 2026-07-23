@@ -126,7 +126,7 @@ class CitationRead(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    """问答请求（PROJECT_PLAN.md 第 8.4 节请求结构）。
+    """问答请求（PROJECT_PLAN.md 第 8.4 节请求结构 + 阶段 9.1 流式扩展）。
 
     Attributes:
         question: 用户问题，必填，非空字符串。
@@ -134,11 +134,15 @@ class QueryRequest(BaseModel):
             ``status=ready`` 的文档。
         top_k: 检索返回的最相关片段数。默认从环境变量 ``RETRIEVAL_TOP_K``
             读取，未设置或非法时回退到 ``DEFAULT_TOP_K``（8）。
+        stream: 是否以 SSE 流式返回 LLM 生成内容（阶段 9.1）。``False``（默认）
+            返回完整 ``QueryResponse`` JSON；``True`` 返回
+            ``text/event-stream``，事件类型 ``token`` / ``done`` / ``error``。
     """
 
     question: str = Field(min_length=1)
     document_ids: list[uuid.UUID] = Field(default_factory=list)
     top_k: int = Field(default_factory=_get_default_top_k)
+    stream: bool = False
 
 
 class QueryResponse(BaseModel):

@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,6 +31,9 @@ from research_rag.ui.api_client import (
     Citation,
     DocumentInfo,
     QueryResult,
+    StreamDone,
+    StreamError,
+    StreamToken,
 )
 
 # ---------------------------------------------------------------------------
@@ -100,6 +104,44 @@ def make_query_dict(**overrides: object) -> dict[str, object]:
     }
     base.update(overrides)
     return base
+
+
+def make_sse_lines(events: list[tuple[str, str]]) -> list[str]:
+    """从 ``[(event_name, data_json), ...]`` 构造 SSE 行列表。
+
+    每个事件生成 ``event: <name>`` + ``data: <json>`` + 空行（事件分隔）。
+    ``iter_lines`` 逐行产出，空行触发 ``_parse_sse_stream`` 的事件结束逻辑。
+    """
+
+    lines: list[str] = []
+    for event_name, data_json in events:
+        lines.append(f"event: {event_name}")
+        lines.append(f"data: {data_json}")
+        lines.append("")  # 空行：事件分隔
+    return lines
+
+
+def make_sse_response(
+    lines: list[str],
+    status_code: int = 200,
+    json_data: object | None = None,
+) -> MagicMock:
+    """构造模拟 SSE 流式响应的 Mock 对象。
+
+    ``iter_lines`` 返回预设行列表（模拟 ``decode_unicode=True`` 的 str 行）。
+    非 2xx 时设置 ``json()`` 返回错误 detail（供 ``_extract_detail`` 解析）。
+    """
+
+    response = MagicMock(spec=requests.Response)
+    response.status_code = status_code
+    response.ok = 200 <= status_code < 300
+    response.iter_lines.return_value = lines
+    if json_data is not None:
+        response.json.return_value = json_data
+    elif not response.ok:
+        response.json.return_value = {"detail": "服务端错误"}
+        response.text = '{"detail": "服务端错误"}'
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -374,3 +416,157 @@ class TestErrorDetailExtraction:
             client.list_documents()
 
         assert exc_info.value.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# ask_question_stream（阶段 9.1 SSE）
+# ---------------------------------------------------------------------------
+
+
+class TestAskQuestionStream:
+    @patch("research_rag.ui.api_client.requests.post")
+    def test_parses_token_and_done_events(self, mock_post: MagicMock) -> None:
+        """正常 SSE：token 事件产出 StreamToken，done 事件产出 StreamDone（含引用）。"""
+
+        cite_dict = make_citation_dict()
+        sse_lines = make_sse_lines(
+            [
+                ("token", json.dumps({"text": "Hello "}, ensure_ascii=False)),
+                ("token", json.dumps({"text": "world [C1]"}, ensure_ascii=False)),
+                (
+                    "done",
+                    json.dumps(
+                        {
+                            "citations": [cite_dict],
+                            "request_id": "33333333-3333-3333-3333-333333333333",
+                            "elapsed_ms": 200,
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            ]
+        )
+        mock_post.return_value = make_sse_response(sse_lines)
+
+        client = ApiClient()
+        events = list(client.ask_question_stream("问题"))
+
+        # 2 个 token + 1 个 done
+        tokens = [e for e in events if isinstance(e, StreamToken)]
+        dones = [e for e in events if isinstance(e, StreamDone)]
+        assert len(tokens) == 2
+        assert tokens[0].text == "Hello "
+        assert tokens[1].text == "world [C1]"
+        assert len(dones) == 1
+        assert dones[0].elapsed_ms == 200
+        assert dones[0].request_id == "33333333-3333-3333-3333-333333333333"
+        assert len(dones[0].citations) == 1
+        cite = dones[0].citations[0]
+        assert isinstance(cite, Citation)
+        assert cite.document_name == "test.pdf"
+        assert cite.start_page == 1
+        assert cite.score == pytest.approx(0.85)
+
+        # 验证请求参数
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["url"] == f"{DEFAULT_API_BASE_URL}/queries"
+        assert call_kwargs["json"] == {"question": "问题", "stream": True}
+        assert call_kwargs["stream"] is True
+
+    @patch("research_rag.ui.api_client.requests.post")
+    def test_parses_error_event(self, mock_post: MagicMock) -> None:
+        """SSE error 事件：产出 StreamError，不抛异常。"""
+
+        sse_lines = make_sse_lines(
+            [
+                ("error", json.dumps({"detail": "上下文证据不足"}, ensure_ascii=False)),
+            ]
+        )
+        mock_post.return_value = make_sse_response(sse_lines)
+
+        client = ApiClient()
+        events = list(client.ask_question_stream("问题"))
+
+        errors = [e for e in events if isinstance(e, StreamError)]
+        assert len(errors) == 1
+        assert "证据不足" in errors[0].detail
+
+    @patch("research_rag.ui.api_client.requests.post")
+    def test_http_error_raises_api_client_error(self, mock_post: MagicMock) -> None:
+        """HTTP 非 2xx：抛 ApiClientError（含 status_code 和 detail）。"""
+
+        mock_post.return_value = make_sse_response([], status_code=422)
+
+        client = ApiClient()
+        with pytest.raises(ApiClientError) as exc_info:
+            list(client.ask_question_stream("问题"))
+
+        assert exc_info.value.status_code == 422
+        assert "服务端错误" in exc_info.value.detail
+
+    @patch("research_rag.ui.api_client.requests.post")
+    def test_network_error_wrapped(self, mock_post: MagicMock) -> None:
+        """网络错误：包装为 ApiClientError（status_code=0）。"""
+
+        mock_post.side_effect = requests.ConnectionError("Connection refused")
+
+        client = ApiClient()
+        with pytest.raises(ApiClientError) as exc_info:
+            list(client.ask_question_stream("问题"))
+
+        assert exc_info.value.status_code == 0
+        assert "无法连接" in exc_info.value.detail
+
+    @patch("research_rag.ui.api_client.requests.post")
+    def test_passes_document_ids_and_top_k(self, mock_post: MagicMock) -> None:
+        """document_ids 和 top_k 正确传入请求体。"""
+
+        sse_lines = make_sse_lines(
+            [
+                (
+                    "done",
+                    json.dumps(
+                        {
+                            "citations": [],
+                            "request_id": "44444444-4444-4444-4444-444444444444",
+                            "elapsed_ms": 50,
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            ]
+        )
+        mock_post.return_value = make_sse_response(sse_lines)
+
+        client = ApiClient()
+        list(client.ask_question_stream("问题", document_ids=["doc-1", "doc-2"], top_k=5))
+
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["json"] == {
+            "question": "问题",
+            "stream": True,
+            "document_ids": ["doc-1", "doc-2"],
+            "top_k": 5,
+        }
+
+    @patch("research_rag.ui.api_client.requests.post")
+    def test_no_trailing_empty_line_still_parses(self, mock_post: MagicMock) -> None:
+        """流末尾无空行（容错）：最后一个事件仍能被解析。"""
+
+        sse_lines = [
+            "event: token",
+            f"data: {json.dumps({'text': 'Hi'}, ensure_ascii=False)}",
+            "event: done",
+            f"data: {json.dumps({'citations': [], 'request_id': 'x', 'elapsed_ms': 1}, ensure_ascii=False)}",
+            # 无末尾空行（容错：流结束时仍有未发事件）
+        ]
+        mock_post.return_value = make_sse_response(sse_lines)
+
+        client = ApiClient()
+        events = list(client.ask_question_stream("问题"))
+
+        tokens = [e for e in events if isinstance(e, StreamToken)]
+        dones = [e for e in events if isinstance(e, StreamDone)]
+        assert len(tokens) == 1
+        assert tokens[0].text == "Hi"
+        assert len(dones) == 1

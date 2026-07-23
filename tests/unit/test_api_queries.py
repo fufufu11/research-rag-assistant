@@ -31,12 +31,20 @@ from research_rag.db.models import DocumentNotFoundError
 from research_rag.db.session import create_session_factory
 from research_rag.embedding import DEFAULT_TOP_K, EmbeddingServiceError, VectorStoreError
 from research_rag.qa_service import InsufficientEvidenceError, LlmServiceError
-from research_rag.services.qa_service import NoAvailableDocumentsError, QaService
+from research_rag.services.qa_service import (
+    NoAvailableDocumentsError,
+    QaService,
+    StreamDoneEvent,
+    StreamErrorEvent,
+    StreamTokenEvent,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncIterator, Iterator
 
     from fastapi import FastAPI
+
+    from research_rag.services.qa_service import StreamEvent
 
 
 # ---------------------------------------------------------------------------
@@ -275,3 +283,112 @@ def test_create_query_empty_body_returns_422(client: TestClient, mock_service: M
 
     assert response.status_code == 422
     mock_service.answer.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/queries —— 流式 SSE（阶段 9.1）
+# ---------------------------------------------------------------------------
+
+
+async def _stream_token_then_done() -> AsyncIterator[StreamEvent]:
+    """构造正常流式事件序列：2 个 token + 1 个 done。"""
+    yield StreamTokenEvent(text="Hello ")
+    yield StreamTokenEvent(text="world [C1]。")
+    yield StreamDoneEvent(
+        citations=[
+            CitationRead(
+                document_id=uuid.uuid4(),
+                document_name="paper.pdf",
+                start_page=1,
+                end_page=1,
+                chunk_index=0,
+                snippet="原文片段。",
+                score=0.9,
+            )
+        ],
+        request_id=uuid.uuid4(),
+        elapsed_ms=120,
+    )
+
+
+def test_create_query_stream_returns_sse(client: TestClient, mock_service: MagicMock) -> None:
+    """stream=true：返回 text/event-stream，含 token + done 事件。"""
+
+    mock_service.answer_stream.return_value = _stream_token_then_done()
+
+    response = client.post("/api/v1/queries", json={"question": "问题", "stream": True})
+
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers.get("content-type", "")
+    assert response.headers.get("cache-control") == "no-cache"
+
+    body = response.text
+    # SSE 事件格式：event: <name>\ndata: <json>\n\n
+    assert "event: token" in body
+    assert "event: done" in body
+    assert "Hello " in body
+    assert "world [C1]" in body
+    assert "paper.pdf" in body  # done 事件中的引用元数据
+
+    # 验证 answer_stream 被正确调用
+    mock_service.answer_stream.assert_called_once_with(
+        question="问题",
+        document_ids=[],
+        top_k=DEFAULT_TOP_K,
+    )
+    # 非流式路径不应被调用
+    mock_service.answer.assert_not_called()
+
+
+async def _stream_error_only() -> AsyncIterator[StreamEvent]:
+    """构造错误流式事件序列：仅 1 个 error。"""
+    yield StreamErrorEvent(detail="上下文证据不足以回答该问题。")
+
+
+def test_create_query_stream_error_event(client: TestClient, mock_service: MagicMock) -> None:
+    """stream=true + 检索异常：SSE 中含 error 事件，HTTP 仍为 200。"""
+
+    mock_service.answer_stream.return_value = _stream_error_only()
+
+    response = client.post("/api/v1/queries", json={"question": "问题", "stream": True})
+
+    # SSE 已开始，HTTP 状态码仍为 200（错误在事件 data 中）
+    assert response.status_code == 200
+    body = response.text
+    assert "event: error" in body
+    assert "证据不足" in body
+
+
+def test_create_query_stream_passes_document_ids_and_top_k(
+    client: TestClient, mock_service: MagicMock
+) -> None:
+    """stream=true + document_ids + top_k：参数正确传递给 answer_stream。"""
+
+    mock_service.answer_stream.return_value = _stream_token_then_done()
+    doc_id = uuid.uuid4()
+
+    response = client.post(
+        "/api/v1/queries",
+        json={"question": "问题", "stream": True, "document_ids": [str(doc_id)], "top_k": 3},
+    )
+
+    assert response.status_code == 200
+    mock_service.answer_stream.assert_called_once_with(
+        question="问题",
+        document_ids=[doc_id],
+        top_k=3,
+    )
+
+
+def test_create_query_default_stream_false_uses_answer(
+    client: TestClient, mock_service: MagicMock
+) -> None:
+    """不传 stream（默认 false）：走非流式 ``answer`` 路径（回归测试）。"""
+
+    mock_service.answer.return_value = make_query_response()
+
+    response = client.post("/api/v1/queries", json={"question": "问题"})
+
+    assert response.status_code == 200
+    mock_service.answer.assert_called_once()
+    mock_service.answer_stream.assert_not_called()

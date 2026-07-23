@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.embeddings import Embeddings
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langchain_core.messages import AIMessageChunk, BaseMessage
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -41,17 +44,24 @@ from research_rag.db.models import (
     DocumentStatus,
 )
 from research_rag.qa_service import (
+    INSUFFICIENT_EVIDENCE_MARKER,
     AnswerWithCitations,
     InsufficientEvidenceError,
     LlmConfig,
     LlmServiceError,
 )
-from research_rag.services.qa_service import NoAvailableDocumentsError, QaService
+from research_rag.services.qa_service import (
+    NoAvailableDocumentsError,
+    QaService,
+    StreamDoneEvent,
+    StreamErrorEvent,
+    StreamTokenEvent,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
-    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.callbacks import CallbackManagerForLLMRun
 
 
 # ---------------------------------------------------------------------------
@@ -620,3 +630,300 @@ def test_answer_without_reranker_skips_rerank(
     # 正常返回，未触发重排
     assert response.answer == "回答。"
     assert len(response.citations) == 1
+
+
+# ---------------------------------------------------------------------------
+# answer_stream 流式问答（阶段 9.1 SSE）
+# ---------------------------------------------------------------------------
+
+
+class _StreamFakeChatModel(BaseChatModel):  # type: ignore[misc]
+    """按预设 token 列表异步流式产出的 Fake ChatModel。
+
+    ``astream`` 逐 token 产出 ``AIMessageChunk``（经 ``_astream`` →
+    ``ChatGenerationChunk``），用于测试 ``answer_stream`` 的流式 token 推送、
+    ``[INSUFFICIENT_EVIDENCE]`` 缓冲检测、引用映射。``_generate`` 把所有
+    token 拼接为一条消息（非流式回退，流式测试不依赖）。
+    """
+
+    tokens: list[str]
+
+    @property
+    def _llm_type(self) -> str:
+        return "stream-fake"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        content = "".join(self.tokens)
+        message = AIMessageChunk(content=content)
+        return ChatResult(generations=[ChatGenerationChunk(message=message)])  # type: ignore[list-item]
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        for token in self.tokens:
+            yield ChatGenerationChunk(message=AIMessageChunk(content=token))
+
+
+class _ErrorStreamChatModel(BaseChatModel):  # type: ignore[misc]
+    """``astream`` 抛异常的 Fake ChatModel，测试流式 LLM 错误事件。"""
+
+    error_message: str = "LLM 调用失败"
+
+    @property
+    def _llm_type(self) -> str:
+        return "error-stream-fake"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        raise RuntimeError(self.error_message)
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        raise RuntimeError(self.error_message)
+        yield
+
+
+async def _collect_events(service: QaService, question: str, **kwargs: Any) -> list[Any]:
+    """收集 ``answer_stream`` 产出的所有事件。"""
+    events: list[Any] = []
+    async for event in service.answer_stream(question, **kwargs):
+        events.append(event)
+    return events
+
+
+async def test_answer_stream_tokens_then_done(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_embeddings: _FakeEmbeddings,
+) -> None:
+    """正常流式：token 事件逐个推送，done 事件携带引用映射。
+
+    场景：单文档 2 chunks，chat_model 流式输出 "答案 [C1]。"（含引用标记），
+    验证 token 拼接后等于完整答案，done 事件的 citations 映射到 contexts[0]。
+    """
+
+    doc = _make_doc(
+        session,
+        "论文A.pdf",
+        chunks=[
+            (1, 0, "深度学习是机器学习的重要分支。"),
+            (2, 1, "神经网络用于图像识别。"),
+        ],
+    )
+
+    chat_model = _StreamFakeChatModel(tokens=["答案", " [C1]", "。"])
+    service = QaService(
+        session,
+        llm_config,
+        embeddings=fake_embeddings,
+        chat_model=chat_model,
+    )
+
+    events = await _collect_events(service, "深度学习", top_k=2)
+
+    token_events = [e for e in events if isinstance(e, StreamTokenEvent)]
+    done_events = [e for e in events if isinstance(e, StreamDoneEvent)]
+    error_events = [e for e in events if isinstance(e, StreamErrorEvent)]
+
+    assert error_events == []
+    assert len(done_events) == 1
+    # token 拼接 = 完整答案
+    answer_text = "".join(e.text for e in token_events)
+    assert answer_text == "答案 [C1]。"
+
+    done = done_events[0]
+    assert len(done.citations) == 1
+    assert done.citations[0].document_id == doc.id
+    assert done.citations[0].document_name == "论文A.pdf"
+    assert done.citations[0].chunk_index == 0
+    assert "深度学习" in done.citations[0].snippet
+    assert done.elapsed_ms >= 0
+
+
+async def test_answer_stream_insufficient_evidence_single_chunk(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_embeddings: _FakeEmbeddings,
+) -> None:
+    """证据不足（整块输出标记）：发 error 事件，不泄漏 token。"""
+
+    _make_doc(
+        session,
+        "论文.pdf",
+        chunks=[(1, 0, "不相关内容。")],
+    )
+
+    chat_model = _StreamFakeChatModel(tokens=[INSUFFICIENT_EVIDENCE_MARKER])
+    service = QaService(
+        session,
+        llm_config,
+        embeddings=fake_embeddings,
+        chat_model=chat_model,
+    )
+
+    events = await _collect_events(service, "问题")
+
+    token_events = [e for e in events if isinstance(e, StreamTokenEvent)]
+    error_events = [e for e in events if isinstance(e, StreamErrorEvent)]
+    done_events = [e for e in events if isinstance(e, StreamDoneEvent)]
+
+    # 不应推送任何 token（标记被缓冲截获）
+    assert token_events == []
+    assert done_events == []
+    assert len(error_events) == 1
+    assert "证据不足" in error_events[0].detail
+
+
+async def test_answer_stream_insufficient_evidence_split_chunks(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_embeddings: _FakeEmbeddings,
+) -> None:
+    """证据不足（标记跨多个 chunk）：缓冲累积后发 error 事件。
+
+    验证 ``[INSUFFICIENT`` + ``_EVIDENCE]`` 两段 token 被缓冲（首段是标记
+    前缀），拼接后命中完整标记 → error 事件，不泄漏 token。
+    """
+
+    _make_doc(
+        session,
+        "论文.pdf",
+        chunks=[(1, 0, "不相关内容。")],
+    )
+
+    marker = INSUFFICIENT_EVIDENCE_MARKER
+    mid = len(marker) // 2
+    chat_model = _StreamFakeChatModel(tokens=[marker[:mid], marker[mid:]])
+    service = QaService(
+        session,
+        llm_config,
+        embeddings=fake_embeddings,
+        chat_model=chat_model,
+    )
+
+    events = await _collect_events(service, "问题")
+
+    token_events = [e for e in events if isinstance(e, StreamTokenEvent)]
+    error_events = [e for e in events if isinstance(e, StreamErrorEvent)]
+
+    assert token_events == []
+    assert len(error_events) == 1
+    assert "证据不足" in error_events[0].detail
+
+
+async def test_answer_stream_no_documents_error(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_embeddings: _FakeEmbeddings,
+) -> None:
+    """无可用文档：检索异常 → error 事件（不抛出）。"""
+
+    chat_model = _StreamFakeChatModel(tokens=["不应到达"])
+    service = QaService(
+        session,
+        llm_config,
+        embeddings=fake_embeddings,
+        chat_model=chat_model,
+    )
+
+    events = await _collect_events(service, "问题")
+
+    token_events = [e for e in events if isinstance(e, StreamTokenEvent)]
+    error_events = [e for e in events if isinstance(e, StreamErrorEvent)]
+    done_events = [e for e in events if isinstance(e, StreamDoneEvent)]
+
+    assert token_events == []
+    assert done_events == []
+    assert len(error_events) == 1
+    assert "READY" in error_events[0].detail or "文档" in error_events[0].detail
+
+
+async def test_answer_stream_llm_error(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_embeddings: _FakeEmbeddings,
+) -> None:
+    """LLM 流式调用抛异常 → error 事件（detail 含 "调用大模型失败"）。"""
+
+    _make_doc(
+        session,
+        "论文.pdf",
+        chunks=[(1, 0, "深度学习内容。")],
+    )
+
+    chat_model = _ErrorStreamChatModel(error_message="连接超时")
+    service = QaService(
+        session,
+        llm_config,
+        embeddings=fake_embeddings,
+        chat_model=chat_model,
+    )
+
+    events = await _collect_events(service, "深度学习")
+
+    token_events = [e for e in events if isinstance(e, StreamTokenEvent)]
+    done_events = [e for e in events if isinstance(e, StreamDoneEvent)]
+    error_events = [e for e in events if isinstance(e, StreamErrorEvent)]
+
+    assert token_events == []
+    assert done_events == []
+    assert len(error_events) == 1
+    assert "调用大模型失败" in error_events[0].detail
+    assert "连接超时" in error_events[0].detail
+
+
+async def test_answer_stream_short_answer_prefix_of_marker(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_embeddings: _FakeEmbeddings,
+) -> None:
+    """短答案是标记前缀（如 ``[``）但非完整标记：正常 flush 为 token。
+
+    验证缓冲逻辑：``buffer == "["`` 时，marker.startswith("[") 为 True，
+    继续缓冲；流结束后 buffer 仍短于 marker 且非完整标记 → flush 为 token。
+    """
+
+    _make_doc(
+        session,
+        "论文.pdf",
+        chunks=[(1, 0, "深度学习内容。")],
+    )
+
+    chat_model = _StreamFakeChatModel(tokens=["["])
+    service = QaService(
+        session,
+        llm_config,
+        embeddings=fake_embeddings,
+        chat_model=chat_model,
+    )
+
+    events = await _collect_events(service, "深度学习", top_k=1)
+
+    token_events = [e for e in events if isinstance(e, StreamTokenEvent)]
+    done_events = [e for e in events if isinstance(e, StreamDoneEvent)]
+    error_events = [e for e in events if isinstance(e, StreamErrorEvent)]
+
+    assert error_events == []
+    assert len(token_events) == 1
+    assert token_events[0].text == "["
+    assert len(done_events) == 1
