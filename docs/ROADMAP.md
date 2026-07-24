@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）
-- **测试**：530+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）
+- **测试**：560+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -103,7 +103,7 @@
 | 序号 | 任务 | 状态 | 预期收益 | 依赖 | 优先级 |
 |---|---|---|---|---|---|
 | 10.1 | 可观测性（Langfuse/LangSmith） | ✅ 已完成（PR #56，Issue #55） | 全链路追踪，定位瓶颈 | 无 | 高 |
-| 10.2 | 用户反馈闭环 | 待实施 | 点赞/点踩记录到 DB | 9.3 | 中 |
+| 10.2 | 用户反馈闭环 | ✅ 已完成（PR #60，Issue #59） | 点赞/点踩记录到 DB | 9.3 | 中 |
 | 10.3 | 性能优化 | 待实施 | Embedding 缓存、并发检索、Qdrant 索引调优 | 无 | 中 |
 | 10.4 | 多语言支持（bge-m3） | ✅ 已提前至 8.4 完成（Issue #42） | 中英文混合场景统一 | 8.2 | 低 |
 
@@ -117,9 +117,17 @@
 
 ### 10.2 用户反馈闭环
 
+- **状态**：✅ 已完成（PR #60，Issue #59）
 - **目标**：用户对答案点赞/点踩，记录到 DB 用于持续优化
-- **技术方案**：新增 `feedback` 表，API 端点 `POST /api/v1/feedback`，前端按钮
-- **验收**：DB 可查询某答案的反馈，支持按赞/踩筛选
+- **技术方案**：
+  - `Feedback` ORM 模型：`request_id` 唯一主关联键 + 可空 `message_id` 外键（`ondelete=SET NULL`）+ `rating` 枚举（like/dislike）+ `comment`（最长 2000 字符）；`FeedbackRating` 枚举 + `FeedbackNotFoundError` 异常
+  - `FeedbackRepository`：`upsert` / `get_by_request_id` / `list`（按 rating / conversation_id 筛选）/ `delete`，只 `flush` 不 `commit`（事务由路由层显式控制）
+  - Alembic 迁移：创建 `feedback` 表
+  - 路由直接调 Repository，不新建 `FeedbackService`（避免空模块）
+  - `request_id` 作为主关联键的决策与已知局限见 [ADR 0001](./adr/0001-request-id-as-feedback-key.md)
+- **交付**：`src/research_rag/db/models.py`（Feedback / FeedbackRating / FeedbackNotFoundError）+ `src/research_rag/db/repositories.py`（FeedbackRepository）+ `alembic/versions/2026_07_24_1413-aa7a10e898fd_add_feedback_table_for_user_feedback_.py` + `src/research_rag/api/routes/feedback.py`（4 个端点）+ `CONTEXT.md` 术语表 + `docs/adr/0001-request-id-as-feedback-key.md` + 30 个单元测试（Repository 12 + API 18）
+- **验收**：DB 可查询某答案的反馈，支持按赞/踩筛选；`POST /api/v1/feedback` Upsert（201 新建 / 200 更新）、`GET /api/v1/feedback/{request_id}`（200 / 404）、`GET /api/v1/feedback?rating=&conversation_id=&limit=`、`DELETE /api/v1/feedback/{request_id}`（204 / 404）端到端测试通过
+- **不在范围**：Streamlit 前端点赞/点踩按钮（后端已就绪，前端接入待后续）
 
 ### 10.3 性能优化
 

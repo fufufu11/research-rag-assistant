@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v1.3` — 阶段 0-10.1 全部完成，530+ 条测试通过，CI 三项全绿。
+`v1.4` — 阶段 0-10.2 全部完成，560+ 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -35,7 +35,8 @@
 - 文档管理 API：上传 / 列表 / 详情 / 删除
 - 问答 API：`POST /api/v1/queries`（支持 `stream=true` 流式、`conversation_id` 多轮）
 - 会话管理 API：`POST/GET/DELETE /api/v1/conversations`、`GET /api/v1/conversations/{id}/messages`（阶段 9.2）
-- SQLAlchemy 2.0 数据模型（Document / Chunk / Conversation / Message）+ Alembic 迁移
+- 用户反馈 API：`POST /api/v1/feedback`（Upsert，201 新建 / 200 更新）、`GET /api/v1/feedback/{request_id}`、`GET /api/v1/feedback?rating=&conversation_id=&limit=`（列表筛选）、`DELETE /api/v1/feedback/{request_id}`（阶段 10.2）
+- SQLAlchemy 2.0 数据模型（Document / Chunk / Conversation / Message / Feedback）+ Alembic 迁移
 - sha256 去重、文件落盘、状态机（`pending → processing → ready / failed`）
 - 全局异常处理器统一映射业务异常到 HTTP 状态码
 
@@ -62,6 +63,18 @@
 - `QaService.answer` / `answer_stream` / `_prepare_contexts` 添加 `@observe` 装饰器，`run_config` 透传给 `rewrite_query` / `answer_question` / `answer_with_messages`
 - `app.py` lifespan finally 调用 `flush_langfuse` 避免异步队列丢失
 - 自部署模板 `docker-compose.langfuse.yml`
+
+### 用户反馈闭环
+
+- 用户对答案点赞/点踩并记录到 DB，用于持续优化（阶段 10.2）
+- `Feedback` ORM 模型：`request_id` 唯一主关联键 + 可空 `message_id` 外键（`ondelete=SET NULL`）+ `rating` 枚举（like/dislike）+ `comment`（最长 2000 字符）；`FeedbackRating` 枚举 + `FeedbackNotFoundError` 异常
+- `FeedbackRepository`：`upsert` / `get_by_request_id` / `list`（按 rating / conversation_id 筛选）/ `delete`，只 `flush` 不 `commit`（事务由路由层显式控制）
+- Alembic 迁移：创建 `feedback` 表
+- API：`POST /api/v1/feedback`（Upsert，201 新建 / 200 更新）、`GET /api/v1/feedback/{request_id}`（200 / 404）、`GET /api/v1/feedback?rating=&conversation_id=&limit=`（列表筛选）、`DELETE /api/v1/feedback/{request_id}`（204 / 404）
+- Schemas：`FeedbackCreate` / `FeedbackRead` / `FeedbackList`（Pydantic v2）
+- 路由直接调 Repository，不新建 `FeedbackService`（避免空模块）
+- `request_id` 作为主关联键的决策与已知局限见 [ADR 0001](./adr/0001-request-id-as-feedback-key.md)
+- 30 个单元测试（Repository 12 + API 18，端到端验证）
 
 ## 技术栈
 
@@ -99,7 +112,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：530+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个）
+- pytest：560+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -113,7 +126,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 后续可选方向
 
-- 阶段 10.2 用户反馈闭环（点赞/点踩记录到 DB）
+- 阶段 10.2 前端补充：Streamlit 点赞/点踩按钮接入反馈 API（后端已完成）
 - 阶段 10.3 性能优化（Embedding 缓存 / 并发检索 / Qdrant 调优）
 - 阶段 11.4 Docker Compose 一键部署
 - 阶段 11.1 认证鉴权
