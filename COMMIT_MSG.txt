@@ -1,0 +1,12 @@
+docs: 更新 ROADMAP/STATUS 标记 9.1/9.2 完成 + 新增 4 个 mattpocock 适配 skill
+
+- ROADMAP.md：阶段 9.1（SSE 流式）和 9.2（多轮对话）标记为已完成，
+  补充技术方案、交付物、测试数量等详情
+- STATUS.md：版本升至 v1.2，测试数从 269 更新到 500+，
+  补充 8.3 BM25/9.1 SSE/9.2 多轮对话功能描述，
+  更新已知问题和后续方向
+- .trae/skills/：新增 4 个从 mattpocock/skills 适配的 skill
+  - grill-with-docs（合并 grilling + domain-modeling）
+  - tdd（红绿重构循环）
+  - code-review（双轴并行审查）
+  - to-tickets（tracer-bullet ticket 拆解到 GitHub Issues）

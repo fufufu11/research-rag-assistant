@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）
-- **测试**：373 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）
+- **测试**：500+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -60,23 +60,32 @@
 
 | 序号 | 任务 | 状态 | 预期收益 | 依赖 | 优先级 |
 |---|---|---|---|---|---|
-| 9.1 | 流式输出（SSE） | 待实施 | 首字延迟降低，用户体验提升 | 无 | 高 |
-| 9.2 | 多轮对话 | 待实施 | 支持上下文追问 | 无 | 中 |
+| 9.1 | 流式输出（SSE） | ✅ 已完成（PR #47，Issue #46） | 首字延迟降低，用户体验提升 | 无 | 高 |
+| 9.2 | 多轮对话 | ✅ 已完成（PR #49，Issue #48） | 支持上下文追问 | 无 | 中 |
 | 9.3 | 答案质量评测 | 待实施 | 忠实度/相关性指标，量化生成质量 | 无 | 中 |
 
 ### 9.1 流式输出
 
+- **状态**：✅ 已完成（PR #47，Issue #46）
 - **目标**：LLM 答案流式返回，用户看到逐字生成
-- **技术方案**：FastAPI `StreamingResponse` + LangChain `astream` + SSE 协议
+- **技术方案**：FastAPI `StreamingResponse` + LangChain `astream` + SSE 协议（token/done/error 三类事件）
 - **前端**：Streamlit `st.write_stream` 接收流式输出
-- **验收**：问答 API 支持 `stream=true` 参数，前端实时显示
+- **交付**：`QueryRequest.stream` 字段、`QaService.answer_stream` 异步生成 token + `[INSUFFICIENT_EVIDENCE]` 缓冲检测、`StreamingResponse` SSE、`ApiClient.ask_question_stream` SSE 解析、16 个新增单元测试
 
 ### 9.2 多轮对话
 
+- **状态**：✅ 已完成（PR #49，Issue #48）
 - **目标**：支持"刚才那篇论文的方法再详细说说"等上下文追问
-- **技术方案**：维护会话历史（内存或 DB），构造 prompt 时加入历史对话
-- **风险**：会话历史过长需截断，避免超出 LLM 上下文窗口
+- **技术方案**：
+  - DB 持久化会话历史（`Conversation` / `Message` ORM 模型 + Alembic 迁移 + `ConversationRepository`）
+  - 查询改写（`rewrite_query`，LLM 把"那篇"等指代解析为独立问题再检索，失败回退原问题）
+  - 历史截断双重保护（轮数 `DEFAULT_MAX_HISTORY_TURNS=5` + token `DEFAULT_MAX_HISTORY_TOKENS=4000`）
+  - 会话级 `document_ids` 锁定（保证多轮检索范围一致）
+  - 流式 + 非流式双路径都支持 `conversation_id`
+  - 每轮引用编号独立（`[C1]` 只指代当前轮 contexts）
+- **风险**：会话历史过长需截断 → 已用轮数 + token 双重保护解决
 - **验收**：连续 3 轮对话内能正确理解"那篇""刚才"等指代
+- **测试**：111 个新增测试（Repository CRUD / 底层函数 / QaService 编排 / API 路由 / ApiClient），总测试数 500+
 
 ### 9.3 答案质量评测
 
