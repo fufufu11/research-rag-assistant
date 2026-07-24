@@ -35,9 +35,14 @@ from sqlalchemy.orm import sessionmaker
 
 from research_rag.api.routes.conversations import router as conversations_router
 from research_rag.api.routes.documents import router as documents_router
+from research_rag.api.routes.feedback import router as feedback_router
 from research_rag.api.routes.queries import router as queries_router
 from research_rag.api.schemas import ErrorResponse
-from research_rag.db.models import DocumentNotFoundError, DuplicateDocumentError
+from research_rag.db.models import (
+    DocumentNotFoundError,
+    DuplicateDocumentError,
+    FeedbackNotFoundError,
+)
 from research_rag.db.session import create_engine_for_url, get_database_url
 from research_rag.embedding import EmbeddingServiceError, VectorStoreError
 from research_rag.observability import flush as flush_langfuse
@@ -222,6 +227,15 @@ def create_app(
             content=ErrorResponse(detail=str(exc)).model_dump(),
         )
 
+    @app.exception_handler(FeedbackNotFoundError)
+    async def handle_feedback_not_found(
+        _request: Request, exc: FeedbackNotFoundError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(detail=str(exc)).model_dump(),
+        )
+
     @app.exception_handler(InsufficientEvidenceError)
     async def handle_insufficient_evidence(
         _request: Request, exc: InsufficientEvidenceError
@@ -263,5 +277,6 @@ def create_app(
     app.include_router(documents_router)
     app.include_router(queries_router)
     app.include_router(conversations_router)
+    app.include_router(feedback_router)
 
     return app

@@ -63,6 +63,17 @@ class MessageRole(enum.Enum):
     ASSISTANT = "assistant"  # 模型回答
 
 
+class FeedbackRating(enum.Enum):
+    """用户反馈类型（阶段 10.2 用户反馈闭环）。
+
+    值用小写字符串，与 ``DocumentStatus`` / ``MessageRole`` 风格一致，便于
+    SQL 排查和 API 返回。二值对齐"点赞/点踩"语义。
+    """
+
+    LIKE = "like"  # 点赞
+    DISLIKE = "dislike"  # 点踩
+
+
 class DuplicateDocumentError(RuntimeError):
     """重复文档异常。
 
@@ -77,6 +88,13 @@ class DocumentNotFoundError(RuntimeError):
     按 ID 查询文档不存在时抛出。对应 PROJECT_PLAN.md 第 13.6 节异常清单
     与 US-002"文件不存在时返回规范的 404 响应"约束（API 层捕获后映射到
     HTTP 404）。
+    """
+
+
+class FeedbackNotFoundError(RuntimeError):
+    """反馈未找到异常（阶段 10.2 用户反馈闭环）。
+
+    按 ``request_id`` 查询/删除反馈不存在时抛出。API 层捕获后映射到 HTTP 404。
     """
 
 
@@ -275,3 +293,53 @@ class Message(Base):
         return (
             f"Message(id={self.id!r}, conversation_id={self.conversation_id!r}, role={self.role!r})"
         )
+
+
+class Feedback(Base):
+    """用户反馈模型（阶段 10.2 用户反馈闭环）。
+
+    一条反馈对应一次问答答案的评价（点赞/点踩 + 可空评论）。以 ``request_id``
+    为主关联键（唯一约束，Upsert 语义），额外保留可空 ``message_id`` 外键供
+    多轮场景 join 消息内容。详见 ADR 0001。
+
+    Attributes:
+        id: UUID 主键，业务层生成（``default=uuid.uuid4``）。
+        request_id: 关联的问答 request_id（``QaService`` 生成并返回前端）。
+            加唯一约束：同一答案只有一条反馈，POST 走 Upsert（创建或更新），
+            兼作匿名防刷。
+        message_id: 关联的 assistant 消息 UUID（可空，FK→messages.id，
+            ``ondelete=SET NULL``）。单轮问答（无会话）不持久化 Message，
+            此时为 ``None``，仅靠 ``request_id`` 关联。消息删除时反馈记录
+            保留（``SET NULL`` 而非 ``CASCADE``），用于事后分析。
+        rating: 反馈类型（``like`` / ``dislike``）。
+        comment: 文字评论（可空）。点踩时收集原因，为持续优化提供信号。
+        created_at: 创建时间（UTC）。
+        updated_at: 更新时间（UTC），Upsert 更新 rating/comment 时由
+            ``onupdate`` 自动维护。
+    """
+
+    __tablename__ = "feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    request_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, unique=True, index=True)
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    rating: Mapped[FeedbackRating] = mapped_column(
+        SAEnum(
+            FeedbackRating,
+            values_callable=lambda e: [x.value for x in e],
+            length=20,
+            native_enum=False,
+        ),
+        nullable=False,
+    )
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    def __repr__(self) -> str:
+        return f"Feedback(id={self.id!r}, request_id={self.request_id!r}, rating={self.rating!r})"

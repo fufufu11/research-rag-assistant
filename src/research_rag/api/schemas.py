@@ -38,7 +38,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from research_rag.db.models import DocumentStatus
+from research_rag.db.models import DocumentStatus, FeedbackRating
 from research_rag.embedding import DEFAULT_TOP_K
 
 
@@ -240,3 +240,63 @@ class ConversationList(BaseModel):
     """会话列表响应：包裹 ``items`` 数组（不含消息，节省体积）。"""
 
     items: list[ConversationRead]
+
+
+# ---------------------------------------------------------------------------
+# 反馈 API schema（阶段 10.2 用户反馈闭环）
+# ---------------------------------------------------------------------------
+
+
+class FeedbackCreate(BaseModel):
+    """创建/更新反馈请求（阶段 10.2）。
+
+    Upsert 语义：``request_id`` 已存在则更新 ``rating`` / ``message_id`` / ``comment``，
+    不存在则创建。``request_id`` 关联到问答 API 返回的 ``QueryResponse.request_id``
+    （详见 ADR 0001）。
+
+    Attributes:
+        request_id: 关联的问答 request_id（必填）。前端从 ``QueryResponse.request_id``
+            或 SSE ``done`` 事件取，原样回传。
+        rating: 反馈类型（``like`` / ``dislike``）。Pydantic 自动校验枚举值。
+        message_id: 关联的 assistant 消息 UUID（可空）。多轮场景下传
+            ``Message.id`` 便于按会话筛选；单轮问答为 ``None``。
+        comment: 文字评论（可空）。点踩时收集原因，为持续优化提供信号。
+    """
+
+    request_id: uuid.UUID
+    rating: FeedbackRating
+    message_id: uuid.UUID | None = None
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class FeedbackRead(BaseModel):
+    """反馈响应（阶段 10.2）。
+
+    ``from_attributes=True`` 让 ``model_validate(orm_feedback)`` 直接读 ORM
+    ``Feedback`` 属性。
+
+    Attributes:
+        id: 反馈记录 UUID。
+        request_id: 关联的问答 request_id。
+        message_id: 关联的 assistant 消息 UUID（可空）。
+        rating: 反馈类型（``like`` / ``dislike``）。
+        comment: 文字评论（可空）。
+        created_at: 创建时间（UTC）。
+        updated_at: 更新时间（UTC），Upsert 更新时由 ``onupdate`` 自动维护。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    request_id: uuid.UUID
+    message_id: uuid.UUID | None
+    rating: FeedbackRating
+    comment: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class FeedbackList(BaseModel):
+    """反馈列表响应：包裹 ``items`` 数组。"""
+
+    items: list[FeedbackRead]

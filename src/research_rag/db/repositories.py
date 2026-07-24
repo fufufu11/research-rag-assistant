@@ -38,6 +38,8 @@ from research_rag.db.models import (
     Conversation,
     Document,
     DocumentStatus,
+    Feedback,
+    FeedbackRating,
     Message,
     MessageRole,
 )
@@ -309,3 +311,100 @@ class ConversationRepository:
             return msgs
         stmt = stmt.order_by(Message.created_at.asc())
         return list(self.session.scalars(stmt).all())
+
+
+class FeedbackRepository:
+    """用户反馈数据访问对象（阶段 10.2 用户反馈闭环）。
+
+    封装 ``Feedback`` 表的 CRUD。所有方法只 ``flush`` 不 ``commit``，事务边界
+    由调用方（service 层）控制，与 ``DocumentRepository`` / ``ConversationRepository``
+    一致。
+
+    ``request_id`` 加唯一约束，``upsert`` 据此实现"不存在则创建、存在则更新"，
+    兼作匿名防刷（详见 ADR 0001）。
+    """
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def upsert(
+        self,
+        *,
+        request_id: uuid.UUID,
+        rating: FeedbackRating,
+        message_id: uuid.UUID | None = None,
+        comment: str | None = None,
+    ) -> Feedback:
+        """按 ``request_id`` Upsert 反馈（不 commit，只 flush）。
+
+        不存在则新建，存在则更新 ``rating`` / ``message_id`` / ``comment``。
+        ``updated_at`` 由 ORM ``onupdate`` 自动维护。返回持久化后的 ``Feedback``
+        实例（新建时 ``id`` 已生成）。
+
+        Args:
+            request_id: 关联的问答 request_id（唯一键）。
+            rating: 反馈类型（like / dislike）。
+            message_id: 关联的 assistant 消息 UUID（可空，单轮问答为 None）。
+            comment: 文字评论（可空）。
+        """
+
+        existing = self.get_by_request_id(request_id)
+        if existing is not None:
+            existing.rating = rating
+            existing.message_id = message_id
+            existing.comment = comment
+            self.session.flush()
+            return existing
+
+        fb = Feedback(
+            request_id=request_id,
+            rating=rating,
+            message_id=message_id,
+            comment=comment,
+        )
+        self.session.add(fb)
+        self.session.flush()
+        return fb
+
+    def get_by_request_id(self, request_id: uuid.UUID) -> Feedback | None:
+        """按 ``request_id`` 查询反馈，不存在返回 None。"""
+
+        return self.session.scalar(select(Feedback).where(Feedback.request_id == request_id))
+
+    def list(
+        self,
+        *,
+        rating: FeedbackRating | None = None,
+        conversation_id: uuid.UUID | None = None,
+        limit: int | None = None,
+    ) -> list[Feedback]:
+        """查询反馈列表，支持按 rating / conversation_id 筛选，按 ``created_at`` 降序。
+
+        Args:
+            rating: 仅返回该类型的反馈（like / dislike）。``None`` 表示不筛选。
+            conversation_id: 仅返回关联到该会话消息的反馈（join ``messages`` 表，
+                ``Feedback.message_id == Message.id`` 且 ``Message.conversation_id``
+                匹配）。``None`` 表示不筛选。单轮问答的反馈（``message_id`` 为 None）
+                不会出现在按会话筛选的结果中。
+            limit: 最多返回条数。``None`` 表示全部。
+        """
+
+        stmt = select(Feedback)
+        if rating is not None:
+            stmt = stmt.where(Feedback.rating == rating)
+        if conversation_id is not None:
+            # join messages 以按会话筛选；用 exists 子查询避免重复行
+            stmt = stmt.where(
+                Feedback.message_id == Message.id,
+                Message.conversation_id == conversation_id,
+            )
+        stmt = stmt.order_by(Feedback.created_at.desc())
+        if limit is not None and limit > 0:
+            stmt = stmt.limit(limit)
+        return list(self.session.scalars(stmt).all())
+
+    def delete(self, feedback: Feedback) -> None:
+        """删除反馈（flush，不 commit）。调用方负责确保 ``feedback`` 已持久化。"""
+
+        self.session.delete(feedback)
+        self.session.flush()
