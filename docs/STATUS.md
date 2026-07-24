@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v1.2` — 阶段 0-9.2 全部完成，500+ 条测试通过，CI 三项全绿。
+`v1.3` — 阶段 0-10.1 全部完成，530+ 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -52,10 +52,20 @@
 - 5 组参数对比实验，支持中英文 Embedding 模型切换
 - 英文最优 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)
 - 中文最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + bge-small-zh + reranker），详见 [中文评测报告](./evaluation_report_zh.md)
+- 答案质量评测（LLM-as-judge 自实现，阶段 9.3）：四项指标 1-5 分（忠实度 / 相关性 / 完整性 / 引用正确性），纯函数与编排分离，judge LLM 支持 `JUDGE_LLM_*` 环境变量覆盖避免同模型自评偏差
+- 答案质量结果（DeepSeek-V3.2 评测）：英文忠实度=5.00 相关性=4.96 完整性=4.62 引用正确性=4.54；中文忠实度=5.00 相关性=5.00 完整性=4.97 引用正确性=5.00，详见 [答案质量报告](./answer_quality_report.md) / [中文报告](./answer_quality_report_zh.md)
+
+### 可观测性
+
+- Langfuse 全链路追踪（阶段 10.1）：自部署 + LangChain CallbackHandler 集成
+- 环境变量开关 no-op 优先：`LANGFUSE_PUBLIC_KEY` / `SECRET_KEY` / `HOST` 三项非空才启用，未配置时零开销
+- `QaService.answer` / `answer_stream` / `_prepare_contexts` 添加 `@observe` 装饰器，`run_config` 透传给 `rewrite_query` / `answer_question` / `answer_with_messages`
+- `app.py` lifespan finally 调用 `flush_langfuse` 避免异步队列丢失
+- 自部署模板 `docker-compose.langfuse.yml`
 
 ## 技术栈
 
-Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions
+Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions · Langfuse
 
 ## 本地运行
 
@@ -89,7 +99,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：500+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个）
+- pytest：530+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -103,8 +113,8 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 后续可选方向
 
-- 阶段 9.3 答案质量评测（LLM-as-judge / RAGAS）
-- 阶段 10.1 可观测性（Langfuse / LangSmith）
+- 阶段 10.2 用户反馈闭环（点赞/点踩记录到 DB）
+- 阶段 10.3 性能优化（Embedding 缓存 / 并发检索 / Qdrant 调优）
 - 阶段 11.4 Docker Compose 一键部署
 - 阶段 11.1 认证鉴权
 - 表格感知切分与公式识别（阶段 12）
