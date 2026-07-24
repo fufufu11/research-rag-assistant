@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）
-- **测试**：500+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）
+- **测试**：530+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -62,7 +62,7 @@
 |---|---|---|---|---|---|
 | 9.1 | 流式输出（SSE） | ✅ 已完成（PR #47，Issue #46） | 首字延迟降低，用户体验提升 | 无 | 高 |
 | 9.2 | 多轮对话 | ✅ 已完成（PR #49，Issue #48） | 支持上下文追问 | 无 | 中 |
-| 9.3 | 答案质量评测 | 待实施 | 忠实度/相关性指标，量化生成质量 | 无 | 中 |
+| 9.3 | 答案质量评测 | ✅ 已完成（PR #52 + PR #53，Issue #51） | 忠实度/相关性指标，量化生成质量 | 无 | 中 |
 
 ### 9.1 流式输出
 
@@ -89,10 +89,12 @@
 
 ### 9.3 答案质量评测
 
+- **状态**：✅ 已完成（PR #52 + PR #53，Issue #51）
 - **目标**：扩展评测到生成阶段，量化 LLM 答案质量
-- **指标**：忠实度（答案是否基于引用）、相关性（答案是否回答了问题）、完整性
-- **技术方案**：用 LLM-as-judge（另一个 LLM 评分）或 RAGAS 库
-- **验收**：生成 30 条问题的答案质量评分报告
+- **指标**：忠实度（答案是否基于引用）、相关性（答案是否回答了问题）、完整性、引用正确性（项目特色指标）
+- **技术方案**：LLM-as-judge 自实现（未用 RAGAS，避免依赖冲突）；纯函数与编排分离（`build_judge_prompt` / `parse_judge_response` / `check_citations` / `aggregate_judgements` / `judge_answer`）；judge LLM 支持 `JUDGE_LLM_*` 环境变量覆盖避免同模型自评偏差
+- **交付**：`src/research_rag/answer_evaluation.py` + `scripts/evaluate_answer.py` + `tests/unit/test_answer_evaluation.py`（65 个单元测试，FakeListChatModel Mock，CI 不消耗真实 Token）+ 中英文各 30 条问题评测报告
+- **验收**：DeepSeek-V3.2 评测报告已生成——英文忠实度=5.00 相关性=4.96 完整性=4.62 引用正确性=4.54；中文忠实度=5.00 相关性=5.00 完整性=4.97 引用正确性=5.00，详见 [答案质量报告](./answer_quality_report.md) / [中文报告](./answer_quality_report_zh.md)
 
 ---
 
@@ -100,16 +102,18 @@
 
 | 序号 | 任务 | 状态 | 预期收益 | 依赖 | 优先级 |
 |---|---|---|---|---|---|
-| 10.1 | 可观测性（Langfuse/LangSmith） | 待实施 | 全链路追踪，定位瓶颈 | 无 | 高 |
+| 10.1 | 可观测性（Langfuse/LangSmith） | ✅ 已完成（PR #56，Issue #55） | 全链路追踪，定位瓶颈 | 无 | 高 |
 | 10.2 | 用户反馈闭环 | 待实施 | 点赞/点踩记录到 DB | 9.3 | 中 |
 | 10.3 | 性能优化 | 待实施 | Embedding 缓存、并发检索、Qdrant 索引调优 | 无 | 中 |
 | 10.4 | 多语言支持（bge-m3） | ✅ 已提前至 8.4 完成（Issue #42） | 中英文混合场景统一 | 8.2 | 低 |
 
 ### 10.1 可观测性
 
+- **状态**：✅ 已完成（PR #56，Issue #55）
 - **目标**：追踪每次问答的完整调用链（检索 → 重排 → LLM 生成），记录延迟、Token 消耗、失败率
-- **技术方案**：Langfuse（开源自部署）或 LangSmith（SaaS），通过 LangChain 回调集成
-- **验收**：dashboard 可查看每次请求的检索结果、重排前后对比、LLM 输入输出
+- **技术方案**：Langfuse（开源自部署）+ LangChain CallbackHandler 集成；环境变量开关 no-op 优先（`LANGFUSE_PUBLIC_KEY` / `SECRET_KEY` / `HOST` 三项非空才启用，未配置时零开销）
+- **交付**：`src/research_rag/observability.py`（`LangfuseConfig` / `observe` / `get_current_langchain_handler` / `_build_run_config` / `flush`）+ `tests/unit/test_observability.py`（25 个单元测试覆盖 no-op 与启用路径）+ `docker-compose.langfuse.yml` 自部署模板；`QaService.answer` / `answer_stream` / `_prepare_contexts` 添加 `@observe` 装饰器，`run_config` 透传，`app.py` lifespan finally 调用 `flush_langfuse` 避免异步队列丢失
+- **验收**：dashboard 可查看每次请求的检索结果、重排前后对比、LLM 输入输出；未配置环境变量时功能正常无副作用
 
 ### 10.2 用户反馈闭环
 
