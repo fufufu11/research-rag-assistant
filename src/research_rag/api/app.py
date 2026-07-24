@@ -40,6 +40,7 @@ from research_rag.api.schemas import ErrorResponse
 from research_rag.db.models import DocumentNotFoundError, DuplicateDocumentError
 from research_rag.db.session import create_engine_for_url, get_database_url
 from research_rag.embedding import EmbeddingServiceError, VectorStoreError
+from research_rag.observability import flush as flush_langfuse
 from research_rag.qa_service import InsufficientEvidenceError, LlmServiceError
 from research_rag.reranker import RerankerError
 from research_rag.services.qa_service import ConversationNotFoundError, NoAvailableDocumentsError
@@ -105,6 +106,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if created_engine is not None:
             created_engine.dispose()
+        # 阶段 10.1：应用关闭时刷新 Langfuse 异步上报队列，避免最后一批 trace 丢失。
+        # 未启用 Langfuse 时 ``flush_langfuse`` 内部 no-op。
+        flush_langfuse()
 
 
 def _create_vector_store() -> QdrantVectorStore | None:

@@ -36,6 +36,15 @@ dependencies = [
     "langchain>=1.3.14",
     "langchain-core>=1.5.0",
     "langchain-huggingface>=1.2.2",
+    # 阶段 10.1 引入：Langfuse 自部署可观测性（全链路追踪）。
+    # 必要性：Langfuse 通过 ``@observe`` 装饰器 + ``langfuse_context`` 自动追踪
+    # LangChain 调用，未配置环境变量时自动 no-op，CI 测试无需真实 Langfuse 服务。
+    # 替代方案：① LangSmith SaaS → 数据上传云端，与项目硬约束"数据自主可控"
+    # 理念冲突；② 手写日志 + Prometheus → 失去 trace 关联与 dashboard 能力；
+    # ③ OpenTelemetry 直接集成 → 工作量大且失去 LangChain 自动捕获。
+    # 锁定 <3.0：3.x 是 OpenTelemetry 重构版，API 不兼容（observe 改名、
+    # langfuse_context 移除），2.x 是稳定成熟的装饰器模式。
+    "langfuse>=2.0,<3.0",
     # LangChain 官方维护的 OpenAI 兼容客户端。
     # 必要性：所有 OpenAI 兼容服务（DeepSeek、Moonshot、Together、本地 vLLM 等）
     # 都用同一个 ChatOpenAI 类，与已装的 langchain-huggingface 风格一致。
@@ -209,6 +218,14 @@ ignore_missing_imports = true
 # mypy 静态检查时找不到模块会报 import-not-found，忽略避免 CI 误报。
 [[tool.mypy.overrides]]
 module = ["rank_bm25.*", "jieba.*"]
+ignore_missing_imports = true
+
+# langfuse 是阶段 10.1 引入的可观测性 SDK（主依赖）。该库无完整 type stubs，
+# mypy 静态检查时找不到模块部分子模块会报 import-not-found。observability.py
+# 与 services/qa_service.py 运行时惰性导入 langfuse.decorators / langfuse.callback，
+# 忽略缺失导入避免 CI 误报（与 streamlit / sentence_transformers 同策略）。
+[[tool.mypy.overrides]]
+module = ["langfuse.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

@@ -548,7 +548,12 @@ def test_answer_multi_turn_truncates_long_history(
 
     captured_history: list[list[BaseMessage]] = []
 
-    def _capture_rewrite(question: str, history: Sequence[BaseMessage], model: Any) -> str:
+    def _capture_rewrite(
+        question: str,
+        history: Sequence[BaseMessage],
+        model: Any,
+        run_config: Any = None,
+    ) -> str:
         captured_history.append(list(history))
         return question
 
