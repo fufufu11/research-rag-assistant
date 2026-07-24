@@ -29,13 +29,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from typing import Any, TypeVar
 
     from langchain_core.callbacks import BaseCallbackHandler
+    from langchain_core.runnables import RunnableConfig
 
     F = TypeVar("F", bound=Callable[..., Any])
 
@@ -131,7 +132,7 @@ def observe(name: str) -> Callable[[F], F]:
     # 局部导入避免模块加载时硬依赖 langfuse（未启用时也不导入）
     from langfuse.decorators import observe as _lf_observe
 
-    return _lf_observe(name)
+    return cast("Callable[[F], F]", _lf_observe(name))
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +159,7 @@ def get_current_langchain_handler() -> BaseCallbackHandler | None:
 
     from langfuse.decorators import langfuse_context
 
-    return langfuse_context.get_current_langchain_handler()
+    return cast("BaseCallbackHandler | None", langfuse_context.get_current_langchain_handler())
 
 
 def flush() -> None:
@@ -181,7 +182,7 @@ def flush() -> None:
 def _build_run_config(
     handler: BaseCallbackHandler | None,
     extra_callbacks: Sequence[BaseCallbackHandler] | None = None,
-) -> dict[str, Any] | None:
+) -> RunnableConfig | None:
     """构造 LangChain ``RunnableConfig``（含 callbacks）。
 
     工具函数：把 Langfuse handler 与其他 callback 合并为 ``RunnableConfig``，
