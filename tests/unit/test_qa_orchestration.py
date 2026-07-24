@@ -927,3 +927,303 @@ async def test_answer_stream_short_answer_prefix_of_marker(
     assert len(token_events) == 1
     assert token_events[0].text == "["
     assert len(done_events) == 1
+
+
+# ---------------------------------------------------------------------------
+# 阶段 10.3：BM25 索引缓存接入 QaService._retrieve_hybrid
+# ---------------------------------------------------------------------------
+
+
+def test_answer_with_bm25_cache_returns_correct_citations(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_embeddings: _FakeEmbeddings,
+    fake_chat_model: BaseChatModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """注入 BM25IndexCache + bm25_enabled=True 时，answer 走 _retrieve_hybrid
+    路径并返回正确 citation 映射（功能回归）。
+
+    场景：
+    - 单文档 2 chunks，bm25_enabled=True 走混合检索路径（InMemory 向量 + BM25）
+    - 注入 BM25IndexCache（应被 _retrieve_hybrid 使用）
+    - Mock answer_question 返回 citation_indices=[1, 2]
+    - 验证 citations 正确映射到 doc.id / page / chunk_index
+    """
+
+    from research_rag.hybrid_retriever import BM25IndexCache
+
+    doc = _make_doc(
+        session,
+        "论文A.pdf",
+        chunks=[
+            (1, 0, "深度学习是机器学习的重要分支，使用多层神经网络。"),
+            (2, 1, "机器学习神经网络可以用于图像识别和自然语言处理。"),
+        ],
+    )
+
+    service = QaService(
+        session,
+        llm_config,
+        embeddings=fake_embeddings,
+        chat_model=fake_chat_model,
+        bm25_enabled=True,
+        bm25_cache=BM25IndexCache(),
+    )
+
+    mock_answer = MagicMock(
+        return_value=AnswerWithCitations(
+            answer_text="深度学习是机器学习的一个分支。",
+            citation_indices=[1, 2],
+            citations=[],
+        )
+    )
+    monkeypatch.setattr("research_rag.services.qa_service.answer_question", mock_answer)
+
+    response = service.answer("深度学习", top_k=2)
+
+    # citation 正确映射（与无 cache 路径行为一致）
+    assert response.answer == "深度学习是机器学习的一个分支。"
+    assert len(response.citations) == 2
+    for citation in response.citations:
+        assert citation.document_id == doc.id
+        assert citation.document_name == "论文A.pdf"
+
+
+def test_bm25_cache_avoids_rebuild_on_repeated_answer(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_embeddings: _FakeEmbeddings,
+    fake_chat_model: BaseChatModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """多次 answer 同一文档集，BM25 索引只构建一次（缓存命中后续调用）。
+
+    场景：
+    - 注入 BM25IndexCache，bm25_enabled=True
+    - 同一文档集连续 answer 两次
+    - spy ``BM25Retriever.__init__`` 构造次数：第一次构建，第二次命中缓存不构建
+    """
+
+    from research_rag.hybrid_retriever import BM25IndexCache, BM25Retriever
+
+    _make_doc(
+        session,
+        "论文A.pdf",
+        chunks=[
+            (1, 0, "深度学习是机器学习的重要分支。"),
+            (2, 1, "神经网络用于图像识别。"),
+        ],
+    )
+
+    cache = BM25IndexCache()
+    service = QaService(
+        session,
+        llm_config,
+        embeddings=fake_embeddings,
+        chat_model=fake_chat_model,
+        bm25_enabled=True,
+        bm25_cache=cache,
+    )
+
+    # spy BM25Retriever.__init__ 计数
+    build_count = 0
+    real_init = BM25Retriever.__init__
+
+    def counting_init(self_retriever: BM25Retriever, *args: Any, **kwargs: Any) -> None:
+        nonlocal build_count
+        build_count += 1
+        real_init(self_retriever, *args, **kwargs)
+
+    monkeypatch.setattr("research_rag.hybrid_retriever.BM25Retriever.__init__", counting_init)
+
+    mock_answer = MagicMock(
+        return_value=AnswerWithCitations(
+            answer_text="回答。",
+            citation_indices=[1],
+            citations=[],
+        )
+    )
+    monkeypatch.setattr("research_rag.services.qa_service.answer_question", mock_answer)
+
+    # 第一次 answer：cache miss，构建 BM25 索引
+    service.answer("深度学习", top_k=2)
+    assert build_count == 1
+
+    # 第二次 answer：cache hit，不构建
+    service.answer("深度学习", top_k=2)
+    assert build_count == 1, "缓存命中后不应重复构建 BM25 索引"
+
+
+# ---------------------------------------------------------------------------
+# 阶段 10.3：并发检索（ThreadPoolExecutor 并行 BM25 与 Qdrant 检索）
+# ---------------------------------------------------------------------------
+
+
+def test_retrieve_hybrid_qdrant_path_returns_correct_citations(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_chat_model: BaseChatModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qdrant 路径 + bm25_enabled 时，_retrieve_hybrid 返回正确 citation。
+
+    场景：
+    - mock vector_store（走 Qdrant 路径，非 InMemory）
+    - monkeypatch ``vector_store.search`` 返回固定 QdrantSearchResult
+    - bm25_enabled=True + 注入 BM25IndexCache
+    - 验证 answer 返回的 citations 正确映射（并发检索功能回归）
+    """
+
+    from research_rag.hybrid_retriever import BM25IndexCache
+    from research_rag.vector_store import QdrantSearchResult
+
+    doc = _make_doc(
+        session,
+        "论文A.pdf",
+        chunks=[(1, 0, "深度学习是机器学习的重要分支。")],
+    )
+
+    # mock vector_store（只需 truthy，search 被 monkeypatch）
+    mock_store = MagicMock()
+
+    def fake_search(
+        store: object,
+        query: str,
+        document_ids: list[uuid.UUID],
+        top_k: int,
+    ) -> list[QdrantSearchResult]:
+        return [
+            QdrantSearchResult(
+                document_id=doc.id,
+                document_name="论文A.pdf",
+                start_page=1,
+                end_page=1,
+                chunk_index=0,
+                content="深度学习是机器学习的重要分支。",
+                score=0.9,
+            )
+        ]
+
+    monkeypatch.setattr("research_rag.vector_store.search", fake_search)
+
+    service = QaService(
+        session,
+        llm_config,
+        chat_model=fake_chat_model,
+        vector_store=mock_store,
+        bm25_enabled=True,
+        bm25_cache=BM25IndexCache(),
+    )
+
+    mock_answer = MagicMock(
+        return_value=AnswerWithCitations(
+            answer_text="深度学习是机器学习的一个分支。",
+            citation_indices=[1],
+            citations=[],
+        )
+    )
+    monkeypatch.setattr("research_rag.services.qa_service.answer_question", mock_answer)
+
+    response = service.answer("深度学习", top_k=2)
+
+    assert response.answer == "深度学习是机器学习的一个分支。"
+    assert len(response.citations) == 1
+    assert response.citations[0].document_id == doc.id
+    assert response.citations[0].document_name == "论文A.pdf"
+
+
+def test_retrieve_hybrid_qdrant_path_runs_concurrently(
+    session: Session,
+    llm_config: LlmConfig,
+    fake_chat_model: BaseChatModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qdrant 路径下 BM25 检索与 Qdrant 检索并行执行（不同线程 ID）。
+
+    验证 ``ThreadPoolExecutor`` 并行：两个检索函数在线程池的不同线程
+    执行，而非主线程串行。用 ``threading.Event`` 强制 BM25 等待 Qdrant
+    开始——确保两任务同时活跃，逼线程池分配两个 worker 线程（避免
+    BM25 极快完成后线程被复用导致假阴性）。
+
+    InMemory 路径不并发（测试回退，非生产路径，Issue #63 明确）。
+    """
+
+    import threading
+
+    from research_rag.hybrid_retriever import BM25IndexCache, BM25Retriever
+    from research_rag.vector_store import QdrantSearchResult
+
+    doc = _make_doc(
+        session,
+        "论文A.pdf",
+        chunks=[(1, 0, "深度学习是机器学习的重要分支。")],
+    )
+
+    bm25_thread_ids: list[int] = []
+    qdrant_thread_ids: list[int] = []
+    # Event 强制 BM25 等 Qdrant 开始才放行，确保两任务同时活跃
+    qdrant_started = threading.Event()
+
+    # spy BM25Retriever.retrieve 记录执行线程
+    real_retrieve = BM25Retriever.retrieve
+
+    def spy_bm25_retrieve(self_retriever: BM25Retriever, query: str, top_k: int = 8) -> list[Any]:
+        bm25_thread_ids.append(threading.current_thread().ident)
+        # 等 Qdrant 检索也开始（确认两任务同时活跃）
+        qdrant_started.wait(timeout=5)
+        return real_retrieve(self_retriever, query, top_k)
+
+    monkeypatch.setattr("research_rag.hybrid_retriever.BM25Retriever.retrieve", spy_bm25_retrieve)
+
+    # spy vector_store.search 记录执行线程
+    def spy_qdrant_search(
+        store: object,
+        query: str,
+        document_ids: list[uuid.UUID],
+        top_k: int,
+    ) -> list[QdrantSearchResult]:
+        qdrant_thread_ids.append(threading.current_thread().ident)
+        qdrant_started.set()  # 通知 BM25 我已开始
+        return [
+            QdrantSearchResult(
+                document_id=doc.id,
+                document_name="论文A.pdf",
+                start_page=1,
+                end_page=1,
+                chunk_index=0,
+                content="深度学习是机器学习的重要分支。",
+                score=0.9,
+            )
+        ]
+
+    monkeypatch.setattr("research_rag.vector_store.search", spy_qdrant_search)
+
+    mock_store = MagicMock()
+    service = QaService(
+        session,
+        llm_config,
+        chat_model=fake_chat_model,
+        vector_store=mock_store,
+        bm25_enabled=True,
+        bm25_cache=BM25IndexCache(),
+    )
+
+    mock_answer = MagicMock(
+        return_value=AnswerWithCitations(
+            answer_text="回答。",
+            citation_indices=[1],
+            citations=[],
+        )
+    )
+    monkeypatch.setattr("research_rag.services.qa_service.answer_question", mock_answer)
+
+    service.answer("深度学习", top_k=2)
+
+    # 两个检索都被调用一次
+    assert len(bm25_thread_ids) == 1
+    assert len(qdrant_thread_ids) == 1
+    # 并行执行：不同线程 ID（ThreadPoolExecutor 分配不同 worker 线程）
+    assert bm25_thread_ids[0] != qdrant_thread_ids[0], (
+        "BM25 与 Qdrant 检索应并行执行（不同线程），当前为串行"
+    )

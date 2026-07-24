@@ -106,6 +106,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         app.state.reranker = create_reranker_if_enabled()
 
+    # 阶段 10.3：创建 BM25 索引缓存（仅 bm25_enabled 时）
+    # BM25IndexCache 无 IO 依赖，创建轻量；未启用 BM25 时不创建（保持 None，
+    # QaService 不会走 _retrieve_hybrid 路径，cache 不会被访问）
+    if getattr(app.state, "bm25_cache", None) is None:
+        from research_rag.hybrid_retriever import BM25IndexCache, is_bm25_enabled
+
+        if is_bm25_enabled():
+            app.state.bm25_cache = BM25IndexCache()
+
     try:
         yield
     finally:
@@ -184,6 +193,8 @@ def create_app(
     app.state.vector_store = None
     # reranker 初始为 None，lifespan 中按需创建（测试时不创建）
     app.state.reranker = None
+    # bm25_cache 初始为 None，lifespan 中按需创建（仅 bm25_enabled 时）
+    app.state.bm25_cache = None
 
     # CORS 中间件（开发环境允许 localhost）
     app.add_middleware(

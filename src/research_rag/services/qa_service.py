@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING
@@ -83,6 +84,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from research_rag.db.models import Conversation, Message
+    from research_rag.hybrid_retriever import BM25IndexCache
     from research_rag.reranker import BaseReranker
 
 
@@ -177,6 +179,7 @@ class QaService:
         vector_store: QdrantVectorStore | None = None,
         reranker: BaseReranker | None = None,
         bm25_enabled: bool = False,
+        bm25_cache: BM25IndexCache | None = None,
     ) -> None:
         self.session = session
         self.repo = DocumentRepository(session)
@@ -188,6 +191,7 @@ class QaService:
         self.vector_store = vector_store
         self.reranker = reranker
         self.bm25_enabled = bm25_enabled
+        self._bm25_cache = bm25_cache
 
     # ------------------------------------------------------------------
     # 问答主流程
@@ -805,17 +809,26 @@ class QaService:
         question: str,
         top_k: int,
     ) -> tuple[list[ContextPiece], list[uuid.UUID]]:
-        """混合检索：BM25 + 向量并行召回 + RRF 融合（阶段 8.3）。
+        """混合检索：BM25 + 向量并行召回 + RRF 融合（阶段 8.3 + 阶段 10.3 优化）。
 
         构建全局 BM25 索引（覆盖所有 READY 文档的 chunks），与向量检索
         （Qdrant 或 InMemory）并行召回，取并集后用 RRF 融合排序，最终
         截断到 ``top_k``。融合后用 ``content`` 字段映射回 ``document_id``
         和 ``document_name``。
 
+        阶段 10.3 性能优化：
+        - **BM25 索引缓存**：``self._bm25_cache`` 非 None 时，用
+          ``BM25IndexCache.get_or_build`` 命中复用已构建索引，避免每次
+          问答重建（~50ms）。缓存以 ``(sorted doc_ids, total_chunks)``
+          为签名自动失效，文档增删/重新切分时自动重建。
+        - **并发检索**：Qdrant 路径用 ``ThreadPoolExecutor(max_workers=2)``
+          并行执行 BM25 检索与 Qdrant 检索（BM25 numpy 打分 + Qdrant
+          网络 I/O 都释放 GIL）。InMemory 路径保持串行（测试回退，
+          非生产路径，Issue #63 明确）。
+
         与 ``_retrieve_with_qdrant`` / ``_retrieve_contexts`` 的区别：
         - 多路召回（BM25 + 向量），覆盖关键词/数值类问题（向量检索弱项）
         - RRF 融合两路排名，不依赖原始分数分布（BM25 与余弦尺度差异大）
-        - 每次问答重建 BM25 索引（当前规模 < 100ms，可接受）
 
         Args:
             docs: READY 文档列表。
@@ -857,20 +870,33 @@ class QaService:
             msg = "BM25 索引构建失败：READY 文档均无 chunk。"
             raise NoAvailableDocumentsError(msg)
 
-        # 2. 构建 BM25 索引
-        bm25_retriever = BM25Retriever(all_chunks)
+        # 2. 构建 BM25 索引（阶段 10.3：优先用缓存避免重复构建）
+        doc_ids = [doc.id for doc in docs]
+        if self._bm25_cache is not None:
+            bm25_retriever = self._bm25_cache.get_or_build(doc_ids, all_chunks)
+        else:
+            # 未注入缓存（测试或未配置）：回退到每次重建
+            bm25_retriever = BM25Retriever(all_chunks)
 
         # 3. 向量检索 + BM25 检索（多召回以提高融合效果）
+        # 阶段 10.3：Qdrant 路径用 ThreadPoolExecutor 并行 BM25 与 Qdrant 检索，
+        # 释放 GIL（BM25 numpy 打分 + Qdrant 网络 I/O 都不持有 GIL）。
+        # InMemory 路径保持串行（测试回退，非生产路径，Issue #63 明确）。
         recall_k = max(top_k * DEFAULT_RECALL_MULTIPLIER, top_k)
-        bm25_results = bm25_retriever.retrieve(question, top_k=recall_k)
 
         if self.vector_store is not None:
-            # Qdrant 路径：单库检索，结果含 document_id
+            # Qdrant 路径：并行执行 BM25 检索与 Qdrant 检索
             from research_rag.vector_store import search as qdrant_search
 
-            doc_ids = [doc.id for doc in docs]
             assert self.vector_store is not None
-            qdrant_results = qdrant_search(self.vector_store, question, doc_ids, top_k=recall_k)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_bm25 = executor.submit(bm25_retriever.retrieve, question, top_k=recall_k)
+                future_qdrant = executor.submit(
+                    qdrant_search, self.vector_store, question, doc_ids, top_k=recall_k
+                )
+                bm25_results = future_bm25.result()
+                qdrant_results = future_qdrant.result()
+
             # 转 RetrievalResult 做 RRF（统一接口）
             vector_results: list[RetrievalResult] = [
                 RetrievalResult(
@@ -886,7 +912,8 @@ class QaService:
             for r in qdrant_results:
                 content_to_meta[r.content] = (r.document_id, r.document_name)
         else:
-            # InMemory 路径：每文档独立索引 + 检索，合并为全局向量结果
+            # InMemory 路径：串行执行（测试回退，非生产路径）
+            bm25_results = bm25_retriever.retrieve(question, top_k=recall_k)
             if self._embeddings is None:
                 self._embeddings = create_embeddings(self.embedding_config)
             assert self._embeddings is not None

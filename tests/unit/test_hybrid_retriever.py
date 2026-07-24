@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from langchain_core.embeddings import Embeddings
 
@@ -24,6 +26,7 @@ from research_rag.embedding import RetrievalResult, index_chunks
 from research_rag.hybrid_retriever import (
     DEFAULT_RRF_K,
     BM25Config,
+    BM25IndexCache,
     BM25Retriever,
     HybridRetrievalError,
     get_bm25_config,
@@ -509,3 +512,91 @@ class TestEnvFunctions:
         for value in ["false", "1", "yes", "0", ""]:
             monkeypatch.setenv("BM25_ENABLED", value)
             assert is_bm25_enabled() is False, f"BM25_ENABLED={value!r} 应返回 False"
+
+
+# ---------------------------------------------------------------------------
+# BM25IndexCache 测试（阶段 10.3 性能优化）
+# ---------------------------------------------------------------------------
+
+
+class TestBM25IndexCache:
+    """BM25 索引缓存测试。
+
+    验证缓存命中、签名失效、配置透传等行为。缓存目标：相同文档集合
+    不重复构建 BM25 索引（避免每次问答的 ~50ms 重建开销）。
+    """
+
+    def test_cache_hit_returns_same_instance(self) -> None:
+        """相同 (doc_ids, chunks) 二次调用返回同一 BM25Retriever 实例（命中缓存）。"""
+
+        cache = BM25IndexCache()
+        doc_ids = [uuid.uuid4(), uuid.uuid4()]
+        chunks = _make_chunks()
+
+        retriever1 = cache.get_or_build(doc_ids, chunks)
+        retriever2 = cache.get_or_build(doc_ids, chunks)
+
+        # 命中缓存：两次返回同一对象（is 身份相等）
+        assert retriever1 is retriever2
+
+    def test_cache_invalidate_on_chunk_count_change(self) -> None:
+        """chunk 数量变化时签名不同，缓存失效返回新实例。
+
+        场景：文档重新切分上传（chunk 数变化）或新增 chunk。签名含
+        ``total_chunks``，数量变化触发重建。
+        """
+
+        cache = BM25IndexCache()
+        doc_ids = [uuid.uuid4()]
+        chunks_v1 = _make_chunks()  # 3 个 chunk
+
+        retriever1 = cache.get_or_build(doc_ids, chunks_v1)
+
+        # 新增一个 chunk（total_chunks 从 3 变 4）
+        chunks_v2 = [
+            *chunks_v1,
+            Chunk(
+                start_page=3,
+                end_page=3,
+                chunk_index=3,
+                content="新增的 chunk 内容用于测试缓存失效。",
+                char_count=18,
+            ),
+        ]
+        retriever2 = cache.get_or_build(doc_ids, chunks_v2)
+
+        # 缓存失效：返回不同实例
+        assert retriever1 is not retriever2
+
+        # 再次用 v2 调用应命中缓存（v2 已写入）
+        retriever3 = cache.get_or_build(doc_ids, chunks_v2)
+        assert retriever2 is retriever3
+
+    def test_cache_hit_doc_ids_order_invariant(self) -> None:
+        """doc_ids 顺序不同但集合相同应命中缓存（签名排序后比对）。"""
+
+        cache = BM25IndexCache()
+        id_a, id_b = uuid.uuid4(), uuid.uuid4()
+        chunks = _make_chunks()
+
+        retriever1 = cache.get_or_build([id_a, id_b], chunks)
+        # 顺序颠倒
+        retriever2 = cache.get_or_build([id_b, id_a], chunks)
+
+        # 排序后签名相同 → 命中缓存
+        assert retriever1 is retriever2
+
+    def test_cache_invalidate_on_doc_ids_change(self) -> None:
+        """doc_ids 集合变化（新增文档）时签名不同，缓存失效。"""
+
+        cache = BM25IndexCache()
+        id_a = uuid.uuid4()
+        chunks = _make_chunks()
+
+        retriever1 = cache.get_or_build([id_a], chunks)
+
+        # 新增文档 id
+        id_b = uuid.uuid4()
+        retriever2 = cache.get_or_build([id_a, id_b], chunks)
+
+        assert retriever1 is not retriever2

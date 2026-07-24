@@ -104,7 +104,7 @@
 |---|---|---|---|---|---|
 | 10.1 | 可观测性（Langfuse/LangSmith） | ✅ 已完成（PR #56，Issue #55） | 全链路追踪，定位瓶颈 | 无 | 高 |
 | 10.2 | 用户反馈闭环 | ✅ 已完成（PR #60，Issue #59） | 点赞/点踩记录到 DB | 9.3 | 中 |
-| 10.3 | 性能优化 | 待实施 | Embedding 缓存、并发检索、Qdrant 索引调优 | 无 | 中 |
+| 10.3 | 性能优化 | 待实施（Issue #63） | BM25 索引缓存 + 并发检索（Qdrant 路径）+ 检索阶段 P95 基准 | 无 | 中 |
 | 10.4 | 多语言支持（bge-m3） | ✅ 已提前至 8.4 完成（Issue #42） | 中英文混合场景统一 | 8.2 | 低 |
 
 ### 10.1 可观测性
@@ -131,12 +131,19 @@
 
 ### 10.3 性能优化
 
-- **目标**：降低 P95 延迟，提升并发能力
+- **目标**：降低检索阶段 P95 延迟，提升并发检索能力
+- **范围调整**（基于代码事实重新定义，详见 [Issue #63](https://github.com/fufufu11/research-rag-assistant/issues/63)）：
+  - **砍掉 Embedding 缓存**：Qdrant 生产路径下向量在上传时已持久化，查询时只 embed 1 条 query（极廉价），生产路径收益≈0
+  - **跳过 Qdrant HNSW 调优**：当前规模仅数百 chunk，HNSW 搜索 <10ms，调优收益≈0 且重建索引成本高；数据量到万级 chunk 再评估
+  - **保留并发检索**：`_retrieve_hybrid` 内 BM25 与 Qdrant 检索串行执行，用 `ThreadPoolExecutor` 并行可重叠 ~50ms
+  - **新增 BM25 索引缓存**（最大瓶颈）：每次问答都从 DB 读全部 chunk 重建 BM25 索引（~50ms），缓存后命中复用
 - **技术方案**：
-  - Embedding 缓存：相同文本不重复计算（Redis 或磁盘缓存）
-  - 并发检索：多文档索引用 `asyncio.gather` 并行
-  - Qdrant 索引调优：HNSW 参数（`m`、`ef_construct`、`ef_search`）
-- **验收**：P95 延迟降低 50%，并发 10 请求无阻塞
+  - `BM25IndexCache`：进程级实例经 FastAPI 依赖注入到 `QaService`，签名 `tuple(sorted(doc_ids)) + total_chunks` 自动失效（文档增删/重新切分时自动重建），不耦合 `DocumentService`
+  - 并发检索：`_retrieve_hybrid` 内用 `concurrent.futures.ThreadPoolExecutor(max_workers=2)` 并行 BM25 检索与 Qdrant 检索（numpy 打分 + 网络 I/O 都释放 GIL）；InMemory 测试路径保持串行
+  - 基准脚本 `scripts/benchmark_retrieval.py`：走真实 `QaService` 路径，计时仅 `_retrieve_hybrid`（不含 reranker/LLM），算 P50/P95/P99，冷热两遍
+- **P95 验收口径**：检索阶段（BM25 建索引 + BM25 检索 + Qdrant 检索 + RRF 融合），**不含 LLM 生成与 reranker**。理由见 [ADR 0002](./adr/0002-retrieval-stage-p95-metric.md)——端到端延迟中 LLM 生成占 80%+，检索优化无法移动端到端 P95 50%
+- **验收**：检索阶段 P95 降低 ≥ 50%（优化分支相对 main 基线），并发 10 请求无阻塞
+- **不在范围**：Embedding 缓存、Qdrant HNSW 调优、reranker 延迟优化、LLM 生成延迟优化、InMemory 测试路径优化
 
 ### 10.4 多语言支持
 
