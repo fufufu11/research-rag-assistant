@@ -1,0 +1,59 @@
+# Langfuse 自部署模板（阶段 10.1 可观测性）
+#
+# 用途：本地或生产环境起 Langfuse 服务，配合应用的环境变量
+#   LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST 启用全链路追踪。
+#
+# 启动方式（需先在 Langfuse Web UI 创建项目并获取 public_key / secret_key）：
+#   docker compose -f docker-compose.langfuse.yml up -d
+#
+# 首次启动后访问 http://localhost:3000 注册管理员账号 → 创建项目 →
+# 获取 pk-lf-... 与 sk-lf-... → 写入应用 .env 的 LANGFUSE_PUBLIC_KEY /
+# LANGFUSE_SECRET_KEY / LANGFUSE_HOST=http://localhost:3000
+#
+# 安全提醒：
+# - 生产环境务必修改 LANGFUSE_NEXTAUTH_SECRET 与 LANGFUSE_SALT 为强随机值
+#   （可用 `openssl rand -base64 32` 生成）
+# - Langfuse DB 密码也建议修改为强随机值
+# - 本文件仅作模板，不含真实密钥；实际部署时通过 .env 或环境变量注入
+
+services:
+  langfuse-db:
+    image: postgres:15-alpine
+    container_name: rrag-langfuse-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: rrag-langfuse
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/langfuse
+      # NEXTAUTH_SECRET：用于 JWT 签名，生产环境必须改为强随机值
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-to-strong-random}
+      # SALT：用于加密敏感字段，生产环境必须改为强随机值
+      SALT: ${LANGFUSE_SALT:-change-me-to-strong-random}
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+      # 关闭遥测（自部署不向 Langfuse 官方上报使用数据）
+      TELEMETRY_ENABLED: "false"
+      # 邮件配置（本地开发无需；生产环境配置 SMTP 用于注册与告警）
+      EMAIL_AUTH_DISABLED: "true"
+
+volumes:
+  langfuse-db-data:
+    name: rrag-langfuse-db-data

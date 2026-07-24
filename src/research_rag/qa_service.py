@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.messages import BaseMessage
+    from langchain_core.runnables import RunnableConfig
 
     from research_rag.embedding import RetrievalResult
 
@@ -391,6 +392,7 @@ def rewrite_query(
     question: str,
     history: Sequence[BaseMessage],
     chat_model: BaseChatModel,
+    run_config: RunnableConfig | None = None,
 ) -> str:
     """用历史对话改写当前问题（阶段 9.2 查询改写）。
 
@@ -407,6 +409,9 @@ def rewrite_query(
         question: 当前轮用户问题（可能含指代）。
         history: 历史对话消息列表（已截断）。
         chat_model: LangChain ``BaseChatModel`` 实例。
+        run_config: LangChain ``RunnableConfig``（可选，阶段 10.1 引入）。
+            透传给 ``chat_model.invoke``，用于注入 Langfuse callback handler。
+            ``None`` 时行为不变（向后兼容）。
 
     Returns:
         改写后的独立问题。改写失败或无历史时返回原 ``question``。
@@ -436,7 +441,8 @@ def rewrite_query(
 
     try:
         response = chat_model.invoke(
-            [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+            [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)],
+            config=run_config,
         )
     except Exception:
         # 改写失败回退到原问题，不阻塞问答（降级为不改写检索）
@@ -521,6 +527,7 @@ def _invoke_and_parse(
     chat_model: BaseChatModel,
     messages: Sequence[BaseMessage],
     contexts: Sequence[ContextPiece],
+    run_config: RunnableConfig | None = None,
 ) -> AnswerWithCitations:
     """调用 LLM 并解析答案（``answer_question`` 与多轮路径共享的内部逻辑）。
 
@@ -532,6 +539,9 @@ def _invoke_and_parse(
         chat_model: LangChain ``BaseChatModel`` 实例。
         messages: 已构造的 LangChain 消息列表。
         contexts: 检索到的上下文片段列表（用于引用映射，非空）。
+        run_config: LangChain ``RunnableConfig``（可选，阶段 10.1 引入）。
+            透传给 ``chat_model.invoke``，用于注入 Langfuse callback handler
+            等。``None`` 时行为不变（向后兼容）。
 
     Returns:
         结构化答案（答案文本 + 引用编号 + 真实引用列表）。
@@ -542,7 +552,7 @@ def _invoke_and_parse(
     """
 
     try:
-        response = chat_model.invoke(messages)
+        response = chat_model.invoke(messages, config=run_config)
     except InsufficientEvidenceError:
         raise
     except Exception as exc:
@@ -575,6 +585,7 @@ def answer_question(
     question: str,
     contexts: Sequence[ContextPiece],
     chat_model: BaseChatModel,
+    run_config: RunnableConfig | None = None,
 ) -> AnswerWithCitations:
     """完整问答流程：构造 Prompt → 调用 LLM → 解析引用 → 映射真实引用。
 
@@ -583,6 +594,9 @@ def answer_question(
         contexts: 检索到的上下文片段列表（按相关度降序，非空）。
         chat_model: LangChain ``BaseChatModel`` 实例（如 ``ChatOpenAI``）。
             测试时可传入 ``FakeListChatModel`` 等假模型 Mock。
+        run_config: LangChain ``RunnableConfig``（可选，阶段 10.1 引入）。
+            透传给 ``_invoke_and_parse``，用于注入 Langfuse callback handler。
+            ``None`` 时行为不变（向后兼容）。
 
     Returns:
         结构化答案（答案文本 + 引用编号 + 真实引用列表）。
@@ -596,13 +610,14 @@ def answer_question(
         raise LlmServiceError(msg)
 
     messages = build_prompt(question, contexts)
-    return _invoke_and_parse(chat_model, messages, contexts)
+    return _invoke_and_parse(chat_model, messages, contexts, run_config=run_config)
 
 
 def answer_with_messages(
     messages: Sequence[BaseMessage],
     contexts: Sequence[ContextPiece],
     chat_model: BaseChatModel,
+    run_config: RunnableConfig | None = None,
 ) -> AnswerWithCitations:
     """用预先构造的 messages 调用 LLM（阶段 9.2 多轮对话路径）。
 
@@ -615,6 +630,9 @@ def answer_with_messages(
             HumanMessage）。
         contexts: 当前轮检索到的上下文片段列表（用于引用映射，非空）。
         chat_model: LangChain ``BaseChatModel`` 实例。
+        run_config: LangChain ``RunnableConfig``（可选，阶段 10.1 引入）。
+            透传给 ``_invoke_and_parse``，用于注入 Langfuse callback handler。
+            ``None`` 时行为不变（向后兼容）。
 
     Returns:
         结构化答案（答案文本 + 引用编号 + 真实引用列表）。
@@ -627,7 +645,7 @@ def answer_with_messages(
         msg = "上下文为空，无法构造问答 Prompt。"
         raise LlmServiceError(msg)
 
-    return _invoke_and_parse(chat_model, messages, contexts)
+    return _invoke_and_parse(chat_model, messages, contexts, run_config=run_config)
 
 
 # ---------------------------------------------------------------------------

@@ -54,6 +54,11 @@ from research_rag.embedding import (
     index_chunks,
     retrieve,
 )
+from research_rag.observability import (
+    _build_run_config,
+    get_current_langchain_handler,
+    observe,
+)
 from research_rag.qa_service import (
     INSUFFICIENT_EVIDENCE_MARKER,
     AnswerWithCitations,
@@ -188,6 +193,7 @@ class QaService:
     # 问答主流程
     # ------------------------------------------------------------------
 
+    @observe("qa.answer")
     def answer(
         self,
         question: str,
@@ -215,6 +221,14 @@ class QaService:
         - 每轮引用编号独立（``[C1]`` 只指代当前轮 contexts）。
         - 历史截断在 ``_load_history_messages`` 内完成（轮数 + token 双重保护）。
 
+        阶段 10.1 可观测性：
+        - ``@observe("qa.answer")`` 装饰：本方法成为 Langfuse trace 根节点，
+          未启用 Langfuse 时装饰器 no-op（不影响行为）。
+        - LLM 调用前用 ``get_current_langchain_handler`` 获取 callback，构造
+          ``run_config`` 透传给 ``rewrite_query`` / ``answer_question`` /
+          ``answer_with_messages``，让 LLM 输入输出自动上报到当前 trace。
+        - 检索/重排在 ``_prepare_contexts`` 内部独立 span（嵌套）。
+
         Args:
             question: 用户问题。
             document_ids: 限定查询的文档 UUID 列表。``None`` 或空列表表示
@@ -240,6 +254,11 @@ class QaService:
         request_id = uuid.uuid4()
         start = time.perf_counter()
 
+        # 阶段 10.1：获取 Langfuse callback handler（未启用时 None，run_config=None
+        # 透传给底层 LLM 调用，行为不变）
+        langfuse_handler = get_current_langchain_handler()
+        run_config = _build_run_config(langfuse_handler)
+
         # 1. 解析会话：加载历史 + 确定文档范围（阶段 9.2）
         history_messages: list[BaseMessage] = []
         effective_doc_ids = document_ids
@@ -260,7 +279,9 @@ class QaService:
         # 3. 查询改写（若有历史）：用改写后的问题检索，提升多轮检索质量
         search_query = question
         if history_messages:
-            search_query = rewrite_query(question, history_messages, chat_model)
+            search_query = rewrite_query(
+                question, history_messages, chat_model, run_config=run_config
+            )
 
         # 4. 检索 + 重排（用改写后的问题；与非流式共享 ``_prepare_contexts``）
         contexts, context_doc_ids, _ = self._prepare_contexts(
@@ -270,9 +291,9 @@ class QaService:
         # 5. 调 LLM 问答（带历史用 ``answer_with_messages``，否则单轮）
         if history_messages:
             messages = build_prompt_with_history(question, contexts, history_messages)
-            result = answer_with_messages(messages, contexts, chat_model)
+            result = answer_with_messages(messages, contexts, chat_model, run_config=run_config)
         else:
-            result = answer_question(question, contexts, chat_model)
+            result = answer_question(question, contexts, chat_model, run_config=run_config)
 
         # 6. 映射引用
         citations = self._map_citations(result, contexts, context_doc_ids)
@@ -291,6 +312,7 @@ class QaService:
             conversation_id=conversation_id,
         )
 
+    @observe("qa.answer_stream")
     async def answer_stream(
         self,
         question: str,
@@ -317,6 +339,12 @@ class QaService:
         为避免把标记原文推给用户，在确认输出非该标记前缀前缓冲首段 token；
         一旦缓冲可判定不会变成完整标记即 flush 并停止缓冲，后续直接推送。
 
+        阶段 10.1 可观测性：
+        - ``@observe("qa.answer_stream")`` 装饰：本方法成为 Langfuse trace 根节点。
+        - ``chat_model.astream`` 通过 ``config=run_config`` 透传 Langfuse callback，
+          流式 token 自动上报到当前 trace。
+        - 检索/重排在 ``_prepare_contexts`` 内部独立 span（嵌套）。
+
         Args:
             question: 用户问题。
             document_ids: 限定查询的文档 UUID 列表。``conversation_id`` 非 None
@@ -331,6 +359,10 @@ class QaService:
 
         request_id = uuid.uuid4()
         start = time.perf_counter()
+
+        # 阶段 10.1：获取 Langfuse callback handler（未启用时 None，run_config=None）
+        langfuse_handler = get_current_langchain_handler()
+        run_config = _build_run_config(langfuse_handler)
 
         # 1. 解析会话 + 确保 chat_model + 查询改写 + 检索（异常映射为 error 事件）
         history_messages: list[BaseMessage] = []
@@ -350,7 +382,9 @@ class QaService:
 
             search_query = question
             if history_messages:
-                search_query = rewrite_query(question, history_messages, chat_model)
+                search_query = rewrite_query(
+                    question, history_messages, chat_model, run_config=run_config
+                )
 
             contexts, context_doc_ids, _ = self._prepare_contexts(
                 search_query, effective_doc_ids, top_k
@@ -371,7 +405,7 @@ class QaService:
         buffering = True
 
         try:
-            async for chunk in chat_model.astream(messages):
+            async for chunk in chat_model.astream(messages, config=run_config):
                 token = getattr(chunk, "content", "")
                 if not isinstance(token, str) or not token:
                     continue
@@ -600,6 +634,7 @@ class QaService:
     # 私有：检索 + 重排（非流式与流式共享）
     # ------------------------------------------------------------------
 
+    @observe("qa.retrieve_rerank")
     def _prepare_contexts(
         self,
         question: str,
@@ -611,6 +646,10 @@ class QaService:
         抽取自 ``answer`` 的步骤 1-3.5（查 READY 文档 → 惰性创建 ChatModel →
         检索 → 重排），供非流式 ``answer`` 与流式 ``answer_stream`` 共享，
         保证两条路径的检索/重排行为完全一致。
+
+        阶段 10.1 可观测性：``@observe("qa.retrieve_rerank")`` 装饰，本方法
+        成为嵌套 span（在 ``answer`` / ``answer_stream`` 的 trace 下）。
+        Langfuse dashboard 可看到检索/重排阶段的耗时与命中数。
 
         Raises:
             DocumentNotFoundError: ``document_ids`` 中有不存在的 UUID。
