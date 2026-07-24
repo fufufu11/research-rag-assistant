@@ -46,7 +46,7 @@ router = APIRouter(prefix="/api/v1/feedback", tags=["feedback"])
 def upsert_feedback(
     response: Response,
     payload: FeedbackCreate = Body(...),
-    session: Session = Depends(get_db),  # type: ignore[valid-type]
+    session: Session = Depends(get_db),
 ) -> FeedbackRead:
     """提交反馈（Upsert 语义）。
 
@@ -75,7 +75,7 @@ def upsert_feedback(
 @router.get("/{request_id}", response_model=FeedbackRead)
 def get_feedback(
     request_id: uuid.UUID,
-    session: Session = Depends(get_db),  # type: ignore[valid-type]
+    session: Session = Depends(get_db),
 ) -> FeedbackRead:
     """按 ``request_id`` 查询单条反馈。不存在抛 ``FeedbackNotFoundError``（→ 404）。"""
 
@@ -96,7 +96,7 @@ def list_feedback(
         default=None, description="按会话筛选（join messages.conversation_id）"
     ),
     limit: int | None = Query(default=None, ge=1, description="最多返回条数"),
-    session: Session = Depends(get_db),  # type: ignore[valid-type]
+    session: Session = Depends(get_db),
 ) -> FeedbackList:
     """查询反馈列表，支持按 rating / conversation_id / limit 筛选。
 
@@ -113,7 +113,7 @@ def list_feedback(
 @router.delete("/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_feedback(
     request_id: uuid.UUID,
-    session: Session = Depends(get_db),  # type: ignore[valid-type]
+    session: Session = Depends(get_db),
 ) -> None:
     """撤销反馈。不存在抛 ``FeedbackNotFoundError``（→ 404），成功 204。"""
 
