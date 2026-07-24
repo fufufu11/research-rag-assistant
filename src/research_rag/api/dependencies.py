@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from langchain_qdrant import QdrantVectorStore
     from sqlalchemy.orm import Session, sessionmaker
 
+    from research_rag.hybrid_retriever import BM25IndexCache
     from research_rag.reranker import BaseReranker
 
 
@@ -120,6 +121,18 @@ def get_reranker(request: Request) -> BaseReranker | None:
     """
 
     return getattr(request.app.state, "reranker", None)
+
+
+def get_bm25_cache(request: Request) -> BM25IndexCache | None:
+    """从 ``app.state`` 取应用启动时创建的 BM25 索引缓存（阶段 10.3）。
+
+    工厂在 ``create_app`` 的 ``lifespan`` 中创建并挂到 ``app.state.bm25_cache``。
+    仅当 ``BM25_ENABLED=true`` 时创建（``QaService`` 未启用 BM25 时不会走
+    ``_retrieve_hybrid`` 路径，cache 不会被访问）。``None`` 表示未配置，
+    ``QaService._retrieve_hybrid`` 会回退到每次重建 BM25 索引（旧行为）。
+    """
+
+    return getattr(request.app.state, "bm25_cache", None)
 
 
 def get_document_service(
@@ -246,18 +259,23 @@ def get_qa_service(
     embedding_config: EmbeddingConfig = Depends(get_embedding_config),
     vector_store: QdrantVectorStore | None = Depends(get_vector_store),
     reranker: BaseReranker | None = Depends(get_reranker),
+    bm25_cache: BM25IndexCache | None = Depends(get_bm25_cache),
 ) -> QaService:
     """用当前请求的 Session + LlmConfig + EmbeddingConfig + VectorStore + Reranker 构造 ``QaService``。
 
     依赖 ``get_db``（Session）、``get_llm_config``（LlmConfig）、
     ``get_embedding_config``（EmbeddingConfig）、``get_vector_store``
-    （QdrantVectorStore）和 ``get_reranker``（BaseReranker）。
+    （QdrantVectorStore）、``get_reranker``（BaseReranker）和
+    ``get_bm25_cache``（BM25IndexCache，阶段 10.3）。
     ``QaService`` 内部会惰性创建 Embedding 和 ChatModel（第一次调用
     ``answer`` 时），测试时通过 ``app.dependency_overrides[get_qa_service]``
     替换为 Mock，完全跳过真实数据库、LLM 和 Embedding 调用。
 
     BM25 混合检索通过环境变量 ``BM25_ENABLED=true`` 启用（阶段 8.3）。
     启用时 ``QaService.answer`` 会构建 BM25 索引与向量检索并行召回 + RRF 融合。
+    阶段 10.3 起，``BM25IndexCache`` 经依赖注入，命中时复用已构建索引避免重建。
+    ``bm25_cache`` 为 ``None``（未启用 BM25 或 lifespan 未创建）时，
+    ``_retrieve_hybrid`` 回退到每次重建（旧行为）。
     """
 
     from research_rag.hybrid_retriever import is_bm25_enabled
@@ -269,4 +287,5 @@ def get_qa_service(
         vector_store=vector_store,
         reranker=reranker,
         bm25_enabled=is_bm25_enabled(),
+        bm25_cache=bm25_cache,
     )

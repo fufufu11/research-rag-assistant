@@ -18,9 +18,10 @@
 - **中文分词可选**：BM25 对中文必须先分词才有意义。``jieba`` 作为可选依赖
   （``chinese`` extra），未装时 fallback 到字符级切分（精度降低但可用），
   英文场景直接用 ``\\w+`` 正则切词即可。``tokenize`` 函数惰性导入 jieba。
-- **不持久化 BM25 索引**：每次问答时从 DB 读取 READY 文档的 chunk 重建索引。
-  理由：① 文档增删后需同步更新 BM25 索引，持久化引入一致性问题；② 当前
-  规模（数百 chunk）重建 < 100ms，可接受；③ 后续阶段 10 性能优化时再加缓存。
+- **BM25 索引进程内缓存（阶段 10.3）**：``BM25IndexCache`` 以
+  ``(sorted doc_ids, total_chunks)`` 为签名缓存 ``BM25Retriever`` 实例，
+  命中时复用避免重建（~50ms）。不持久化到磁盘：文档增删后签名变化自动
+  失效重建，无一致性问题。详见 Issue #63 与 ADR 0002。
 - **融合后送入 reranker**：RRF 融合的 Top-K 结果可继续交给 Cross-Encoder
   精排，形成"BM25+向量召回 → RRF 融合 → Cross-Encoder 精排"三阶段流水线。
 - **返回 ``RetrievalResult`` 兼容现有接口**：与 ``embedding.retrieve`` 返回
@@ -39,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 from research_rag.embedding import RetrievalResult
 
 if TYPE_CHECKING:
+    import uuid
     from collections.abc import Sequence
 
     from langchain_core.vectorstores import InMemoryVectorStore
@@ -437,3 +439,96 @@ def is_bm25_enabled() -> bool:
     ``BM25_ENABLED=true`` 时启用，其他值或未设置时关闭（保持向后兼容）。
     """
     return os.environ.get("BM25_ENABLED", "false").strip().lower() == "true"
+
+
+# ---------------------------------------------------------------------------
+# BM25 索引缓存（阶段 10.3 性能优化）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BM25CacheKey:
+    """BM25 索引缓存的签名键。
+
+    用 ``(sorted doc_ids, total_chunks)`` 作为签名：
+    - ``doc_ids`` 排序后构成元组，捕获文档增删
+    - ``total_chunks`` 捕获同文档集下 chunk 数量变化（如重新切分上传）
+
+    不含 chunk content：文档 READY 后 content 不可变（上传创建新 doc，
+    删除移除），``doc_id + chunk_count`` 已能捕获增删，签名计算廉价
+    （doc 数通常 <10）。详见 ADR 0002 与 Issue #63。
+    """
+
+    doc_ids: tuple[uuid.UUID, ...]
+    total_chunks: int
+
+
+class BM25IndexCache:
+    """BM25 索引缓存：相同文档集合不重复构建索引。
+
+    每次 ``QaService._retrieve_hybrid`` 调用前，从 DB 读全部 READY 文档
+    的 chunks 重建 BM25 索引（~50ms）。本缓存以
+    ``(sorted doc_ids, total_chunks)`` 为签名，命中时直接复用已构建的
+    ``BM25Retriever``，避免重复索引构建开销。
+
+    设计取舍（详见 Issue #63）：
+    - **进程级实例 + 依赖注入**：不使用模块级全局变量（难测试），由
+      ``QaService`` 构造函数注入，与 ``vector_store`` / ``reranker`` 风格一致。
+    - **签名自动失效**：不要求 ``DocumentService`` 上传/删除时显式调
+      ``invalidate``（耦合两个模块、漏调一处会导致缓存陈旧）。签名方案
+      自动正确，调用方无感。
+    - **不做 LRU 淘汰**：当前文档规模小（数百 chunk、<10 文档），缓存
+      条目少（通常 1-3 个），无需淘汰策略。未来文档数增长再评估。
+
+    线程安全说明：``_cache`` 是普通 dict，``get_or_build`` 不是原子的。
+    当前 ``QaService.answer`` 是同步路径，单请求内串行调用，无并发风险。
+    若未来多请求并发访问同一 ``BM25IndexCache`` 实例，需加锁或换
+    ``threading.Lock`` 保护（与 ``ThreadPoolExecutor`` 并发检索不同——
+    并发检索是单次 ``_retrieve_hybrid`` 内部并行，不涉及缓存写入）。
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[BM25CacheKey, BM25Retriever] = {}
+
+    @staticmethod
+    def _make_key(
+        doc_ids: Sequence[uuid.UUID],
+        chunks: Sequence[Chunk],
+    ) -> BM25CacheKey:
+        """根据 doc_ids 和 chunks 数量生成缓存签名键。"""
+
+        return BM25CacheKey(
+            doc_ids=tuple(sorted(doc_ids)),
+            total_chunks=len(chunks),
+        )
+
+    def get_or_build(
+        self,
+        doc_ids: Sequence[uuid.UUID],
+        chunks: Sequence[Chunk],
+        config: BM25Config | None = None,
+    ) -> BM25Retriever:
+        """命中缓存则复用，否则构建新索引并缓存。
+
+        Args:
+            doc_ids: 本次检索涉及的文档 UUID 列表（用于生成签名）。
+            chunks: 已转换为 ``chunker.Chunk`` 的全部 chunk 列表
+                （由调用方 ``QaService._orm_chunks_to_chunker`` 转换）。
+            config: BM25 配置，``None`` 时用默认值。
+
+        Returns:
+            ``BM25Retriever`` 实例。命中缓存时返回同一对象（``is`` 相等），
+            否则新建 ``BM25Retriever`` 并存入缓存后返回。
+
+        Raises:
+            HybridRetrievalError: ``rank_bm25`` 未安装或索引构建失败
+                （由 ``BM25Retriever.__init__`` 透传）。
+        """
+        key = self._make_key(doc_ids, chunks)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+
+        retriever = BM25Retriever(chunks, config)
+        self._cache[key] = retriever
+        return retriever
