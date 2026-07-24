@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING
@@ -885,15 +886,13 @@ class QaService:
 
         if self.vector_store is not None:
             # Qdrant 路径：并行执行 BM25 检索与 Qdrant 检索
-            from concurrent.futures import ThreadPoolExecutor
-
             from research_rag.vector_store import search as qdrant_search
 
             assert self.vector_store is not None
             with ThreadPoolExecutor(max_workers=2) as executor:
-                future_bm25 = executor.submit(bm25_retriever.retrieve, question, recall_k)
+                future_bm25 = executor.submit(bm25_retriever.retrieve, question, top_k=recall_k)
                 future_qdrant = executor.submit(
-                    qdrant_search, self.vector_store, question, doc_ids, recall_k
+                    qdrant_search, self.vector_store, question, doc_ids, top_k=recall_k
                 )
                 bm25_results = future_bm25.result()
                 qdrant_results = future_qdrant.result()
