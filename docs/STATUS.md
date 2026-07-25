@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v1.7` — 阶段 0-10.3 + 11.4 + 11.1 全部完成，650+ 条测试通过，CI 三项全绿。
+`v1.8` — 阶段 0-10.3 + 11.4 + 11.1 + 11.2 全部完成，720+ 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -107,6 +107,18 @@
 - 31 个新增单元测试（纯函数 + 集成路径 + ApiClient），现有 620+ 测试零改动
 - 不在范围：用户注册/登录系统 + JWT（后续独立 Issue）、权限分级、API Key 签发/轮换管理界面
 
+### 输入过滤与文件校验
+
+- 输入校验安全模块（阶段 11.2）：PDF 白名单 + 文件大小限制 + Prompt 注入过滤，防止恶意文件上传与注入攻击
+- 新增 `src/research_rag/api/security.py`：与 `api/auth.py` 对称，集中管理输入校验逻辑
+- **文件类型校验**：扩展名 + `content_type` 双重白名单（仅允许 PDF），非 PDF 返回 415；`content_type` 缺失时只校验扩展名（兼容 Streamlit 等不设置 content_type 的客户端）
+- **文件大小校验**：`MAX_UPLOAD_MB` 环境变量（默认 20MB，复用已有变量），超过返回 413（`HTTP_413_CONTENT_TOO_LARGE`）
+- **Prompt 注入过滤**：10 类常见注入模式正则匹配（`ignore previous` / `disregard` / `you are` / `act as` / `system:` / `<|im_start|>` / `[/inst]` / `reveal instructions` / `jailbreak` / `DAN`），命中即返回 400（不净化后放行，避免语义漂移）
+- 路由层调用：`documents.py` 调 `validate_upload_file`、`queries.py` 调 `validate_question`（在 stream 分支前完成，覆盖流式/非流式两条路径）
+- 环境变量 `INPUT_VALIDATION_ENABLED` 控制开关（**默认启用**，与 11.1 认证默认禁用相反——安全功能默认开是最佳实践，且校验只影响非法请求不影响合法用户）
+- 77 个新增单元测试（纯函数 + 路由集成），现有 650+ 测试零改动
+- 不在范围：文件内容深度校验（PDF 内嵌 JS/病毒扫描）、复杂 Prompt 注入防御（LLM 检测）、XSS 过滤（Streamlit 已转义）
+
 ## 技术栈
 
 Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions · Langfuse · Docker Compose
@@ -143,7 +155,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：650+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个、阶段 11.1 新增 31 个）
+- pytest：720+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -159,7 +171,6 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 - 阶段 10.2 前端补充：Streamlit 点赞/点踩按钮接入反馈 API（后端已完成）
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
-- 阶段 11.2 输入过滤与文件校验
 - 阶段 11.3 API 限流（依赖 11.1，已就绪）
 - 阶段 11.5 CI/CD 自动化部署（依赖 11.4，已就绪）
 - 表格感知切分与公式识别（阶段 12）

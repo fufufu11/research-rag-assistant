@@ -23,6 +23,10 @@ API 层映射为 HTTP 状态码）、阶段 9.1（流式 SSE）。
   ``StreamErrorEvent``（SSE 已开始则无法改 HTTP 状态码），非流式仍由全局
   处理器映射。返回 ``StreamingResponse`` 时 FastAPI 跳过 ``response_model``
   序列化（Response 子类直接返回）。
+- **Prompt 注入过滤在路由层完成**（阶段 11.2，Issue #76）：调 service 前用
+  ``validate_question`` 检测常见注入模式（``ignore previous`` / ``system:`` 等），
+  命中即返回 400，避免注入指令进入 LLM。``INPUT_VALIDATION_ENABLED=false`` 时
+  跳过。校验在 ``stream`` 分支之前完成，确保流式 / 非流式路径都被覆盖。
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from fastapi.responses import StreamingResponse
 
 from research_rag.api.dependencies import get_qa_service
 from research_rag.api.schemas import QueryRequest, QueryResponse
+from research_rag.api.security import validate_question
 from research_rag.services.qa_service import (
     QaService,
     StreamDoneEvent,
@@ -75,7 +80,15 @@ def create_query(
 
     流式路径下上述异常转为 SSE ``error`` 事件（HTTP 仍为 200，错误详情在事件
     ``data`` 中），前端据此展示错误。
+
+    阶段 11.2 输入校验（Issue #76）：调 service 前先做 Prompt 注入过滤，
+    命中常见注入模式（``ignore previous`` / ``system:`` 等）返回 400。
+    ``INPUT_VALIDATION_ENABLED=false`` 时跳过。校验在 stream 分支前完成，
+    流式 / 非流式路径都被覆盖。
     """
+
+    # 阶段 11.2：Prompt 注入过滤，命中即 400（在 stream 分支前，覆盖两条路径）
+    validate_question(query_request.question)
 
     if query_request.stream:
         return StreamingResponse(
