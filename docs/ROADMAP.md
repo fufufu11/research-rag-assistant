@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.1（API Key 认证鉴权）+ UI 体验优化（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）
-- **测试**：650+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿；UI 层 app.py 无单元测试，与既有风格一致）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）
+- **测试**：796 个单元测试通过（含 11.5 新增 15 个部署配置测试）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -164,7 +164,7 @@
 | 11.2 | 输入过滤与文件校验 | ✅ 已完成（Issue #76） | 防注入、文件类型/大小限制 | 无 | 高 |
 | 11.3 | API 限流 | ✅ 已完成（Issue #78） | 防止滥用 | 11.1 | 中 |
 | 11.4 | Docker Compose 一键部署 | ✅ 已完成（PR #70，Issue #69） | 容器化部署 api/qdrant/postgres 三服务 | 无 | 高 |
-| 11.5 | CI/CD 自动化部署 | 待实施 | push 到 main 自动部署 | 11.4 | 中 |
+| 11.5 | CI/CD 自动化部署 | ✅ 已完成（Issue #81，PR #82） | push 到 main 自动部署 | 11.4 | 中 |
 
 ### 11.1 认证鉴权
 
@@ -244,9 +244,27 @@
 
 ### 11.5 CI/CD 自动化部署
 
-- **目标**：push 到 main 自动构建镜像并部署
-- **技术方案**：GitHub Actions 构建镜像 → 推送 Registry → SSH 部署到服务器
-- **验收**：合并 PR 后 5 分钟内新版本上线
+- **状态**：✅ 已完成（Issue #81，PR #82）
+- **目标**：push 到 main 后（CI 全绿后）自动构建 Docker 镜像并推送到 GitHub Container Registry，可选 SSH 自动部署到生产服务器
+- **技术方案**：
+  - 新增 `.github/workflows/deploy.yml`：独立 CD workflow（与 `ci.yml` 职责分离）
+    - 触发：`workflow_run`（CI 成功后自动）+ `workflow_dispatch`（手动）
+    - `build-and-push` job：`docker/build-push-action@v6` 构建并推送镜像到 `ghcr.io/fufufu11/research-rag-assistant`，双标签 `:latest` + `:sha-<short>`，`cache-from/cache-to: type=gha` 复用 buildx 层缓存
+    - `deploy` job：`appleboy/ssh-action@v1.2.0` SSH 登录服务器执行 `docker compose pull && up -d` + 健康检查（12 次 × 5 秒）
+  - 新增 `docker-compose.prod.yml`：生产覆盖文件，`api` 服务引用 `ghcr.io/fufufu11/research-rag-assistant:${IMAGE_TAG:-latest}` 预构建镜像（不本地 build），支持 `IMAGE_TAG` 切换历史 sha 标签回滚
+  - 新增 `tests/unit/test_deployment_config.py`：15 个测试验证 workflow 与 compose 配置的 YAML 语法与关键结构（权限 / 步骤 / 依赖 / 门控 / 镜像引用 / 健康检查脚本）
+  - `pyproject.toml`：添加 `pyyaml>=6.0` dev 依赖（解析 YAML 配置文件）
+  - `README.md`：新增「CI/CD 自动化部署」章节（流水线 / 镜像拉取 / Secrets 与 Variables 配置 / 手动触发）
+- **设计取舍**：
+  - **独立 `deploy.yml` 而非合并到 `ci.yml`**：CD 与 CI 职责分离，CI 关心代码质量，CD 关心交付；独立文件便于按需禁用部署
+  - **`workflow_run` 触发而非 push 直接触发**：保证 CI 全绿后才构建镜像，避免推送坏代码到 Registry
+  - **双标签（latest + sha-short）**：latest 方便部署方拉取，sha-short 支持版本追溯与回滚
+  - **SSH 部署用 `ENABLE_SSH_DEPLOY` 变量门控**：未配置服务器时 workflow 仍能构建并推送镜像（价值前置），配置变量后自动启用部署（本地开发友好，不强制配置服务器）
+  - **`docker-compose.prod.yml` 覆盖而非独立文件**：复用基础 `docker-compose.yml` 的 postgres/qdrant/volumes 配置，只覆盖 `api.image`，避免配置漂移
+  - **GHA 缓存**：首次构建慢，后续复用 buildx 层缓存显著加速
+  - **不引入 Helm/Kustomize**：docker compose 足够当前规模
+- **验收**：CI 三项全绿（Lint / Type Check / Test），796 个测试通过（含 15 新增部署配置测试）；deploy workflow 结构经单元测试验证（权限 / 步骤 / 依赖 / 门控 / 镜像引用）
+- **不在范围**：蓝绿部署 / 金丝雀发布（当前单实例规模不需要）、Kubernetes 部署（YAGNI）、回滚自动化（手动 `IMAGE_TAG=sha-xxx` 即可）、多环境（staging/prod）分离
 
 ---
 

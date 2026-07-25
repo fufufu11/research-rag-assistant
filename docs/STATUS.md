@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v1.9` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 全部完成，781 条测试通过，CI 三项全绿。
+`v2.0` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官，796 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -119,6 +119,29 @@
 - 77 个新增单元测试（纯函数 + 路由集成），现有 650+ 测试零改动
 - 不在范围：文件内容深度校验（PDF 内嵌 JS/病毒扫描）、复杂 Prompt 注入防御（LLM 检测）、XSS 过滤（Streamlit 已转义）
 
+### API 限流
+
+- API 请求限流（阶段 11.3）：`slowapi` 库按用户/IP 限制请求频率，超频返回 429，防止滥用消耗 LLM/检索资源
+- 新增 `src/research_rag/api/rate_limit.py`：`Limiter` 模块级单例 + `default_limits` callable lambda（请求时动态读环境变量，支持 monkeypatch 测试）
+- `rate_limit_key` 函数：认证启用按 `key:<token>`（公司出口 IP 共享，按 key 更精确），认证禁用按 `ip:<ip>`（X-Forwarded-For 首段或 client.host）
+- `app.py` 集中挂载：`configure_limiter()` + `app.state.limiter` + `SlowAPIMiddleware` + `RateLimitExceeded` 异常处理器（返回 `ErrorResponse` JSON 体 + `Retry-After` / `X-RateLimit-*` 头）
+- 上传端点 `POST /api/v1/documents` 单独更严限流（`@limiter.limit` 装饰器，默认 10/min vs 全局 60/min），避免上传刷接口拖垮服务
+- 环境变量：`RATE_LIMIT_ENABLED`（开关，默认 false 与 11.1 一致保护现有测试）、`RATE_LIMIT_PER_MINUTE`（默认 60）、`RATE_LIMIT_UPLOAD_PER_MINUTE`（默认 10）
+- **FastAPI 0.139+ 兼容 patch**：`_patch_find_route_handler` 替换 `slowapi.middleware._find_route_handler`，深入 `_IncludedRouter.original_router.routes` 找 endpoint（未打 patch 时 `default_limits` 对所有 `/api/v1/*` 端点失效）
+- 45 个新增单元测试（纯函数 + 路由集成 + FastAPI 0.139+ 兼容性），现有 720+ 测试零改动
+- 不在范围：Redis 后端（多副本时切换 `storage_uri`）、滑动窗口（slowapi 默认固定窗口，当前规模可接受）
+
+### CI/CD 自动化部署
+
+- CI/CD 自动化部署（阶段 11.5）：push 到 main 后（CI 全绿后）自动构建 Docker 镜像并推送到 GitHub Container Registry，可选 SSH 自动部署到生产服务器
+- 新增 `.github/workflows/deploy.yml`：独立 CD workflow（与 `ci.yml` 职责分离），`workflow_run`（CI 成功后自动）+ `workflow_dispatch`（手动）触发
+- `build-and-push` job：`docker/build-push-action@v6` 构建并推送镜像到 `ghcr.io/fufufu11/research-rag-assistant`，双标签 `:latest` + `:sha-<short>`，GHA buildx 缓存加速
+- `deploy` job：`appleboy/ssh-action@v1.2.0` SSH 登录服务器 `docker compose pull && up -d` + 健康检查（12 次 × 5 秒）；门控于 `vars.ENABLE_SSH_DEPLOY == 'true'`（未配置时只构建不部署，本地开发友好）
+- 新增 `docker-compose.prod.yml`：生产覆盖文件，`api` 服务引用 GHCR 预构建镜像（`${IMAGE_TAG:-latest}` 支持版本回滚），复用基础 `docker-compose.yml` 的 postgres/qdrant/volumes 配置
+- 新增 `tests/unit/test_deployment_config.py`：15 个测试验证 workflow 与 compose 配置的 YAML 语法与关键结构（权限 / 步骤 / 依赖 / 门控 / 镜像引用 / 健康检查脚本）
+- `pyproject.toml`：添加 `pyyaml>=6.0` dev 依赖；`README.md`：新增「CI/CD 自动化部署」章节（流水线 / 镜像拉取 / Secrets 与 Variables 配置 / 手动触发）
+- 不在范围：蓝绿部署 / 金丝雀发布、Kubernetes 部署、回滚自动化（手动 `IMAGE_TAG=sha-xxx` 即可）、多环境（staging/prod）分离
+
 ## 技术栈
 
 Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions · Langfuse · Docker Compose
@@ -155,7 +178,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：720+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个）
+- pytest：796 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -171,5 +194,5 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 - 阶段 10.2 前端补充：Streamlit 点赞/点踩按钮接入反馈 API（后端已完成）
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
-- 阶段 11.5 CI/CD 自动化部署（依赖 11.4，已就绪）
+- 生产级安全加固：非 root 容器用户、密钥管理（Vault/secrets manager）、TLS 终止（Nginx 反代）
 - 表格感知切分与公式识别（阶段 12）
