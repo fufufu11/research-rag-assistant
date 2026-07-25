@@ -162,7 +162,7 @@
 |---|---|---|---|---|---|
 | 11.1 | 认证鉴权（API Key） | ✅ 已完成（Issue #74） | 防止未授权访问 | 无 | 高 |
 | 11.2 | 输入过滤与文件校验 | ✅ 已完成（Issue #76） | 防注入、文件类型/大小限制 | 无 | 高 |
-| 11.3 | API 限流 | 待实施 | 防止滥用 | 11.1 | 中 |
+| 11.3 | API 限流 | ✅ 已完成（Issue #78） | 防止滥用 | 11.1 | 中 |
 | 11.4 | Docker Compose 一键部署 | ✅ 已完成（PR #70，Issue #69） | 容器化部署 api/qdrant/postgres 三服务 | 无 | 高 |
 | 11.5 | CI/CD 自动化部署 | 待实施 | push 到 main 自动部署 | 11.4 | 中 |
 
@@ -206,9 +206,23 @@
 
 ### 11.3 API 限流
 
+- **状态**：✅ 已完成（Issue #78，PR #79）
 - **目标**：防止滥用，保护服务稳定性
-- **技术方案**：`slowapi` 库或 Nginx 限流，按用户/IP 限制请求频率
-- **验收**：超频请求返回 429
+- **技术方案**：`slowapi` 库，按用户/IP 限制请求频率
+  - 新增 `src/research_rag/api/rate_limit.py`：`Limiter` 模块级单例 + `default_limits` callable lambda（请求时动态读环境变量，支持 monkeypatch 测试）
+  - `rate_limit_key` 函数：认证启用按 `key:<token>`（公司出口 IP 共享，按 key 更精确），认证禁用按 `ip:<ip>`（X-Forwarded-For 首段或 client.host）
+  - `app.py` 集中挂载：`configure_limiter()` + `app.state.limiter` + `SlowAPIMiddleware` + `RateLimitExceeded` 异常处理器（返回 `ErrorResponse` JSON 体 + `Retry-After` / `X-RateLimit-*` 头）
+  - 上传端点 `POST /api/v1/documents` 单独更严限流：`@limiter.limit(lambda: f"{get_rate_limit_upload_per_minute()}/minute")` 装饰器覆盖默认 60/min（PDF 解析+切分+Embedding+Qdrant 写入单请求 5-30 秒，比问答重）
+  - 环境变量：`RATE_LIMIT_ENABLED`（开关，默认 false 与 11.1 一致保护现有测试）、`RATE_LIMIT_PER_MINUTE`（默认 60）、`RATE_LIMIT_UPLOAD_PER_MINUTE`（默认 10）
+  - **FastAPI 0.139+ 兼容 patch**：`_patch_find_route_handler` 替换 `slowapi.middleware._find_route_handler`，深入 `_IncludedRouter.original_router.routes` 找 endpoint。未打 patch 时 `default_limits` 对所有 `/api/v1/*` 端点失效（slowapi 0.1.9 原实现因 `hasattr(route, "endpoint")` 为 False 找不到路由处理器）
+- **设计取舍**：
+  - **默认禁用（`RATE_LIMIT_ENABLED=false`）**：与 11.1 认证默认禁用一致，保护现有 720+ 测试不被限流误伤；生产部署显式 `RATE_LIMIT_ENABLED=true` 启用
+  - **按 API Key 优先于 IP**：公司出口 IP 共享，按 IP 限流会误伤同公司不同用户。认证启用时按 key 更精确。认证禁用时回退 IP（开发/调试场景）
+  - **上传端点单独更严**：单请求 5-30 秒，比问答重，单独 10/min 限制防刷接口
+  - **内存级而非 Redis**：单实例部署足够。多副本时 slowapi 支持 Redis 后端，切换成本低（改 `storage_uri`）
+  - **固定窗口而非滑动窗口**：slowapi 默认固定窗口，边界处可能短时双倍流量，当前规模可接受
+  - **monkey-patch 而非 fork slowapi**：FastAPI 0.139+ 兼容问题已知，社区待修复；patch 不到 30 行，远小于 fork 维护成本
+- **验收**：CI 三项全绿（Lint / Type Check / Test），781 个测试通过（含 45 新增限流测试）；超频请求返回 429 + `ErrorResponse` body + `Retry-After` / `X-RateLimit-*` 头
 
 ### 11.4 Docker Compose 一键部署
 
