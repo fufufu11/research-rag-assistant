@@ -5,7 +5,7 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）
 - **测试**：560+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
@@ -104,7 +104,7 @@
 |---|---|---|---|---|---|
 | 10.1 | 可观测性（Langfuse/LangSmith） | ✅ 已完成（PR #56，Issue #55） | 全链路追踪，定位瓶颈 | 无 | 高 |
 | 10.2 | 用户反馈闭环 | ✅ 已完成（PR #60，Issue #59） | 点赞/点踩记录到 DB | 9.3 | 中 |
-| 10.3 | 性能优化 | 待实施（Issue #63） | BM25 索引缓存 + 并发检索（Qdrant 路径）+ 检索阶段 P95 基准 | 无 | 中 |
+| 10.3 | 性能优化 | ✅ 已完成（PR #64，Issue #63） | BM25 索引缓存 + 并发检索（Qdrant 路径）+ 检索阶段 P95 基准；P95 降 76.3% | 无 | 中 |
 | 10.4 | 多语言支持（bge-m3） | ✅ 已提前至 8.4 完成（Issue #42） | 中英文混合场景统一 | 8.2 | 低 |
 
 ### 10.1 可观测性
@@ -131,6 +131,7 @@
 
 ### 10.3 性能优化
 
+- **状态**：✅ 已完成（PR #64，Issue #63）
 - **目标**：降低检索阶段 P95 延迟，提升并发检索能力
 - **范围调整**（基于代码事实重新定义，详见 [Issue #63](https://github.com/fufufu11/research-rag-assistant/issues/63)）：
   - **砍掉 Embedding 缓存**：Qdrant 生产路径下向量在上传时已持久化，查询时只 embed 1 条 query（极廉价），生产路径收益≈0
@@ -143,6 +144,7 @@
   - 基准脚本 `scripts/benchmark_retrieval.py`：走真实 `QaService` 路径，计时仅 `_retrieve_hybrid`（不含 reranker/LLM），算 P50/P95/P99，冷热两遍
 - **P95 验收口径**：检索阶段（BM25 建索引 + BM25 检索 + Qdrant 检索 + RRF 融合），**不含 LLM 生成与 reranker**。理由见 [ADR 0002](./adr/0002-retrieval-stage-p95-metric.md)——端到端延迟中 LLM 生成占 80%+，检索优化无法移动端到端 P95 50%
 - **验收**：检索阶段 P95 降低 ≥ 50%（优化分支相对 main 基线），并发 10 请求无阻塞
+- **验收结果**：检索阶段 P95 从 1727.9ms 降至 408.7ms，降幅 76.3%（远超 ≥50% 标准），由 `scripts/verify_bm25_cache.py` 对比 `--no-cache` 基线与缓存路径测得
 - **不在范围**：Embedding 缓存、Qdrant HNSW 调优、reranker 延迟优化、LLM 生成延迟优化、InMemory 测试路径优化
 
 ### 10.4 多语言支持
