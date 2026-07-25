@@ -59,7 +59,8 @@ from research_rag.api.auth import is_auth_enabled
 from research_rag.api.schemas import ErrorResponse
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Iterable
+    from typing import Any
 
     from fastapi import Request
     from starlette.responses import JSONResponse
@@ -267,8 +268,8 @@ def _patch_find_route_handler() -> None:
     测试无需特殊处理（patch 在测试导入本模块时已应用）。
     """
 
-    def _find_route_handler_compat(routes: Iterable[BaseRoute], scope: Scope) -> Callable | None:
-        handler: Callable | None = None
+    def _find_route_handler_compat(routes: Iterable[BaseRoute], scope: Scope) -> Any:
+        handler: Any = None
         for route in routes:
             # FastAPI 0.139+: _IncludedRouter 包装原 router，需深入 original_router
             # 用 type 名匹配避免 import _IncludedRouter（私有 API，导入路径可能变）
@@ -281,7 +282,7 @@ def _patch_find_route_handler() -> None:
                     except Exception:
                         continue
                     if match == _StarletteMatch.FULL and hasattr(sub_route, "endpoint"):
-                        handler = sub_route.endpoint  # type: ignore[attr-defined]
+                        handler = sub_route.endpoint
                         break
                 if handler is not None:
                     continue
@@ -293,10 +294,10 @@ def _patch_find_route_handler() -> None:
             except Exception:
                 continue
             if match == _StarletteMatch.FULL and hasattr(route, "endpoint"):
-                handler = route.endpoint  # type: ignore[attr-defined]
+                handler = route.endpoint
         return handler
 
-    _slowapi_middleware._find_route_handler = _find_route_handler_compat  # type: ignore[assignment]
+    _slowapi_middleware._find_route_handler = _find_route_handler_compat
 
 
 # 模块导入时执行 patch（覆盖 slowapi 原实现，对全局 limiter 中间件生效）
@@ -326,7 +327,7 @@ def reset_rate_limit_storage() -> None:
     生产环境无需调用（计数器随窗口自动过期）。
     """
 
-    limiter._storage.reset()  # type: ignore[private-usage]
+    limiter._storage.reset()
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +357,7 @@ def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded) -> JSON
 
     from fastapi.responses import JSONResponse
 
-    response = JSONResponse(
+    response: JSONResponse = JSONResponse(
         status_code=429,
         content=ErrorResponse(
             detail="请求过于频繁，已触发限流。请稍后重试（参考 Retry-After 头）。"
@@ -364,9 +365,11 @@ def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded) -> JSON
     )
     # 注入 Retry-After / X-RateLimit-* 头（与 slowapi 默认 handler 一致）
     # request.state.view_rate_limit 由 SlowAPIMiddleware 在调本处理器前设置
+    # ``_inject_headers`` 修改 response.headers 并返回原 Response（类型缩窄为
+    # JSONResponse），赋值用 cast 表达"返回的就是传入的 response"语义。
     view_rate_limit = getattr(request.state, "view_rate_limit", None)
     if view_rate_limit is not None:
-        response = limiter._inject_headers(response, view_rate_limit)  # type: ignore[private-usage]
+        limiter._inject_headers(response, view_rate_limit)
     return response
 
 

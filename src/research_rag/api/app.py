@@ -222,7 +222,12 @@ def create_app(
     # limiter.enabled=False 时中间件 no-op（向后兼容现有 720+ 测试）。
     configure_limiter()
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, handle_rate_limit_exceeded)
+    # mypy: Starlette 的 ExceptionHandler 类型签名要求第二参数为 ``Exception``
+    # （非子类），但 slowapi 默认 handler 与项目其他 handler 都用具体异常子类
+    # （如 ``DuplicateDocumentError``）。运行时按注册类型分发，类型签名差异是
+    # Starlette typing 的已知限制（异步 handler 用装饰器形式可绕过，同步用
+    # ``add_exception_handler`` 需显式 ignore）。
+    app.add_exception_handler(RateLimitExceeded, handle_rate_limit_exceeded)  # type: ignore[arg-type]
     app.add_middleware(SlowAPIMiddleware)
 
     # 异常处理器：业务异常 → HTTP 状态码 + ErrorResponse（PROJECT_PLAN 第 13.6 节）
