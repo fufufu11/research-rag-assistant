@@ -67,6 +67,13 @@ dependencies = [
     # 会直接抛 RuntimeError: Form data requires "python-multipart"。
     # 替代方案：无（这是 FastAPI 的硬性要求，非可选）。
     "python-multipart>=0.0.18",
+    # 阶段 11.3 引入：应用层请求限流，防止滥用调用消耗 LLM/Embedding/检索资源。
+    # 必要性：slowapi 是 FastAPI/Starlette 兼容的限流库，支持按 key/IP 限流、
+    # 固定窗口、内存级零外部依赖。所有 /api/v1/* 端点接入，超频返回 429。
+    # 替代方案：① 自实现（需手写并发安全、IP 解析、Retry-After 计算，重复造轮子）；
+    # ② Nginx limit_req（仅部署层生效，开发/测试环境无 Nginx，且无法按 API Key 限流）。
+    # RATE_LIMIT_ENABLED 环境变量开关，默认禁用（开发友好，保护现有 720+ 测试）。
+    "slowapi>=0.1.9",
     # 阶段 6 引入：HTTP 客户端，供 Streamlit UI 层调用 FastAPI API。
     # 必要性：requests 是同步 HTTP 客户端，与 Streamlit 的同步执行模型匹配，
     # API 简单直观，便于在单元测试中用 monkeypatch 替换。
@@ -233,6 +240,14 @@ ignore_missing_imports = true
 # 忽略缺失导入避免 CI 误报（与 streamlit / sentence_transformers 同策略）。
 [[tool.mypy.overrides]]
 module = ["langfuse.*"]
+ignore_missing_imports = true
+
+# slowapi 是阶段 11.3 引入的限流库（主依赖）。该库无完整 type stubs，
+# mypy 静态检查时找不到模块会报 import-not-found。rate_limit.py 运行时
+# 导入 slowapi.Limiter / slowapi.middleware / slowapi.errors，忽略缺失导入
+# 避免 CI 误报（与 langfuse / streamlit 同策略）。
+[[tool.mypy.overrides]]
+module = ["slowapi.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

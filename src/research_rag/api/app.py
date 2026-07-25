@@ -34,6 +34,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import sessionmaker
 
 from research_rag.api.auth import verify_api_key
+from research_rag.api.rate_limit import (
+    RateLimitExceeded,
+    SlowAPIMiddleware,
+    configure_limiter,
+    handle_rate_limit_exceeded,
+    limiter,
+)
 from research_rag.api.routes.conversations import router as conversations_router
 from research_rag.api.routes.documents import router as documents_router
 from research_rag.api.routes.feedback import router as feedback_router
@@ -205,6 +212,23 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # 阶段 11.3：限流配置（slowapi）
+    # configure_limiter 按当前 RATE_LIMIT_ENABLED 环境变量设置 limiter.enabled。
+    # limiter 是模块级单例，default_limits 用 callable 在请求时动态读
+    # RATE_LIMIT_PER_MINUTE，支持 monkeypatch 测试。
+    # SlowAPIMiddleware 对所有 /api/v1/* 端点应用默认限流（60/min），
+    # upload_document 路由用 @limiter.limit 覆盖为更严的 10/min。
+    # limiter.enabled=False 时中间件 no-op（向后兼容现有 720+ 测试）。
+    configure_limiter()
+    app.state.limiter = limiter
+    # mypy: Starlette 的 ExceptionHandler 类型签名要求第二参数为 ``Exception``
+    # （非子类），但 slowapi 默认 handler 与项目其他 handler 都用具体异常子类
+    # （如 ``DuplicateDocumentError``）。运行时按注册类型分发，类型签名差异是
+    # Starlette typing 的已知限制（异步 handler 用装饰器形式可绕过，同步用
+    # ``add_exception_handler`` 需显式 ignore）。
+    app.add_exception_handler(RateLimitExceeded, handle_rate_limit_exceeded)  # type: ignore[arg-type]
+    app.add_middleware(SlowAPIMiddleware)
 
     # 异常处理器：业务异常 → HTTP 状态码 + ErrorResponse（PROJECT_PLAN 第 13.6 节）
     @app.exception_handler(DuplicateDocumentError)

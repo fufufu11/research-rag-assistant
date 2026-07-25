@@ -29,9 +29,11 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, Request, UploadFile, status
+from fastapi.responses import Response
 
 from research_rag.api.dependencies import get_document_service
+from research_rag.api.rate_limit import get_rate_limit_upload_per_minute, limiter
 from research_rag.api.schemas import DocumentList, DocumentRead
 from research_rag.api.security import validate_upload_file
 
@@ -43,7 +45,10 @@ router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
 
 @router.post("", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
+@limiter.limit(lambda: f"{get_rate_limit_upload_per_minute()}/minute")
 def upload_document(
+    request: Request,
+    response: Response,
     file: UploadFile = File(..., description="要上传的 PDF 文件"),
     service: DocumentService = Depends(get_document_service),
 ) -> Document:
@@ -56,6 +61,15 @@ def upload_document(
     阶段 11.2 输入校验（Issue #76）：调 service 前先校验文件类型（扩展名 +
     content_type 双重白名单）和大小（``MAX_UPLOAD_MB``），非 PDF 返回 415、
     超大返回 413。``INPUT_VALIDATION_ENABLED=false`` 时跳过校验。
+
+    阶段 11.3 限流（Issue #78）：上传端点单独更严的限流（默认 10/min，可由
+    ``RATE_LIMIT_UPLOAD_PER_MINUTE`` 环境变量配置），覆盖默认 60/min。
+    理由：上传涉及 PDF 解析+切分+Embedding+Qdrant 写入，单请求耗时 5-30 秒，
+    比问答重，需更严限制防刷接口拖垮服务。``RATE_LIMIT_ENABLED=false`` 时
+    limiter no-op，装饰器不生效。``request: Request`` 参数供 slowapi 提取请求
+    上下文（key 函数读取 Authorization / X-Forwarded-For）。``response: Response``
+    参数供 slowapi ``@limiter.limit`` 装饰器注入 ``X-RateLimit-*`` 头（路由返回
+    非 ``Response`` 对象时 slowapi 需从 kwargs 获取 ``response`` 注入 headers）。
     """
 
     file_bytes = file.file.read()
