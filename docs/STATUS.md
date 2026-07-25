@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v1.4` — 阶段 0-10.2 全部完成，560+ 条测试通过，CI 三项全绿。
+`v1.5` — 阶段 0-10.3 全部完成，560+ 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -76,6 +76,15 @@
 - `request_id` 作为主关联键的决策与已知局限见 [ADR 0001](./adr/0001-request-id-as-feedback-key.md)
 - 30 个单元测试（Repository 12 + API 18，端到端验证）
 
+### 性能优化
+
+- 检索阶段 P95 延迟优化（阶段 10.3）：BM25 索引缓存 + 并发检索（Qdrant 路径）
+- `BM25IndexCache`：进程级缓存经 FastAPI 依赖注入到 `QaService`，签名 `tuple(sorted(doc_ids)) + total_chunks` 自动失效（文档增删/重新切分时自动重建），不耦合 `DocumentService`
+- 并发检索：`_retrieve_hybrid` 内用 `concurrent.futures.ThreadPoolExecutor(max_workers=2)` 并行 BM25 与 Qdrant 检索（numpy 打分 + 网络 I/O 都释放 GIL）；InMemory 测试路径保持串行
+- 基准脚本 `scripts/benchmark_retrieval.py`（走真实 `QaService` 路径，P50/P95/P99，冷热两遍）与 `scripts/verify_bm25_cache.py`（对比 `--no-cache` 基线与缓存路径）
+- 验收结果：检索阶段 P95 从 1727.9ms 降至 408.7ms，降幅 76.3%（远超 ≥50% 标准）
+- P95 验收口径（仅检索阶段，不含 LLM/reranker）与设计决策见 [ADR 0002](./adr/0002-retrieval-stage-p95-metric.md)
+
 ## 技术栈
 
 Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions · Langfuse
@@ -127,7 +136,6 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 ## 后续可选方向
 
 - 阶段 10.2 前端补充：Streamlit 点赞/点踩按钮接入反馈 API（后端已完成）
-- 阶段 10.3 性能优化（Embedding 缓存 / 并发检索 / Qdrant 调优）
 - 阶段 11.4 Docker Compose 一键部署
 - 阶段 11.1 认证鉴权
 - 表格感知切分与公式识别（阶段 12）
