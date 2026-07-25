@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v1.6` — 阶段 0-10.3 + 11.4 全部完成，620+ 条测试通过，CI 三项全绿。
+`v1.7` — 阶段 0-10.3 + 11.4 + 11.1 全部完成，650+ 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -96,6 +96,17 @@
 - `pyproject.toml`：补 `psycopg[binary]>=3.1`（PostgreSQL 驱动，psycopg3 是 SQLAlchemy 2.0 推荐）
 - 部署文档见 [README.md](../README.md)「Docker 部署」章节；Streamlit UI 不容器化，本地运行指向容器化 API
 
+### 认证鉴权
+
+- API Key 认证（阶段 11.1）：所有 `/api/v1/*` 端点接入认证，防止未授权访问
+- 新增 `src/research_rag/api/auth.py`：`verify_api_key` 依赖函数，`HTTPBearer(auto_error=False)` 从 `Authorization: Bearer <key>` 提取 token，与 `API_KEYS` 环境变量配置的有效 key 集合比对
+- `app.include_router(..., dependencies=[Depends(verify_api_key)])` 集中挂载，所有路由（documents / queries / conversations / feedback）自动生效，无需改每个路由文件
+- 环境变量 `API_KEY_ENABLED` 控制开关（默认禁用，开发友好，向后兼容现有测试）；`API_KEYS` 逗号分隔配置多个有效 key
+- `secrets.compare_digest` 恒定时间比对防时序攻击；启用但 `API_KEYS` 为空时安全失败（全部 401，避免认证形同虚设）
+- Streamlit `ApiClient` 从 `API_KEY` 环境变量读 key，`_get_headers()` 在所有 HTTP 调用（`_request` + `ask_question_stream`）携带 `Authorization: Bearer <key>`；未设置时不携带（兼容禁用认证场景）
+- 31 个新增单元测试（纯函数 + 集成路径 + ApiClient），现有 620+ 测试零改动
+- 不在范围：用户注册/登录系统 + JWT（后续独立 Issue）、权限分级、API Key 签发/轮换管理界面
+
 ## 技术栈
 
 Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions · Langfuse · Docker Compose
@@ -132,7 +143,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：620+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个）
+- pytest：650+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个、阶段 11.1 新增 31 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -147,6 +158,8 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 ## 后续可选方向
 
 - 阶段 10.2 前端补充：Streamlit 点赞/点踩按钮接入反馈 API（后端已完成）
-- 阶段 11.1 认证鉴权
+- 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
+- 阶段 11.2 输入过滤与文件校验
+- 阶段 11.3 API 限流（依赖 11.1，已就绪）
 - 阶段 11.5 CI/CD 自动化部署（依赖 11.4，已就绪）
 - 表格感知切分与公式识别（阶段 12）

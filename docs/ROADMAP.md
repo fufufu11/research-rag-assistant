@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.4（Docker Compose 一键部署）+ UI 体验优化（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）
-- **测试**：620+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿；UI 层 app.py 无单元测试，与既有风格一致）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.1（API Key 认证鉴权）+ UI 体验优化（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）
+- **测试**：650+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿；UI 层 app.py 无单元测试，与既有风格一致）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -160,7 +160,7 @@
 
 | 序号 | 任务 | 状态 | 预期收益 | 依赖 | 优先级 |
 |---|---|---|---|---|---|
-| 11.1 | 认证鉴权（API Key / JWT） | 待实施 | 防止未授权访问 | 无 | 高 |
+| 11.1 | 认证鉴权（API Key） | ✅ 已完成（Issue #74） | 防止未授权访问 | 无 | 高 |
 | 11.2 | 输入过滤与文件校验 | 待实施 | 防注入、文件类型/大小限制 | 无 | 高 |
 | 11.3 | API 限流 | 待实施 | 防止滥用 | 11.1 | 中 |
 | 11.4 | Docker Compose 一键部署 | ✅ 已完成（PR #70，Issue #69） | 容器化部署 api/qdrant/postgres 三服务 | 无 | 高 |
@@ -168,9 +168,22 @@
 
 ### 11.1 认证鉴权
 
-- **目标**：API 需鉴权才能访问
-- **技术方案**：API Key（简单场景）或 JWT（多用户场景），FastAPI `Depends` + `HTTPBearer`
-- **验收**：未认证请求返回 401，认证后正常访问
+- **状态**：✅ 已完成（Issue #74）
+- **目标**：API 需鉴权才能访问，防止未授权调用
+- **技术方案**：API Key 认证，FastAPI `Depends` + `HTTPBearer`
+  - 新增 `src/research_rag/api/auth.py`：`verify_api_key` 依赖函数，用 `HTTPBearer(auto_error=False)` 从 `Authorization: Bearer <key>` 提取 token，与 `API_KEYS` 环境变量配置的有效 key 集合比对
+  - `app.include_router(..., dependencies=[Depends(verify_api_key)])` 集中挂载，所有 `/api/v1/*` 端点（documents / queries / conversations / feedback）自动生效，无需改每个路由文件
+  - 环境变量 `API_KEY_ENABLED` 控制开关（默认禁用，开发友好，向后兼容现有测试）；`API_KEYS` 配置有效 key（逗号分隔，支持多个）
+  - `secrets.compare_digest` 恒定时间比对，防时序攻击
+  - Streamlit `ApiClient` 从 `API_KEY` 环境变量读 key，`_get_headers()` 在所有 HTTP 调用（`_request` + `ask_question_stream`）携带 `Authorization: Bearer <key>`
+- **设计取舍**：
+  - **API Key 而非 JWT**：当前无 User 表、无注册登录系统。JWT 需要用户认证流程支撑，独立于 11.1 验收范围。后续建用户系统时再切 JWT，`HTTPBearer` 格式兼容，切换成本低
+  - **开关默认禁用**：参考项目 Langfuse no-op 优先模式，保证现有 620+ 测试零改动、本地开发零配置；生产部署显式 `API_KEY_ENABLED=true` 启用
+  - **启用但 `API_KEYS` 为空时安全失败**：所有请求 401，避免「以为启用了认证但实际无人能通过」的配置静默错误变成「认证形同虚设」
+  - **多 key 支持**：`API_KEYS` 逗号分隔，支持按客户端隔离（UI / 脚本 / 外部服务各自一个 key），泄露时只轮换受影响的那一个
+  - **不引入 User 表**：API Key 是服务级凭证，环境变量管理即可，落库需配套签发/撤销逻辑，YAGNI
+- **验收**：未认证请求返回 401（含 `WWW-Authenticate: Bearer` 头），认证后正常访问；禁用认证时所有端点可匿名访问（向后兼容）；31 个新增单元测试覆盖纯函数 + 集成路径
+- **不在范围**：用户注册/登录系统 + JWT（后续独立 Issue）、权限分级、API Key 签发/轮换/撤销管理界面、阶段 11.2 输入过滤、阶段 11.3 限流
 
 ### 11.2 输入过滤与文件校验
 

@@ -28,11 +28,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import sessionmaker
 
+from research_rag.api.auth import verify_api_key
 from research_rag.api.routes.conversations import router as conversations_router
 from research_rag.api.routes.documents import router as documents_router
 from research_rag.api.routes.feedback import router as feedback_router
@@ -284,10 +285,13 @@ def create_app(
             content=ErrorResponse(detail=str(exc)).model_dump(),
         )
 
-    # 路由
-    app.include_router(documents_router)
-    app.include_router(queries_router)
-    app.include_router(conversations_router)
-    app.include_router(feedback_router)
+    # 路由（阶段 11.1：所有 /api/v1/* 端点接入 API Key 认证）
+    # 用 include_router 的 dependencies 参数集中挂载，无需改每个路由文件。
+    # verify_api_key 在 API_KEY_ENABLED 非 true 时直接放行（向后兼容现有测试）。
+    auth_dependency = [Depends(verify_api_key)]
+    app.include_router(documents_router, dependencies=auth_dependency)
+    app.include_router(queries_router, dependencies=auth_dependency)
+    app.include_router(conversations_router, dependencies=auth_dependency)
+    app.include_router(feedback_router, dependencies=auth_dependency)
 
     return app
