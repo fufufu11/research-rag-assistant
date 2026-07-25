@@ -136,6 +136,58 @@ $env:API_BASE_URL="http://localhost:8000/api/v1"
 uv run streamlit run src/research_rag/ui/app.py
 ```
 
+## CI/CD 自动化部署
+
+push 到 main 分支（CI 全绿后）自动构建 Docker 镜像并推送到 GitHub Container Registry，可选 SSH 自动部署到生产服务器（阶段 11.5）。
+
+### 流水线
+
+1. **CI**（`.github/workflows/ci.yml`）：PR 与 push 到 main 时运行 Lint / Type Check / Test 三项
+2. **Deploy**（`.github/workflows/deploy.yml`）：CI 在 main 成功完成后自动触发
+   - **构建并推送镜像**：构建 Dockerfile，推送到 `ghcr.io/fufufu11/research-rag-assistant`，双标签 `:latest` 与 `:sha-<short-commit>`
+   - **SSH 部署**（可选）：SSH 登录生产服务器，`docker compose pull && up -d`，健康检查验证
+
+### 镜像拉取（生产服务器）
+
+生产服务器用 `docker-compose.prod.yml` 覆盖文件，引用 GHCR 预构建镜像而非本地 build：
+
+```bash
+# 服务器上准备 docker-compose.yml + docker-compose.prod.yml + .env
+docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+回滚到历史版本（通过 sha 标签）：
+
+```bash
+IMAGE_TAG=sha-1a2b3c4 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+### 配置 Secrets / Variables（SSH 自动部署）
+
+在 GitHub 仓库 Settings → Secrets and variables → Actions 中配置：
+
+**Secrets**（敏感信息，部署所需）：
+
+| 名称 | 说明 |
+|---|---|
+| `SSH_HOST` | 生产服务器 IP 或域名 |
+| `SSH_USER` | SSH 登录用户名（如 `ubuntu`） |
+| `SSH_PRIVATE_KEY` | SSH 私钥（完整内容，含 `-----BEGIN ... PRIVATE KEY-----`） |
+
+**Variables**（非敏感配置，控制部署行为）：
+
+| 名称 | 说明 | 示例值 |
+|---|---|---|
+| `ENABLE_SSH_DEPLOY` | 设为 `true` 启用 SSH 自动部署（未设置或非 `true` 时只构建不部署） | `true` |
+| `DEPLOY_PATH` | 服务器上 docker-compose.yml 所在目录 | `/opt/rrag` |
+
+未配置 `ENABLE_SSH_DEPLOY=true` 时，Deploy workflow 只构建并推送镜像到 GHCR，不执行 SSH 部署（本地开发友好，不强制配置服务器）。
+
+### 手动触发
+
+在 GitHub 仓库 Actions 页面选择 `Deploy` workflow → `Run workflow` 可手动触发构建（不依赖 CI 完成）。
+
 ## 使用说明
 
 ### API 接口

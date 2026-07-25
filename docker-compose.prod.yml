@@ -1,0 +1,20 @@
+# 阶段 11.5 CI/CD 自动化部署 - 生产环境覆盖文件（Issue #81）
+#
+# 用法：与 docker-compose.yml 一起使用，覆盖 api 服务为 GHCR 预构建镜像（不本地 build）：
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# 镜像来源：GitHub Container Registry（ghcr.io/fufufu11/research-rag-assistant）
+# 由 .github/workflows/deploy.yml 在 push 到 main 后自动构建并推送。
+#
+# 回滚：设置 IMAGE_TAG 环境变量为历史 sha 标签（如 sha-1a2b3c4）后重新 pull+up：
+#   IMAGE_TAG=sha-1a2b3c4 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# 说明：只覆盖 api 服务的 image 字段，postgres / qdrant / volumes 配置
+# 继承自 docker-compose.yml，避免配置漂移。
+
+services:
+  api:
+    # 使用 GHCR 预构建镜像而非本地 build
+    # 默认 latest，可通过 IMAGE_TAG 环境变量切换到特定 sha 标签回滚
+    image: ghcr.io/fufufu11/research-rag-assistant:${IMAGE_TAG:-latest}
