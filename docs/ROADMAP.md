@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）
-- **测试**：560+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.4（Docker Compose 一键部署）
+- **测试**：620+ 个单元测试通过（API 测试需 Qdrant，CI 上全绿）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -163,7 +163,7 @@
 | 11.1 | 认证鉴权（API Key / JWT） | 待实施 | 防止未授权访问 | 无 | 高 |
 | 11.2 | 输入过滤与文件校验 | 待实施 | 防注入、文件类型/大小限制 | 无 | 高 |
 | 11.3 | API 限流 | 待实施 | 防止滥用 | 11.1 | 中 |
-| 11.4 | Docker Compose 一键部署 | 待实施 | 容器化部署 | 无 | 高 |
+| 11.4 | Docker Compose 一键部署 | ✅ 已完成（PR #70，Issue #69） | 容器化部署 api/qdrant/postgres 三服务 | 无 | 高 |
 | 11.5 | CI/CD 自动化部署 | 待实施 | push 到 main 自动部署 | 11.4 | 中 |
 
 ### 11.1 认证鉴权
@@ -190,12 +190,21 @@
 
 ### 11.4 Docker Compose 一键部署
 
-- **目标**：`docker compose up` 一键启动 API + Qdrant + DB
+- **状态**：✅ 已完成（PR #70，Issue #69）
+- **目标**：`docker compose up` 一键启动 API + Qdrant + PostgreSQL 三服务
 - **技术方案**：
-  - `Dockerfile`：Python 3.11 + uv + 应用代码
-  - `docker-compose.yml`：api / qdrant / postgres 三服务
-  - 环境变量通过 `.env` 注入
-- **验收**：全新机器上 `docker compose up` 后系统可用
+  - `Dockerfile`：`python:3.11-slim` + 多阶段复制 `uv` 二进制 + `uv sync --frozen --extra embedding --extra chinese` 装齐本地推理依赖；`libgomp1`（BM25/lightgbm）+ `curl`（healthcheck）；`uv sync --no-install-project` 利用层缓存
+  - `docker-compose.yml`：api / qdrant / postgres 三服务，postgres 用 `postgres:15-alpine` + healthcheck，api 依赖 postgres healthy 后启动；三个命名卷 `rrag-postgres-data` / `rrag-qdrant-data` / `rrag-api-uploads` 持久化
+  - `docker/entrypoint.sh`：先 `uv run alembic upgrade head` 执行数据库迁移，再 `exec uvicorn` 启动 API（`exec` 让 uvicorn 接管 PID 1 接收 SIGTERM 优雅退出）
+  - `.dockerignore`：排除 `.git` / `.venv` / `data/` / `models/` / 测试缓存等，减小构建上下文
+  - `.env.docker.example`：容器化部署环境变量示例
+  - `pyproject.toml`：补 `psycopg[binary]>=3.1` 依赖（PostgreSQL 驱动，psycopg3 是 SQLAlchemy 2.0 推荐，与同步 Session 路径匹配）
+  - `README.md`：新增 Docker 部署章节（前置要求 / 配置 / 启动 / 停止清理 / 数据持久化 / 与 Streamlit UI 配合）
+- **设计取舍**：
+  - **psycopg3 vs psycopg2 vs asyncpg**：选 `psycopg[binary]`——新官方推荐、协议更现代、与同步 Session 路径匹配；`asyncpg` 仅异步，与当前同步路由不匹配
+  - **Streamlit UI 不容器化**：交接文档只要求 api/qdrant/postgres 三服务；UI 容器化后续按需追加，README 已说明本地运行 UI 指向容器化 API 的方式
+  - **不引入非 root 用户**：生产级安全加固（非 root 用户、密钥管理、TLS）列入后续 Issue，本任务保持简洁
+- **验收**：CI 三项全绿（Lint / Type Check / Test），628 个测试通过；全新机器上 `docker compose up -d --build` 后 API 自动迁移 schema 并启动
 
 ### 11.5 CI/CD 自动化部署
 

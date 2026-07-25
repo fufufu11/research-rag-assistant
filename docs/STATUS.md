@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v1.5` — 阶段 0-10.3 全部完成，560+ 条测试通过，CI 三项全绿。
+`v1.6` — 阶段 0-10.3 + 11.4 全部完成，620+ 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -85,9 +85,18 @@
 - 验收结果：检索阶段 P95 从 1727.9ms 降至 408.7ms，降幅 76.3%（远超 ≥50% 标准）
 - P95 验收口径（仅检索阶段，不含 LLM/reranker）与设计决策见 [ADR 0002](./adr/0002-retrieval-stage-p95-metric.md)
 
+### Docker 部署
+
+- Docker Compose 一键部署（阶段 11.4）：`docker compose up -d --build` 启动 API + Qdrant + PostgreSQL 三服务
+- `Dockerfile`：`python:3.11-slim` + 多阶段复制 `uv` + `uv sync --frozen --extra embedding --extra chinese`；`libgomp1`（BM25/lightgbm）+ `curl`（healthcheck）
+- `docker-compose.yml`：api / qdrant / postgres 三服务 + postgres healthcheck + 三个命名卷（`rrag-postgres-data` / `rrag-qdrant-data` / `rrag-api-uploads`）持久化
+- `docker/entrypoint.sh`：先 `alembic upgrade head` 迁移 schema，再 `exec uvicorn` 启动 API（`exec` 接管 PID 1 优雅接收 SIGTERM）
+- `pyproject.toml`：补 `psycopg[binary]>=3.1`（PostgreSQL 驱动，psycopg3 是 SQLAlchemy 2.0 推荐）
+- 部署文档见 [README.md](../README.md)「Docker 部署」章节；Streamlit UI 不容器化，本地运行指向容器化 API
+
 ## 技术栈
 
-Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions · Langfuse
+Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions · Langfuse · Docker Compose
 
 ## 本地运行
 
@@ -121,7 +130,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：560+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个）
+- pytest：620+ passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -136,6 +145,6 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 ## 后续可选方向
 
 - 阶段 10.2 前端补充：Streamlit 点赞/点踩按钮接入反馈 API（后端已完成）
-- 阶段 11.4 Docker Compose 一键部署
 - 阶段 11.1 认证鉴权
+- 阶段 11.5 CI/CD 自动化部署（依赖 11.4，已就绪）
 - 表格感知切分与公式识别（阶段 12）
