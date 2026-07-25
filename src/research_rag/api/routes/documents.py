@@ -18,9 +18,10 @@ US-001 / US-002、第 13.6 节（异常由 API 层映射为 HTTP 状态码）。
   非法 UUID 返回 422，合法 UUID 直接传入 service（无需手动解析）。
 - **异常不在路由里捕获**：``DuplicateDocumentError`` / ``DocumentNotFoundError``
   由 ``app.py`` 的全局异常处理器统一映射为 409/404，路由代码保持线性。
-- **不实现文件大小/MIME 强制校验**：本 Issue 范围限定（验收标准"可选简单校验，
-  不强制"），service 层会通过 ``parse_pdf`` 自然拒绝非 PDF 文件（抛
-  ``InvalidPdfError`` → service 标记 FAILED）。
+- **文件类型/大小校验在路由层完成**（阶段 11.2，Issue #76）：调 service 前用
+  ``validate_upload_file`` 校验扩展名 + ``content_type`` + 字节数，非 PDF 返回
+  415、超过 ``MAX_UPLOAD_MB`` 返回 413。比 service 层靠 ``parse_pdf`` 自然拒绝
+  更早拦截、错误语义更清晰（415 vs 200+FAILED），且避免浪费落盘/解析资源。
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 
 from research_rag.api.dependencies import get_document_service
 from research_rag.api.schemas import DocumentList, DocumentRead
+from research_rag.api.security import validate_upload_file
 
 if TYPE_CHECKING:
     from research_rag.db.models import Document
@@ -50,9 +52,19 @@ def upload_document(
     接收 ``multipart/form-data`` 上传的文件，调用 ``DocumentService.upload_document``
     完成 sha256 去重、落盘、解析、切分与状态机流转。重复上传抛
     ``DuplicateDocumentError``（由全局处理器映射为 409）。
+
+    阶段 11.2 输入校验（Issue #76）：调 service 前先校验文件类型（扩展名 +
+    content_type 双重白名单）和大小（``MAX_UPLOAD_MB``），非 PDF 返回 415、
+    超大返回 413。``INPUT_VALIDATION_ENABLED=false`` 时跳过校验。
     """
 
     file_bytes = file.file.read()
+    # 阶段 11.2：文件类型 + 大小校验，非法时抛 HTTPException(415/413)
+    validate_upload_file(
+        filename=file.filename or "unknown",
+        content_type=file.content_type,
+        file_bytes=file_bytes,
+    )
     return service.upload_document(file_bytes, file.filename or "unknown")
 
 
