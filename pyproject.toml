@@ -84,6 +84,13 @@ dependencies = [
     # 替代方案：① SQLModel → 多一层 Pydantic 抽象，增加复杂度；
     # ② Tortoise ORM → 异步优先但生态小；③ 裸 SQL → 失去类型安全与迁移工具。
     "sqlalchemy>=2.0",
+    # 阶段 11.4 引入：PostgreSQL 驱动（psycopg3，SQLAlchemy 2.0 推荐）。
+    # 必要性：生产部署用 PostgreSQL，DATABASE_URL 用 ``postgresql+psycopg://`` 前缀，
+    # 缺此驱动 SQLAlchemy 无法连接 PostgreSQL。
+    # 替代方案：① psycopg2-binary → 旧版，psycopg3 是新官方推荐且协议更现代；
+    # ② asyncpg → 仅异步，与当前同步 Session 路径不匹配。
+    # 本地开发用 SQLite 不受影响（装了也不加载）。
+    "psycopg[binary]>=3.1",
     # 演示界面框架：Streamlit 适合数据/AI 应用的快速原型，内置文件上传、表格、
     # 文本输入等组件，无需前端构建工具链即可跑通浏览器交互流程。
     # 替代方案：① Gradio → 同类但交互模型偏 ML demo；② 纯 HTML+JS →

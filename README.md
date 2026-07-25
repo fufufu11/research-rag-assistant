@@ -68,6 +68,74 @@ uv run streamlit run src/research_rag/ui/app.py
 
 打开 http://localhost:8501 即可使用演示界面：上传 PDF → 提问 → 查看带引用的答案。
 
+## Docker 部署
+
+通过 Docker Compose 一键启动 API + Qdrant + PostgreSQL 三服务（阶段 11.4）。
+
+### 前置要求
+
+- [Docker](https://www.docker.com/) 20+
+- [Docker Compose](https://docs.docker.com/compose/) v2+（Docker Desktop 已内置）
+
+### 配置环境变量
+
+复制部署示例配置并填入真实值：
+
+```powershell
+cp .env.docker.example .env
+```
+
+至少需要配置 LLM 相关变量（OpenAI 兼容协议），完整配置项见 [.env.docker.example](./.env.docker.example)。
+
+### 启动服务
+
+```powershell
+# 构建镜像并后台启动三服务（首次构建约 5-10 分钟，含 Embedding 模型下载）
+docker compose up -d --build
+
+# 查看 API 日志
+docker compose logs -f api
+
+# 查看服务状态
+docker compose ps
+```
+
+启动完成后：
+
+- API 服务：http://localhost:8000（API 文档 http://localhost:8000/docs）
+- Qdrant 向量库：http://localhost:6333
+- PostgreSQL：localhost:5432
+
+API 容器启动时会自动执行 `alembic upgrade head` 数据库迁移，无需手动初始化 schema。
+
+### 停止与清理
+
+```powershell
+# 停止服务（保留数据卷）
+docker compose down
+
+# 停止并删除数据卷（清空 PostgreSQL + Qdrant + 上传文件，谨慎使用）
+docker compose down -v
+```
+
+### 数据持久化
+
+| 卷名 | 挂载点 | 用途 |
+|---|---|---|
+| rrag-postgres-data | /var/lib/postgresql/data | PostgreSQL 元数据（文档/会话/反馈） |
+| rrag-qdrant-data | /qdrant/storage | Qdrant 向量数据 |
+| rrag-api-uploads | /app/data/uploads | 上传的 PDF 文件 |
+
+### 与 Streamlit UI 配合
+
+Docker Compose 只容器化 API 服务。Streamlit UI 在本地运行，指向容器化 API：
+
+```powershell
+uv sync --extra dev
+$env:API_BASE_URL="http://localhost:8000/api/v1"
+uv run streamlit run src/research_rag/ui/app.py
+```
+
 ## 使用说明
 
 ### API 接口

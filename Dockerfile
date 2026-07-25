@@ -1,0 +1,51 @@
+# 阶段 11.4 Docker Compose 一键部署
+#
+# Python 3.11-slim + uv + 应用代码。
+# 默认装 embedding + chinese extra（生产需本地 Embedding 推理 + 中文分词）。
+#
+# 构建：docker compose build  或  docker build -t rrag-api .
+# 运行：见 docker-compose.yml
+
+FROM python:3.11-slim-bookworm
+
+# 安装 uv（官方推荐多阶段复制，无需 curl 安装）
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# 系统依赖：
+# - libgomp1：torch CPU 推理（sentence-transformers）需要
+# - curl：容器健康检查（HEALTHCHECK）用
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 先复制依赖清单（利用 Docker 层缓存：源码改动不触发依赖重装）
+COPY pyproject.toml uv.lock ./
+
+# 安装依赖到项目 .venv（含 embedding + chinese extra，生产需本地推理 + 中文分词）
+# --frozen：严格按 lock 文件，不更新
+# --no-install-project：只装依赖，不装项目自身（项目代码后续复制）
+ENV UV_COMPILE_BYTECODE=1
+RUN uv sync --frozen --no-install-project --extra embedding --extra chinese
+
+# 复制应用源码与迁移脚本
+COPY src/ ./src/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
+
+# 创建数据目录（SQLite fallback + 上传文件落盘）
+RUN mkdir -p /app/data/uploads
+
+# 暴露 API 端口
+EXPOSE 8000
+
+# 健康检查（API 文档列表端点，200 视为健康）
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/documents || exit 1
+
+# entrypoint：先 alembic migrate 再启动 uvicorn
+COPY docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
