@@ -34,6 +34,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import sessionmaker
 
 from research_rag.api.auth import verify_api_key
+from research_rag.api.rate_limit import (
+    RateLimitExceeded,
+    SlowAPIMiddleware,
+    configure_limiter,
+    handle_rate_limit_exceeded,
+    limiter,
+)
 from research_rag.api.routes.conversations import router as conversations_router
 from research_rag.api.routes.documents import router as documents_router
 from research_rag.api.routes.feedback import router as feedback_router
@@ -205,6 +212,18 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # 阶段 11.3：限流配置（slowapi）
+    # configure_limiter 按当前 RATE_LIMIT_ENABLED 环境变量设置 limiter.enabled。
+    # limiter 是模块级单例，default_limits 用 callable 在请求时动态读
+    # RATE_LIMIT_PER_MINUTE，支持 monkeypatch 测试。
+    # SlowAPIMiddleware 对所有 /api/v1/* 端点应用默认限流（60/min），
+    # upload_document 路由用 @limiter.limit 覆盖为更严的 10/min。
+    # limiter.enabled=False 时中间件 no-op（向后兼容现有 720+ 测试）。
+    configure_limiter()
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, handle_rate_limit_exceeded)
+    app.add_middleware(SlowAPIMiddleware)
 
     # 异常处理器：业务异常 → HTTP 状态码 + ErrorResponse（PROJECT_PLAN 第 13.6 节）
     @app.exception_handler(DuplicateDocumentError)
