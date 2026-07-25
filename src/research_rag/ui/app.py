@@ -1,33 +1,43 @@
-"""Streamlit 演示界面入口。
+"""Streamlit 演示界面入口（ChatGPT 风格布局）。
 
-依据 PROJECT_PLAN.md 第 716-722 行（阶段 6 验收：浏览器完成完整流程）、
-第 13.6 节（UI 层只调 API，不直接 import 业务层）、阶段 9.2 多轮对话。
+依据 ``docs/ui_feedback_2026_07_25.md`` 问题 2/3/4 改造：
+- **左右分栏**（左 25% 会话+文档管理，右 75% 聊天区），替代原单栏垂直堆叠
+- **用 ``st.chat_message`` + ``st.chat_input``** 实现标准 AI 问答界面，
+  解决「提问后无衔接」「多轮视觉不清晰」问题（问题 2/3）
+- **新建会话时让用户选文档范围**（``client.create_conversation(document_ids=...)``），
+  修复多文档会话只检索到一篇的 Bug（问题 4 根因）
+- **引用卡片标注来源文档名**（``[C1] paper1.pdf · 第3页``），多文档场景可直观区分
 
 启动方式（两个服务分开运行）：
 1. 先启动 FastAPI API 服务（端口 8000）：
-   ``uv run python scripts/run_server.py``
+   ``uv run uvicorn research_rag.api.app:create_app --factory --port 8000``
 2. 再启动 Streamlit 界面（端口 8501）：
-   ``uv run streamlit run src/research_rag/ui/app.py``
+   ``uv run streamlit run src/research_rag/ui/app.py --server.port 8501``
 
 设计取舍（初学者向说明）：
 - **UI 层只调 HTTP API**：本界面通过 ``ApiClient`` 调用 FastAPI，不直接
   import ``DocumentService`` / ``QaService``。所有业务逻辑（PDF 解析、
   向量检索、LLM 问答）都在 API 服务端完成，UI 只负责展示和交互
   （PROJECT_PLAN 第 13.6 节分层）。
-- **界面分三块**：文档管理（上传/列表/删除）、会话管理（新建/切换/删除，
-  阶段 9.2）、问答（输入框 + 带引用展示 + 历史消息回看）。对齐验收标准
-  "上传 PDF → 查看文档列表 → 提问并查看带引用的答案 → 删除文档" + 阶段 9.2
-  "连续 3 轮对话内能正确理解指代"。
-- **错误用 ``st.error`` 展示**：``ApiClientError`` 捕获后直接展示 detail，
-  不阻断整个界面（其他功能区仍可用）。
-- **``st.session_state`` 缓存文档列表**：上传/删除后刷新缓存，避免每次
-  重新请求。问答结果也存 session_state，便于引用展开时回看。
-- **会话状态管理（阶段 9.2）**：``st.session_state["current_conversation_id"]``
-  存当前会话 ID，``st.session_state["conversation_messages"]`` 存当前会话的
-  历史消息列表（切换会话时从 API 重新拉取）。新建会话按钮清空当前会话状态，
-  切换会话按钮拉取目标会话历史。
+- **左右分栏用 ``st.columns([1, 3])``**：不用 ``st.sidebar``（sidebar 在宽屏
+  占比不稳定且不可内部滚动）。``st.columns`` 在 ``layout="wide"`` 下能稳定
+  实现 25%/75% 分栏，左侧栏可内部滚动。
+- **``st.chat_input`` 固定底部**：回车自动发送、自动清空，解决「提问后无衔接」
+  问题（问题 3）。原生支持多轮视觉（每轮 user/assistant 气泡明确分隔）。
+- **流式输出用 ``st.write_stream`` 渲染到 ``st.chat_message("assistant")`` 内**：
+  token 逐字渲染到 assistant 气泡，流结束后引用卡片渲染在同气泡下方
+  （问题 2 布局要求）。
+- **会话文档范围锁定（问题 4 修复）**：左侧栏文档多选 + 「新建会话」按钮，
+  新建时调 ``client.create_conversation(document_ids=selected_ids)`` 锁定范围。
+  会话锁定后右侧不再显示文档选择，改显示当前范围标签；后端
+  ``QaService.answer_stream`` 用会话锁定的 ``document_ids`` 检索，避免
+  「全库检索时 top_k 被一篇占满」的问题。
+- **单轮模式也支持文档范围限定**：未选中会话时，左侧选中的文档范围会传给
+  ``ask_question_stream(document_ids=selected_ids)``，让单轮问答也能限定范围。
+- **``st.session_state`` 缓存文档/会话列表**：上传/删除/新建后刷新缓存，
+  避免 rerun 时重新请求。
 - **不加载 .env**：Streamlit 只需 ``API_BASE_URL``（有默认值），LLM 密钥等
-  由 API 服务端（``run_server.py``）加载。UI 不接触敏感配置。
+  由 API 服务端加载。UI 不接触敏感配置。
 """
 
 from __future__ import annotations
@@ -39,10 +49,10 @@ import streamlit as st
 from research_rag.ui.api_client import (
     ApiClient,
     ApiClientError,
+    Citation,
     ConversationInfo,
     DocumentInfo,
     MessageInfo,
-    QueryResult,
     StreamDone,
     StreamError,
     StreamToken,
@@ -53,6 +63,8 @@ if TYPE_CHECKING:
 
 # 缓存 ApiClient 实例，避免每次 rerun 重建
 _CLIENT_KEY = "_api_client"
+# session_state key：左侧栏选中的文档 ID 列表，供单轮问答和新建会话使用
+_PENDING_DOC_IDS_KEY = "_pending_doc_ids"
 
 
 def _get_client() -> ApiClient:
@@ -70,339 +82,10 @@ def _refresh_documents() -> None:
     st.session_state.pop("documents", None)
 
 
-def _render_header() -> None:
-    """渲染页面标题和说明。"""
-
-    st.set_page_config(page_title="科研文献智能问答", page_icon="📚", layout="wide")
-    st.title("📚 科研文献可溯源智能问答系统")
-    st.caption("上传 PDF → 提问 → 获取带引用的答案。所有处理由 FastAPI 后端完成。")
-
-
-def _render_document_management(client: ApiClient) -> None:
-    """渲染文档管理区：上传 / 列表 / 删除。"""
-
-    st.header("📄 文档管理")
-
-    # --- 上传区 ---
-    uploaded = st.file_uploader(
-        "上传 PDF 文档",
-        type=["pdf"],
-        help="选择 PDF 文件，上传后将自动解析、切分并建立向量索引。",
-    )
-    if uploaded is not None and st.button("确认上传", type="primary"):
-        try:
-            with st.spinner("正在上传并解析文档…"):
-                doc = client.upload_document(uploaded.getvalue(), uploaded.name)
-            st.success(f"上传成功：{doc.original_name}（{doc.page_count} 页，状态：{doc.status}）")
-            _refresh_documents()
-        except ApiClientError as exc:
-            st.error(f"上传失败：{exc.detail}")
-
-
-def _render_document_list(client: ApiClient) -> None:
-    """渲染文档列表和删除按钮。"""
-
-    st.subheader("文档列表")
-
-    if "documents" not in st.session_state:
-        try:
-            st.session_state["documents"] = client.list_documents()
-        except ApiClientError as exc:
-            st.error(f"无法获取文档列表：{exc.detail}")
-            return
-
-    docs: list[DocumentInfo] = st.session_state["documents"]
-    if not docs:
-        st.info("暂无文档，请先上传 PDF。")
-        return
-
-    for doc in docs:
-        with st.container(border=True):
-            col1, col2, col3 = st.columns([5, 3, 1])
-            with col1:
-                st.write(f"**{doc.original_name}**")
-                st.caption(f"ID: `{doc.id}`")
-            with col2:
-                status_label = {
-                    "ready": "✅ 就绪",
-                    "pending": "⏳ 处理中",
-                    "failed": "❌ 失败",
-                }.get(doc.status, doc.status)
-                st.write(f"状态：{status_label}")
-                st.caption(f"{doc.page_count} 页 | 创建于 {doc.created_at}")
-            with col3:
-                if doc.error_message:
-                    st.caption("⚠️ 有错误")
-                    st.caption(doc.error_message)
-                if st.button("删除", key=f"del-{doc.id}", help="删除文档及其向量"):
-                    try:
-                        client.delete_document(doc.id)
-                        st.success(f"已删除：{doc.original_name}")
-                        _refresh_documents()
-                        st.rerun()
-                    except ApiClientError as exc:
-                        st.error(f"删除失败：{exc.detail}")
-
-
-def _render_qa(client: ApiClient) -> None:
-    """渲染问答区：会话管理 + 历史消息 + 输入框 + 流式答案 + 引用展示。
-
-    阶段 9.1 起默认走流式路径（``ask_question_stream`` + ``st.write_stream``）：
-    用户点击「提问」后，LLM 生成内容逐字渲染到界面；流结束后由 ``done`` 事件
-    携带的引用元数据补充渲染引用详情。问答结果存入 ``session_state``，后续
-    rerun（无按钮点击）时由 ``_render_query_result`` 从存储结果完整重渲染。
-
-    阶段 9.2 起支持多轮对话：顶部渲染会话管理区（新建/切换/删除），中间渲染
-    当前会话的历史消息（user/assistant 交替），底部是问答输入框。提问时若
-    已选中会话则传 ``conversation_id``，API 端加载历史注入 prompt 并持久化
-    本轮消息；流式 done 事件回传 ``conversation_id``，前端据此更新当前会话
-    状态。未选中会话时为单轮问答（不持久化）。
-    """
-
-    st.header("❓ 文档问答")
-
-    # 文档选择（可选限定范围）——仅在未选中会话时显示（会话已锁定文档范围）
-    docs: list[DocumentInfo] = st.session_state.get("documents", [])
-    ready_docs = [d for d in docs if d.status == "ready"]
-
-    if not ready_docs:
-        st.info("暂无可用文档（状态为「就绪」），请先上传并等待处理完成。")
-        return
-
-    current_conv_id: str | None = st.session_state.get("current_conversation_id")
-
-    # 会话管理区（新建/切换/删除）
-    _render_conversation_management(client)
-
-    # 当前会话锁定文档范围时不显示文档选择（以会话锁定范围为准）
-    if current_conv_id is None:
-        selected = st.multiselect(
-            "限定文档范围（不选则查询全部就绪文档）",
-            options=ready_docs,
-            format_func=lambda d: d.original_name,
-        )
-        selected_ids = [d.id for d in selected] if selected else None
-    else:
-        # 会话锁定文档范围，UI 提示当前范围
-        conv_messages: list[MessageInfo] = st.session_state.get("conversation_messages", [])
-        current_conv = st.session_state.get("current_conversation")
-        if current_conv is not None and current_conv.document_ids:
-            locked_names = [
-                d.original_name for d in ready_docs if d.id in current_conv.document_ids
-            ]
-            if locked_names:
-                st.caption(f"🔒 当前会话文档范围：{', '.join(locked_names)}")
-        selected_ids = None  # 会话锁定时由 API 端决定范围
-        # 历史消息回看
-        _render_history(conv_messages)
-
-    question = st.text_area(
-        "输入你的问题",
-        placeholder="例如：这篇论文的核心方法是什么？"
-        if current_conv_id is None
-        else "追问：刚才提到的方法再详细说说？",
-        height=80,
-    )
-
-    if st.button("提问", type="primary", disabled=not question.strip()):
-        # 流式问答：用闭包 holder 捕获 done/error 事件元数据，
-        # token 事件文本 yield 给 st.write_stream 逐字渲染。
-        holder: dict[str, object] = {
-            "citations": [],
-            "request_id": "",
-            "elapsed_ms": 0,
-            "conversation_id": current_conv_id,
-            "error": None,
-        }
-
-        def _token_generator() -> Iterator[str]:
-            try:
-                for event in client.ask_question_stream(
-                    question.strip(),
-                    document_ids=selected_ids,
-                    conversation_id=current_conv_id,
-                ):
-                    if isinstance(event, StreamToken):
-                        yield event.text
-                    elif isinstance(event, StreamDone):
-                        holder["citations"] = event.citations
-                        holder["request_id"] = event.request_id
-                        holder["elapsed_ms"] = event.elapsed_ms
-                        holder["conversation_id"] = event.conversation_id
-                    elif isinstance(event, StreamError):
-                        holder["error"] = event.detail
-            except ApiClientError as exc:
-                holder["error"] = exc.detail
-
-        st.subheader("💡 答案")
-        with st.spinner("正在检索和生成答案…"):
-            # ``_token_generator`` 只 yield str，``st.write_stream`` 返回 str。
-            answer = cast("str", st.write_stream(_token_generator()))
-
-        error = holder["error"]
-        if error is not None:
-            st.error(f"问答失败：{error}")
-            st.session_state.pop("last_query_result", None)
-        else:
-            result = QueryResult(
-                answer=answer,
-                citations=holder["citations"],  # type: ignore[arg-type]
-                request_id=holder["request_id"],  # type: ignore[arg-type]
-                elapsed_ms=holder["elapsed_ms"],  # type: ignore[arg-type]
-                conversation_id=holder["conversation_id"],  # type: ignore[arg-type]
-            )
-            st.session_state["last_query_result"] = result
-            st.caption(f"耗时 {result.elapsed_ms} ms | 请求 ID: `{result.request_id}`")
-            _render_citations(result)
-            # 更新当前会话状态（done 事件可能回传新的 conversation_id）
-            new_conv_id = holder["conversation_id"]
-            if isinstance(new_conv_id, str):
-                st.session_state["current_conversation_id"] = new_conv_id
-                # 追加本轮 user + assistant 消息到本地缓存
-                msgs: list[MessageInfo] = st.session_state.get("conversation_messages", [])
-                msgs.append(
-                    MessageInfo(
-                        id="",
-                        role="user",
-                        content=question.strip(),
-                        citations=None,
-                        created_at="",
-                    )
-                )
-                msgs.append(
-                    MessageInfo(
-                        id="",
-                        role="assistant",
-                        content=answer,
-                        citations=result.citations,
-                        created_at="",
-                    )
-                )
-                st.session_state["conversation_messages"] = msgs
-                st.rerun()
-    else:
-        _render_query_result()
-
-
-def _render_conversation_management(client: ApiClient) -> None:
-    """渲染会话管理区：新建 / 列表切换 / 删除（阶段 9.2）。
-
-    用 ``st.session_state`` 维护：
-    - ``conversations``：会话列表缓存（新建/删除后刷新）
-    - ``current_conversation_id``：当前选中会话 ID（``None`` 表示单轮模式）
-    - ``current_conversation``：当前会话 ORM 对象（含 ``document_ids``）
-    - ``conversation_messages``：当前会话的历史消息列表
-    """
-
-    st.subheader("💬 会话管理")
-
-    col_new, col_refresh = st.columns([1, 1])
-    with col_new:
-        if st.button("➕ 新建会话", help="开始一个新的多轮对话"):
-            # 新建会话：清空当前会话状态，进入单轮模式
-            # 实际会话记录在首次提问时由 API 端按需创建（或用户先创建再提问）
-            # 这里采用「先创建空会话」模式，便于用户提前锁定文档范围
-            try:
-                # 默认不锁定文档范围（None 表示全库）
-                conv = client.create_conversation()
-                st.session_state["current_conversation_id"] = conv.id
-                st.session_state["current_conversation"] = conv
-                st.session_state["conversation_messages"] = []
-                _refresh_conversations()
-                st.success(f"已新建会话：{conv.title or conv.id}")
-                st.rerun()
-            except ApiClientError as exc:
-                st.error(f"新建会话失败：{exc.detail}")
-    with col_refresh:
-        if st.button("🔄 刷新会话列表"):
-            _refresh_conversations()
-            st.rerun()
-
-    # 会话列表
-    if "conversations" not in st.session_state:
-        try:
-            st.session_state["conversations"] = client.list_conversations()
-        except ApiClientError as exc:
-            st.error(f"无法获取会话列表：{exc.detail}")
-            return
-
-    convs: list[ConversationInfo] = st.session_state["conversations"]
-    if not convs:
-        st.caption("暂无会话。点击「新建会话」开始多轮对话，或直接提问进入单轮模式。")
-        return
-
-    current_conv_id = st.session_state.get("current_conversation_id")
-    for conv in convs:
-        with st.container(border=True):
-            col1, col2, col3 = st.columns([5, 1, 1])
-            with col1:
-                title = conv.title or f"会话 {conv.id[:8]}"
-                is_current = conv.id == current_conv_id
-                prefix = "▶ " if is_current else ""
-                st.write(f"**{prefix}{title}**")
-                st.caption(f"ID: `{conv.id[:8]}…` | 更新于 {conv.updated_at}")
-            with col2:
-                if st.button("切换", key=f"sw-{conv.id}", disabled=is_current):
-                    try:
-                        full_conv = client.get_conversation(conv.id)
-                        st.session_state["current_conversation_id"] = full_conv.id
-                        st.session_state["current_conversation"] = full_conv
-                        st.session_state["conversation_messages"] = full_conv.messages or []
-                        st.session_state.pop("last_query_result", None)
-                        st.rerun()
-                    except ApiClientError as exc:
-                        st.error(f"切换会话失败：{exc.detail}")
-            with col3:
-                if st.button("删除", key=f"del-conv-{conv.id}"):
-                    try:
-                        client.delete_conversation(conv.id)
-                        if conv.id == current_conv_id:
-                            st.session_state.pop("current_conversation_id", None)
-                            st.session_state.pop("current_conversation", None)
-                            st.session_state.pop("conversation_messages", None)
-                            st.session_state.pop("last_query_result", None)
-                        _refresh_conversations()
-                        st.success("会话已删除")
-                        st.rerun()
-                    except ApiClientError as exc:
-                        st.error(f"删除会话失败：{exc.detail}")
-
-
 def _refresh_conversations() -> None:
     """清除 session_state 中的会话列表缓存，触发下次重新拉取。"""
 
     st.session_state.pop("conversations", None)
-
-
-def _render_history(messages: list[MessageInfo]) -> None:
-    """渲染当前会话的历史消息（user/assistant 交替，阶段 9.2）。
-
-    历史消息只读展示，不提供编辑/删除单条消息的功能（避免与 DB 持久化
-    状态不一致）。``assistant`` 消息含 ``[C1]`` 等引用标记原文和 ``citations``
-    快照，渲染时同时展示答案文本和折叠的引用详情。
-    """
-
-    if not messages:
-        return
-
-    st.subheader(f"📜 历史对话（{len(messages)} 条消息）")
-    for msg in messages:
-        if msg.role == "user":
-            with st.chat_message("user"):
-                st.write(msg.content)
-        elif msg.role == "assistant":
-            with st.chat_message("assistant"):
-                st.write(msg.content)
-                if msg.citations:
-                    with st.expander(f"📎 引用详情（{len(msg.citations)} 条）", expanded=False):
-                        for idx, cite in enumerate(msg.citations, start=1):
-                            page_range = _format_page_range(cite.start_page, cite.end_page)
-                            st.write(
-                                f"**[C{idx}] {cite.document_name} · {page_range} · "
-                                f"片段 {cite.chunk_index} · 分数 {cite.score:.4f}**"
-                            )
-                            st.text(cite.snippet)
-                            st.divider()
 
 
 def _format_page_range(start: int, end: int) -> str:
@@ -417,49 +100,395 @@ def _format_page_range(start: int, end: int) -> str:
     return f"第 {start}-{end} 页"
 
 
-def _render_query_result() -> None:
-    """渲染上一次问答的答案和引用（rerun 时从 session_state 恢复）。"""
+def _get_ready_documents() -> list[DocumentInfo]:
+    """从 session_state 获取就绪文档列表，未缓存时返回空列表。"""
 
-    result: QueryResult | None = st.session_state.get("last_query_result")
-    if result is None:
+    docs: list[DocumentInfo] = st.session_state.get("documents", [])
+    return [d for d in docs if d.status == "ready"]
+
+
+def _ensure_documents_loaded(client: ApiClient) -> None:
+    """确保文档列表已加载到 session_state（首次访问时拉取）。"""
+
+    if "documents" not in st.session_state:
+        try:
+            st.session_state["documents"] = client.list_documents()
+        except ApiClientError as exc:
+            st.session_state["documents"] = []
+            st.error(f"无法获取文档列表：{exc.detail}")
+
+
+def _ensure_conversations_loaded(client: ApiClient) -> None:
+    """确保会话列表已加载到 session_state。"""
+
+    if "conversations" not in st.session_state:
+        try:
+            st.session_state["conversations"] = client.list_conversations()
+        except ApiClientError as exc:
+            st.session_state["conversations"] = []
+            st.error(f"无法获取会话列表：{exc.detail}")
+
+
+# ---------------------------------------------------------------------------
+# 左侧栏：新建会话 + 会话列表 + 文档管理
+# ---------------------------------------------------------------------------
+
+
+def _render_sidebar(client: ApiClient) -> None:
+    """渲染左侧栏：文档范围选择 + 新建会话 + 会话列表 + 文档管理（折叠）。
+
+    文档范围选择同时用于：
+    - 新建会话时锁定 ``document_ids``（解决问题 4 根因）
+    - 单轮问答时限定检索范围（未选中会话时）
+    """
+
+    st.subheader("💬 会话")
+
+    _ensure_documents_loaded(client)
+    ready_docs = _get_ready_documents()
+
+    # 文档范围选择 + 新建会话
+    selected_docs = st.multiselect(
+        "选中文档范围",
+        options=ready_docs,
+        format_func=lambda d: d.original_name,
+        help="选中后新建会话将锁定这些文档；未选中会话时单轮问答也用此范围。",
+    )
+    selected_ids: list[str] | None = [d.id for d in selected_docs] if selected_docs else None
+    # 缓存到 session_state，供右侧单轮问答读取
+    st.session_state[_PENDING_DOC_IDS_KEY] = selected_ids
+
+    if st.button("➕ 新建会话", type="primary", use_container_width=True, disabled=not ready_docs):
+        try:
+            conv = client.create_conversation(document_ids=selected_ids)
+            st.session_state["current_conversation_id"] = conv.id
+            st.session_state["current_conversation"] = conv
+            st.session_state["conversation_messages"] = []
+            _refresh_conversations()
+            st.success(f"已新建会话：{conv.title or conv.id[:8]}")
+            st.rerun()
+        except ApiClientError as exc:
+            st.error(f"新建会话失败：{exc.detail}")
+
+    st.divider()
+
+    # 会话列表
+    _render_conversation_list(client)
+
+    st.divider()
+
+    # 文档管理（折叠，避免占用过多左侧空间）
+    with st.expander("📄 文档管理", expanded=False):
+        _render_document_management(client)
+
+
+def _render_conversation_list(client: ApiClient) -> None:
+    """渲染会话列表（点击切换 / 删除，阶段 9.2）。
+
+    每条会话显示标题（当前会话加 ▶ 前缀），点击切换时从 API 拉取完整消息列表。
+    """
+
+    _ensure_conversations_loaded(client)
+    convs: list[ConversationInfo] = st.session_state.get("conversations", [])
+    if not convs:
+        st.caption("暂无会话。点击上方「新建会话」开始多轮对话。")
         return
 
-    st.subheader("💡 答案")
-    st.markdown(result.answer)
-    st.caption(f"耗时 {result.elapsed_ms} ms | 请求 ID: `{result.request_id}`")
-    _render_citations(result)
+    current_conv_id = st.session_state.get("current_conversation_id")
+    for conv in convs:
+        is_current = conv.id == current_conv_id
+        title = conv.title or f"会话 {conv.id[:8]}"
+        prefix = "▶ " if is_current else ""
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            if st.button(
+                f"{prefix}{title}",
+                key=f"sw-{conv.id}",
+                use_container_width=True,
+                help=f"切换到会话（ID: {conv.id[:8]}…）",
+            ):
+                try:
+                    full_conv = client.get_conversation(conv.id)
+                    st.session_state["current_conversation_id"] = full_conv.id
+                    st.session_state["current_conversation"] = full_conv
+                    st.session_state["conversation_messages"] = full_conv.messages or []
+                    _refresh_conversations()
+                    st.rerun()
+                except ApiClientError as exc:
+                    st.error(f"切换会话失败：{exc.detail}")
+        with col2:
+            if st.button("🗑", key=f"del-conv-{conv.id}", help="删除会话"):
+                try:
+                    client.delete_conversation(conv.id)
+                    if conv.id == current_conv_id:
+                        st.session_state.pop("current_conversation_id", None)
+                        st.session_state.pop("current_conversation", None)
+                        st.session_state.pop("conversation_messages", None)
+                    _refresh_conversations()
+                    st.rerun()
+                except ApiClientError as exc:
+                    st.error(f"删除会话失败：{exc.detail}")
 
 
-def _render_citations(result: QueryResult) -> None:
-    """渲染引用详情区（答案已由流式或 markdown 渲染，这里只渲染引用）。"""
+def _render_document_management(client: ApiClient) -> None:
+    """渲染文档管理区：上传 + 列表 + 删除。"""
 
-    if not result.citations:
-        st.info("本次回答未附带引用。")
+    uploaded = st.file_uploader(
+        "上传 PDF 文档",
+        type=["pdf"],
+        help="选择 PDF 文件，上传后将自动解析、切分并建立向量索引。",
+    )
+    if uploaded is not None and st.button("确认上传", type="primary"):
+        try:
+            with st.spinner("正在上传并解析文档…"):
+                doc = client.upload_document(uploaded.getvalue(), uploaded.name)
+            st.success(f"上传成功：{doc.original_name}（{doc.page_count} 页，状态：{doc.status}）")
+            _refresh_documents()
+            st.rerun()
+        except ApiClientError as exc:
+            st.error(f"上传失败：{exc.detail}")
+
+    docs: list[DocumentInfo] = st.session_state.get("documents", [])
+    if not docs:
+        st.caption("暂无文档。")
         return
 
-    st.subheader(f"📎 引用详情（{len(result.citations)} 条）")
-    for idx, cite in enumerate(result.citations, start=1):
-        page_range = _format_page_range(cite.start_page, cite.end_page)
-        label = f"[C{idx}] {cite.document_name} · {page_range} · 片段 {cite.chunk_index}"
-        with st.expander(label, expanded=False):
-            st.write(f"**来源文档**：{cite.document_name}（`{cite.document_id}`）")
-            st.write(f"**页码**：{page_range}")
-            st.write(f"**片段序号**：{cite.chunk_index}")
-            st.write(f"**相似度分数**：{cite.score:.4f}")
-            st.divider()
-            st.write("**原文片段**：")
+    for doc in docs:
+        with st.container(border=True):
+            status_label = {
+                "ready": "✅",
+                "pending": "⏳",
+                "failed": "❌",
+            }.get(doc.status, doc.status)
+            col1, col2 = st.columns([5, 1])
+            with col1:
+                st.write(f"{status_label} **{doc.original_name}**")
+                st.caption(f"{doc.page_count} 页 | 创建于 {doc.created_at}")
+                if doc.error_message:
+                    st.caption(f"⚠️ {doc.error_message}")
+            with col2:
+                if st.button("删除", key=f"del-{doc.id}", help="删除文档及其向量"):
+                    try:
+                        client.delete_document(doc.id)
+                        _refresh_documents()
+                        st.rerun()
+                    except ApiClientError as exc:
+                        st.error(f"删除失败：{exc.detail}")
+
+
+# ---------------------------------------------------------------------------
+# 右侧主区：消息流 + 底部输入框
+# ---------------------------------------------------------------------------
+
+
+def _render_chat(client: ApiClient) -> None:
+    """渲染右侧聊天区：状态栏 + 历史消息流 + 底部输入框。
+
+    - 历史消息从 ``session_state["conversation_messages"]`` 加载，用
+      ``st.chat_message`` 渲染 user/assistant 交替气泡
+    - 底部 ``st.chat_input`` 回车发送，自动清空，解决多轮衔接问题（问题 3）
+    - 流式输出用 ``st.write_stream`` 渲染到 ``st.chat_message("assistant")`` 内
+    """
+
+    _ensure_documents_loaded(client)
+    ready_docs = _get_ready_documents()
+    if not ready_docs:
+        st.info("暂无可用文档（状态为「就绪」），请先在左侧「📄 文档管理」上传 PDF。")
+        return
+
+    current_conv_id: str | None = st.session_state.get("current_conversation_id")
+    current_conv: ConversationInfo | None = st.session_state.get("current_conversation")
+
+    # 顶部状态栏：显示当前会话信息或单轮模式提示
+    if current_conv_id is not None and current_conv is not None:
+        title = current_conv.title or f"会话 {current_conv_id[:8]}"
+        st.caption(f"💬 当前会话：**{title}**")
+        if current_conv.document_ids:
+            locked_names = [
+                d.original_name for d in ready_docs if d.id in current_conv.document_ids
+            ]
+            if locked_names:
+                st.caption(f"🔒 文档范围：{', '.join(locked_names)}")
+            else:
+                st.caption("🔒 文档范围：已锁定（文档可能已删除）")
+        else:
+            st.caption("🔓 文档范围：全库")
+    else:
+        pending_ids: list[str] | None = st.session_state.get(_PENDING_DOC_IDS_KEY)
+        if pending_ids:
+            selected_names = [d.original_name for d in ready_docs if d.id in pending_ids]
+            if selected_names:
+                st.caption(f"💬 单轮模式 | 文档范围：{', '.join(selected_names)}")
+            else:
+                st.caption("💬 单轮模式（未选中会话，提问不持久化）")
+        else:
+            st.caption("💬 单轮模式 | 文档范围：全库（未选中会话，提问不持久化）")
+
+    # 渲染历史消息
+    msgs: list[MessageInfo] = st.session_state.get("conversation_messages", [])
+    for msg in msgs:
+        with st.chat_message(msg.role):
+            st.write(msg.content)
+            if msg.citations:
+                _render_citations_inline(msg.citations)
+
+    # 底部输入框（回车发送，自动清空）
+    question = st.chat_input("输入你的问题，回车发送…")
+    if question and question.strip():
+        # 单轮模式用左侧选中的范围；会话模式由 API 端用会话锁定范围（传 None）
+        doc_ids_for_query = (
+            None if current_conv_id is not None else st.session_state.get(_PENDING_DOC_IDS_KEY)
+        )
+        _handle_question(client, question.strip(), current_conv_id, doc_ids_for_query)
+
+
+def _handle_question(
+    client: ApiClient,
+    question: str,
+    current_conv_id: str | None,
+    document_ids: list[str] | None,
+) -> None:
+    """处理用户提问：渲染 user 气泡 + 流式渲染 assistant 答案 + 引用 + 更新会话状态。
+
+    流程：
+    1. ``st.chat_message("user")`` 渲染用户问题
+    2. ``st.chat_message("assistant")`` 内用 ``st.write_stream`` 逐字渲染 LLM 答案
+    3. 流结束后在 assistant 气泡内渲染引用卡片
+    4. 若 ``done`` 事件回传 ``conversation_id``（首次提问时 API 端按需创建会话），
+       更新 ``current_conversation_id`` 并把 user+assistant 消息追加到本地缓存
+    5. ``st.rerun()`` 触发重渲染，历史消息从 ``conversation_messages`` 加载
+
+    Args:
+        client: API 客户端。
+        question: 用户问题（已 strip）。
+        current_conv_id: 当前会话 ID（``None`` 表示单轮模式）。
+        document_ids: 限定查询的文档 ID 列表。会话模式下为 ``None``（由 API 端
+            用会话锁定的范围）；单轮模式下用左侧选中的范围。
+    """
+
+    # 渲染 user 消息气泡
+    with st.chat_message("user"):
+        st.write(question)
+
+    # 流式渲染 assistant 答案
+    with st.chat_message("assistant"):
+        holder: dict[str, object] = {
+            "citations": [],
+            "request_id": "",
+            "elapsed_ms": 0,
+            "conversation_id": current_conv_id,
+            "error": None,
+        }
+
+        def _token_generator() -> Iterator[str]:
+            try:
+                for event in client.ask_question_stream(
+                    question,
+                    document_ids=document_ids,
+                    conversation_id=current_conv_id,
+                ):
+                    if isinstance(event, StreamToken):
+                        yield event.text
+                    elif isinstance(event, StreamDone):
+                        holder["citations"] = event.citations
+                        holder["request_id"] = event.request_id
+                        holder["elapsed_ms"] = event.elapsed_ms
+                        holder["conversation_id"] = event.conversation_id
+                    elif isinstance(event, StreamError):
+                        holder["error"] = event.detail
+            except ApiClientError as exc:
+                holder["error"] = exc.detail
+
+        with st.spinner("正在检索和生成答案…"):
+            # ``_token_generator`` 只 yield str，``st.write_stream`` 返回 str。
+            answer = cast("str", st.write_stream(_token_generator()))
+
+        error = holder["error"]
+        if error is not None:
+            st.error(f"问答失败：{error}")
+            return
+
+        # 渲染引用卡片（在 assistant 气泡内）
+        citations: list[Citation] = holder["citations"]  # type: ignore[assignment]
+        if citations:
+            _render_citations_inline(citations)
+
+        elapsed_ms = holder["elapsed_ms"]
+        request_id = holder["request_id"]
+        st.caption(f"耗时 {elapsed_ms} ms | 请求 ID: `{request_id}`")
+
+        # 更新会话状态（done 事件可能回传新的 conversation_id）
+        new_conv_id = holder["conversation_id"]
+        if isinstance(new_conv_id, str):
+            st.session_state["current_conversation_id"] = new_conv_id
+            # 追加本轮 user + assistant 消息到本地缓存
+            msgs: list[MessageInfo] = st.session_state.get("conversation_messages", [])
+            msgs.append(
+                MessageInfo(
+                    id="",
+                    role="user",
+                    content=question,
+                    citations=None,
+                    created_at="",
+                )
+            )
+            msgs.append(
+                MessageInfo(
+                    id="",
+                    role="assistant",
+                    content=answer,
+                    citations=citations,
+                    created_at="",
+                )
+            )
+            st.session_state["conversation_messages"] = msgs
+            _refresh_conversations()
+            st.rerun()
+
+
+def _render_citations_inline(citations: list[Citation]) -> None:
+    """在 assistant 消息气泡内渲染引用详情（折叠式）。
+
+    引用标题明确标注来源文档名，便于多文档场景区分（问题 4 改进）：
+    ``[C1] paper1.pdf · 第3页 · 片段 5``
+
+    Args:
+        citations: 引用列表（按模型引用顺序）。
+    """
+
+    if not citations:
+        return
+
+    with st.expander(f"📎 引用详情（{len(citations)} 条）", expanded=False):
+        for idx, cite in enumerate(citations, start=1):
+            page_range = _format_page_range(cite.start_page, cite.end_page)
+            st.write(f"**[C{idx}] {cite.document_name} · {page_range} · 片段 {cite.chunk_index}**")
+            st.caption(f"相似度分数 {cite.score:.4f} | 文档 ID: `{cite.document_id[:8]}…`")
             st.text(cite.snippet)
+            st.divider()
 
 
 def main() -> None:
     """Streamlit 应用主入口（由 ``streamlit run`` 调用）。"""
 
-    _render_header()
+    st.set_page_config(
+        page_title="科研文献智能问答",
+        page_icon="📚",
+        layout="wide",
+    )
+    st.title("📚 科研文献可溯源智能问答系统")
+    st.caption("上传 PDF → 提问 → 获取带引用的答案。所有处理由 FastAPI 后端完成。")
+
     client = _get_client()
-    _render_document_management(client)
-    _render_document_list(client)
-    st.divider()
-    _render_qa(client)
+
+    # 左右分栏：左 25% 会话+文档管理，右 75% 聊天区
+    left_col, right_col = st.columns([1, 3], gap="medium")
+
+    with left_col:
+        _render_sidebar(client)
+
+    with right_col:
+        _render_chat(client)
 
 
 if __name__ == "__main__":

@@ -42,7 +42,9 @@
 
 ### 演示界面
 
-- Streamlit 界面：文档管理、问答（流式 + 多轮）、引用详情展示、会话新建/切换/历史回看
+- Streamlit 界面（ChatGPT 风格布局，Issue #72）：左右分栏（左 25% 会话+文档管理，右 75% 聊天区），`st.chat_message` user/assistant 交替气泡 + `st.chat_input` 回车发送自动清空，流式输出用 `st.write_stream` 渲染到 assistant 气泡内
+- 文档范围锁定：左侧文档多选 + 「新建会话」按钮，新建时调 `client.create_conversation(document_ids=selected_ids)` 锁定范围（修复多文档会话只检索到一篇的 Bug）；单轮问答也支持文档范围限定
+- 引用卡片标注来源文档名（`[C1] paper1.pdf · 第3页`），多文档场景可直观区分
 - 通过 HTTP 调用 FastAPI，不直接 import 业务层
 
 ### 评测与质量优化
