@@ -228,6 +228,7 @@ class ApiClient:
         self,
         base_url: str | None = None,
         timeout: float | None = None,
+        api_key: str | None = None,
     ) -> None:
         """初始化客户端。
 
@@ -235,12 +236,30 @@ class ApiClient:
             base_url: API 基地址。``None`` 时从环境变量 ``API_BASE_URL`` 读取，
                 未设置时用 ``DEFAULT_API_BASE_URL``。
             timeout: 请求超时秒数。``None`` 时用 ``DEFAULT_TIMEOUT``。
+            api_key: API Key（阶段 11.1 认证鉴权）。``None`` 时从环境变量
+                ``API_KEY`` 读取。非空时在请求头携带 ``Authorization: Bearer <key>``；
+                为空时不携带（兼容 API 端禁用认证 ``API_KEY_ENABLED`` 非 true 的
+                开发场景）。生产环境 API 端启用认证时，UI 必须设置 ``API_KEY``
+                环境变量才能调用。
         """
 
         self.base_url = (base_url or os.environ.get("API_BASE_URL", DEFAULT_API_BASE_URL)).rstrip(
             "/"
         )
         self.timeout = timeout if timeout is not None else DEFAULT_TIMEOUT
+        self.api_key = api_key or os.environ.get("API_KEY", "")
+
+    def _get_headers(self) -> dict[str, str]:
+        """构造请求头（阶段 11.1 认证鉴权）。
+
+        设置 ``api_key`` 时携带 ``Authorization: Bearer <key>``；未设置时返回
+        空 dict，兼容 API 端禁用认证（``API_KEY_ENABLED`` 非 true）的开发场景。
+        生产环境 API 端启用认证时，UI 必须设置 ``API_KEY`` 环境变量才能调用。
+        """
+
+        if self.api_key:
+            return {"Authorization": f"Bearer {self.api_key}"}
+        return {}
 
     def _request(
         self,
@@ -262,6 +281,7 @@ class ApiClient:
                 url=url,
                 files=files,
                 json=json,
+                headers=self._get_headers(),
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
@@ -394,6 +414,7 @@ class ApiClient:
             response = requests.post(
                 url=url,
                 json=payload,
+                headers=self._get_headers(),
                 timeout=self.timeout,
                 stream=True,
             )
