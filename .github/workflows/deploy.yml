@@ -1,0 +1,116 @@
+name: Deploy
+
+# 阶段 11.5 CI/CD 自动化部署（Issue #81）
+#
+# 流水线：CI（.github/workflows/ci.yml）成功完成 → 构建 Docker 镜像 →
+#         推送到 GitHub Container Registry（ghcr.io）→ SSH 部署到生产服务器（可选）
+#
+# 触发条件：
+# 1. workflow_run：CI workflow 在 main 分支成功完成后自动触发
+# 2. workflow_dispatch：手动触发（用于测试构建或重新部署）
+#
+# SSH 部署门控：仓库变量 ENABLE_SSH_DEPLOY=true 时 deploy job 才运行
+# （未配置服务器时只构建并推送镜像，本地开发友好）
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# 部署不可中途取消：避免镜像推一半 / 容器拉一半造成服务不一致
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 作业一：构建并推送 Docker 镜像到 GitHub Container Registry
+  # -------------------------------------------------------------------------
+  build-and-push:
+    name: Build & Push Image
+    # 仅在 CI 成功完成 或 手动触发 时运行（CI 失败/取消时不构建）
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # 推送 ghcr.io 需要 packages:write 权限
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          # github.actor 是触发推送的用户名
+          # GITHUB_TOKEN 由 GitHub Actions 自动注入，无需手动配置 secret
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # 镜像名：ghcr.io/<owner>/<repo>（需全小写，research-rag-assistant 已符合）
+          images: ghcr.io/${{ github.repository }}
+          # 双标签：latest 方便部署方拉取，sha-<short> 支持版本追溯与回滚
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GHA 缓存：首次构建慢，后续复用 buildx 层缓存显著加速
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # -------------------------------------------------------------------------
+  # 作业二：SSH 部署到生产服务器
+  # 仅在仓库变量 ENABLE_SSH_DEPLOY=true 时运行，否则跳过（不报错）
+  # -------------------------------------------------------------------------
+  deploy:
+    name: Deploy via SSH
+    needs: build-and-push
+    if: >-
+      needs.build-and-push.result == 'success' &&
+      vars.ENABLE_SSH_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH deploy to production server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          # 在生产服务器上执行：
+          # 1. 拉取最新镜像（docker-compose.prod.yml 覆盖使用 GHCR 预构建镜像）
+          # 2. 重启服务（--remove-orphans 清理已移除的容器）
+          # 3. 健康检查：最多等待 60 秒（12 次 × 5 秒），失败则打印日志并退出
+          script: |
+            cd ${{ vars.DEPLOY_PATH || '/opt/rrag' }}
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml pull api
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+            for i in $(seq 1 12); do
+              if curl -sf http://localhost:8000/api/v1/documents > /dev/null; then
+                echo "API healthy"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "API health check failed"
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail=50 api
+            exit 1

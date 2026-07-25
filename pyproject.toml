@@ -125,6 +125,13 @@ dev = [
     # 替代方案：降级 starlette → 失去 fastapi 0.139 兼容；忽略 warning → 治标不治本。
     "httpx2>=0.27",
     "pre-commit>=3.8",
+    # 阶段 11.5 引入：解析 GitHub Actions workflow / docker-compose 等 YAML 配置文件，
+    # 在 tests/unit/test_deployment_config.py 中验证 deploy.yml / docker-compose.prod.yml
+    # 的语法与结构，提前发现拼写错误、缩进错误、关键字段缺失。
+    # 必要性：PyYAML 是 Python 生态最成熟的 YAML 解析库，纯 Python 实现，CI 零编译成本。
+    # 替代方案：① ruamel.yaml → 支持 YAML 1.2（on/off 不解析为 True/False），但 API 复杂；
+    # ② 手写正则校验 → 脆弱且无法验证嵌套结构。
+    "pyyaml>=6.0",
 ]
 # 本地 Embedding 模型推理后端（阶段 3）。
 # 运行评测脚本的真实模式前需 `uv sync --extra embedding`；
