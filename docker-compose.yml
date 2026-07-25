@@ -1,0 +1,100 @@
+# 阶段 11.4 Docker Compose 一键部署
+#
+# 启动：docker compose up -d
+# 停止：docker compose down
+# 查看日志：docker compose logs -f api
+# 重新构建：docker compose build
+#
+# 环境变量：复制 .env.docker.example 为 .env 并填入真实值，
+# docker compose 自动读取同目录 .env 文件注入 ${VAR} 引用。
+# 安全提醒：.env 已在 .gitignore 中，禁止提交真实密钥。
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rrag-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    environment:
+      # 数据库（PostgreSQL，docker-compose 内置服务）
+      DATABASE_URL: postgresql+psycopg://rrag:${POSTGRES_PASSWORD:-rrag}@postgres:5432/rrag
+      # Qdrant 向量库
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-research_chunks}
+      QDRANT_ENABLED: "true"
+      # LLM（必须配置，否则问答功能不可用）
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-30}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      # Embedding（容器默认 local 本地推理，镜像已含 sentence-transformers）
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      # Reranker（默认关闭；开启需镜像含 sentence-transformers，本镜像已装）
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
+      RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-base}
+      # BM25 混合检索（默认关闭，按需开启）
+      BM25_ENABLED: ${BM25_ENABLED:-false}
+      BM25_USE_JIEBA: ${BM25_USE_JIEBA:-true}
+      # 文件上传与切分
+      UPLOAD_DIR: /app/data/uploads
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
+      CHUNK_SIZE: ${CHUNK_SIZE:-500}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-80}
+      RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-8}
+      # Langfuse 可观测性（可选，三项非空才启用，未配置 no-op）
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+    volumes:
+      - api-uploads:/app/data/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/documents"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: rrag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rrag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rrag}
+      POSTGRES_DB: rrag
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rrag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rrag-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "6333:6333"
+
+volumes:
+  postgres-data:
+    name: rrag-postgres-data
+  qdrant-data:
+    name: rrag-qdrant-data
+  api-uploads:
+    name: rrag-api-uploads

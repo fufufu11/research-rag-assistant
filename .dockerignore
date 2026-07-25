@@ -1,0 +1,70 @@
+# 版本控制
+.git/
+.gitignore
+.github/
+
+# Python 缓存与虚拟环境
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.tox/
+.nox/
+
+# 本地数据与模型（容器内不复制，避免体积膨胀）
+data/
+uploads/
+models/
+eval/pdfs/
+*.db
+*.sqlite
+*.sqlite3
+*.bin
+*.safetensors
+
+# 环境变量与密钥（严禁入镜像）
+.env
+.env.local
+.env.*.local
+*.secret
+*.key
+secrets/
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/
+
+# 文档与评测脚本（运行不需要）
+docs/
+site/
+_build/
+
+# Docker 自身文件（避免循环复制）
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# TRAE Skills（开发工具，运行不需要）
+.trae/
+
+# uv 缓存
+.uv-cache/
