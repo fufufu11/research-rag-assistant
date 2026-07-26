@@ -3,15 +3,21 @@ import { render, screen } from "@testing-library/react";
 import { App } from "./App";
 
 describe("App", () => {
-  it("渲染 hello world 标题（T1 骨架占位）", () => {
-    render(<App />);
-    expect(
-      screen.getByText(/科研文献智能问答/),
-    ).toBeInTheDocument();
+  it("渲染根布局容器（class=app）", () => {
+    const { container } = render(<App />);
+    const root = container.querySelector(".app");
+    expect(root).not.toBeNull();
+    expect(screen.getByTestId("app-root")).toBeInTheDocument();
   });
 
-  it("渲染 API 健康检查占位区块", () => {
+  it("同时渲染左侧栏与右侧主聊天区", () => {
     render(<App />);
-    expect(screen.getByTestId("api-health-placeholder")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-area")).toBeInTheDocument();
+  });
+
+  it("渲染品牌标题（科研文献智能问答）于内容占位区", () => {
+    render(<App />);
+    expect(screen.getByText("科研文献智能问答")).toBeInTheDocument();
   });
 });

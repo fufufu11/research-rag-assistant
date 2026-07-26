@@ -1,48 +1,328 @@
-/* T1 阶段最小全局样式，T2 会落地 Claude 风格主题（ADR 0005）。 */
-
-:root {
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    "PingFang SC",
-    "Microsoft YaHei",
-    sans-serif;
-  line-height: 1.6;
-  color: #1c1815;
-  background-color: #faf9f7;
-}
+/* Claude 静谧极简风格全局样式
+ * 配合 claude-theme.css 的 CSS 变量，落地设计稿的基础布局与组件视觉。
+ * 设计稿：.trae/handoffs/ui_claude_v1.html
+ */
+@import "./claude-theme.css";
 
 * {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
-  margin: 0;
-  min-height: 100vh;
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg-canvas);
+  color: var(--fg-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
 }
 
-.app-root {
-  max-width: 720px;
+#root {
+  height: 100vh;
+}
+
+/* === 主布局：左侧栏 + 右侧主区 === */
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* === 左侧栏 === */
+.sidebar {
+  background: var(--bg-sidebar);
+  color: var(--fg-on-dark);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 14px;
+  gap: 14px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-on-dark);
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: "Newsreader", serif;
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  padding: 4px 8px 14px;
+  border-bottom: 1px solid var(--border-on-dark);
+}
+
+.sidebar-header .logo-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 14px var(--accent-soft), 0 0 4px var(--accent);
+}
+
+.sidebar-header .accent {
+  color: var(--accent);
+  margin: 0 1px;
+}
+
+.new-chat-btn {
+  background: transparent;
+  color: var(--fg-on-dark);
+  border: 1px solid var(--border-on-dark);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all 0.18s;
+}
+
+.new-chat-btn:hover {
+  background: var(--bg-sidebar-soft);
+  border-color: var(--accent);
+  color: var(--accent-soft);
+}
+
+.new-chat-btn .star {
+  font-size: 14px;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.search-input {
+  background: var(--bg-sidebar-soft);
+  border: 1px solid var(--border-on-dark);
+  color: var(--fg-on-dark);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  width: 100%;
+  transition: all 0.15s;
+}
+
+.search-input::placeholder {
+  color: var(--fg-on-dark-muted);
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(201, 100, 66, 0.15);
+}
+
+.nav-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-section-title {
+  background: transparent;
+  color: var(--fg-on-dark-muted);
+  border: none;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.15s;
+}
+
+.nav-section-title:hover {
+  color: var(--fg-on-dark);
+}
+
+.nav-section-title .arrow {
+  margin-left: auto;
+  font-size: 10px;
+}
+
+.nav-empty {
+  color: var(--fg-on-dark-muted);
+  font-size: 12px;
+  padding: 6px 10px;
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-on-dark);
+}
+
+.footer-btn {
+  background: transparent;
+  color: var(--fg-on-dark-muted);
+  border: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all 0.15s;
+}
+
+.footer-btn:hover {
+  background: var(--bg-sidebar-soft);
+  color: var(--fg-on-dark);
+}
+
+.footer-btn .icon {
+  width: 14px;
+  text-align: center;
+}
+
+/* === 右侧主聊天区 === */
+.chat-area {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg-canvas);
+}
+
+/* 顶部栏 */
+.top-bar {
+  padding: 16px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  background: rgba(250, 249, 247, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 5;
+}
+
+/* 模型下拉占位（T2）：disabled select 单元素，仅展示不切换 */
+.model-dropdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  font-size: 13px;
+  font-family: "IBM Plex Sans", sans-serif;
+  color: var(--fg-primary);
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+
+.model-dropdown .dot {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--accent-soft);
+  flex-shrink: 0;
+}
+
+.model-dropdown select {
+  background: transparent;
+  border: none;
+  font: inherit;
+  color: inherit;
+  cursor: not-allowed;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.model-dropdown select:disabled {
+  color: var(--fg-primary);
+}
+
+.model-dropdown .badge {
+  font-size: 9px;
+  color: var(--fg-muted);
+  padding: 2px 6px;
+  background: var(--bg-code);
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.conversation-meta {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  font-family: "IBM Plex Sans", sans-serif;
+}
+
+/* 消息流（T2 仅占位，T5 起接入真实消息） */
+.messages-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 40px 32px 80px;
+}
+
+.messages {
+  max-width: var(--content-max-width);
   margin: 0 auto;
-  padding: 2rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
 }
 
-h1 {
-  font-size: 1.75rem;
-  margin: 0 0 1.5rem;
+.content-placeholder {
+  max-width: var(--content-max-width);
+  margin: 0 auto;
+  padding: 80px 32px;
+  text-align: center;
+  color: var(--fg-muted);
 }
 
-h2 {
-  font-size: 1.125rem;
-  margin: 0 0 0.75rem;
+.content-placeholder h1 {
+  font-family: "Newsreader", serif;
+  font-size: 28px;
+  font-weight: 500;
+  color: var(--fg-primary);
+  margin-bottom: 12px;
+  letter-spacing: -0.01em;
+}
+
+.content-placeholder p {
+  font-size: 14px;
+  color: var(--fg-secondary);
 }
 
 code {
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
     monospace;
-  background-color: rgba(28, 24, 21, 0.06);
-  padding: 0.1em 0.35em;
-  border-radius: 4px;
+  background-color: var(--bg-code);
+  color: var(--accent-hover);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.92em;
 }
