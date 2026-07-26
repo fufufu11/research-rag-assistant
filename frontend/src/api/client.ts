@@ -1,4 +1,4 @@
-import type { DocumentList } from "./types";
+import type { DocumentList, DocumentRead } from "./types";
 
 // ApiClient：封装后端 REST API 调用。
 // 设计取舍（ADR 0005）：
@@ -19,6 +19,17 @@ export class ApiClientError extends Error {
     this.status = status;
     this.detail = detail;
   }
+}
+
+async function throwApiClientError(response: Response): Promise<never> {
+  let detail = response.statusText;
+  try {
+    const body = (await response.json()) as { detail?: string };
+    if (body.detail) detail = body.detail;
+  } catch {
+    // Non-JSON error responses use the HTTP status text.
+  }
+  throw new ApiClientError(response.status, detail);
 }
 
 const API_KEY_STORAGE_KEY = "rag_api_key";
@@ -50,21 +61,22 @@ export class ApiClient {
     return `${this.baseUrl}${path}`;
   }
 
-  private async request<T>(path: string, init: RequestInit): Promise<T> {
+  private async fetchResponse(
+    path: string,
+    init: RequestInit,
+  ): Promise<Response> {
     const response = await fetch(this.buildUrl(path), {
       ...init,
       headers: this.buildHeaders(init.headers),
     });
     if (!response.ok) {
-      let detail = response.statusText;
-      try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch {
-        // 响应体非 JSON，用 statusText
-      }
-      throw new ApiClientError(response.status, detail);
+      await throwApiClientError(response);
     }
+    return response;
+  }
+
+  private async request<T>(path: string, init: RequestInit): Promise<T> {
+    const response = await this.fetchResponse(path, init);
     return (await response.json()) as T;
   }
 
@@ -72,5 +84,20 @@ export class ApiClient {
   // T1 阶段仅验证前后端连通性。
   async listDocuments(): Promise<DocumentList> {
     return this.request<DocumentList>("/api/v1/documents", { method: "GET" });
+  }
+
+  async uploadDocument(file: File): Promise<DocumentRead> {
+    const formData = new FormData();
+    formData.append("file", file);
+    return this.request<DocumentRead>("/api/v1/documents", {
+      method: "POST",
+      body: formData,
+    });
+  }
+
+  async deleteDocument(id: string): Promise<void> {
+    await this.fetchResponse(`/api/v1/documents/${id}`, {
+      method: "DELETE",
+    });
   }
 }
