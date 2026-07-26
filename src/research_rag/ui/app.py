@@ -59,7 +59,7 @@ from research_rag.ui.api_client import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, MutableMapping
 
 # 缓存 ApiClient 实例，避免每次 rerun 重建
 _CLIENT_KEY = "_api_client"
@@ -338,7 +338,9 @@ def _render_chat(client: ApiClient) -> None:
             # 历史消息反馈按钮（Issue #92）：仅 assistant 消息且有 request_id 时渲染。
             # 旧消息（request_id=None）隐藏按钮——点击必然 404，体验差。
             if _should_render_feedback_for_message(msg):
-                _render_feedback_buttons(client, msg.request_id)
+                # _should_render_feedback_for_message 已保证 request_id 非 None，
+                # 用 cast 协助 mypy 类型收窄（运行时 cast 无操作）。
+                _render_feedback_buttons(client, cast("str", msg.request_id))
 
     # 底部输入框（回车发送，自动清空）
     question = st.chat_input("输入你的问题，回车发送…")
@@ -489,7 +491,7 @@ def _should_render_feedback_for_message(msg: MessageInfo) -> bool:
 def _init_feedback_state_for_history(
     client: ApiClient,
     messages: list[MessageInfo],
-    session_state: dict[str, object],
+    session_state: MutableMapping[str, object],
 ) -> None:
     """批量初始化历史会话消息的反馈状态到 ``session_state``。
 
@@ -505,7 +507,8 @@ def _init_feedback_state_for_history(
     Args:
         client: API 客户端，用于调 ``get_feedback``。
         messages: 历史会话消息列表（user + assistant 交替）。
-        session_state: Streamlit ``st.session_state``（或测试用的普通 dict）。
+        session_state: Streamlit ``st.session_state``（``SessionStateProxy``）
+            或测试用的普通 dict。用 ``MutableMapping`` 接口收两者。
     """
 
     for msg in messages:
