@@ -111,6 +111,23 @@ def _is_sidebar_collapsed(session_state: MutableMapping[str, object]) -> bool:
     return bool(session_state.get("sidebar-collapsed", False))
 
 
+# 输入栏下方免责声明（Issue #112）
+_UPLOAD_DISCLAIMER = "AI 可能出错，请核实重要信息"
+
+
+def _is_valid_pdf_filename(filename: str) -> bool:
+    """校验上传文件名是否为 PDF 扩展名（大小写不敏感，Issue #112）。
+
+    Args:
+        filename: 上传文件名。
+
+    Returns:
+        是否为 PDF 文件。
+    """
+
+    return filename.lower().endswith(".pdf")
+
+
 def _render_nav_section(
     icon: str,
     label: str,
@@ -349,26 +366,11 @@ def _render_conversation_list(client: ApiClient, search_query: str = "") -> None
 
 
 def _render_document_management(client: ApiClient) -> None:
-    """渲染文档管理区：上传 + 列表 + 删除。"""
-
-    uploaded = st.file_uploader(
-        "上传 PDF 文档",
-        type=["pdf"],
-        help="选择 PDF 文件，上传后将自动解析、切分并建立向量索引。",
-    )
-    if uploaded is not None and st.button("确认上传", type="primary"):
-        try:
-            with st.spinner("正在上传并解析文档…"):
-                doc = client.upload_document(uploaded.getvalue(), uploaded.name)
-            st.success(f"上传成功：{doc.original_name}（{doc.page_count} 页，状态：{doc.status}）")
-            _refresh_documents()
-            st.rerun()
-        except ApiClientError as exc:
-            st.error(f"上传失败：{exc.detail}")
+    """渲染文档列表区：列表 + 删除（上传入口已迁移到输入栏「+」，Issue #112）。"""
 
     docs: list[DocumentInfo] = st.session_state.get("documents", [])
     if not docs:
-        st.caption("暂无文档。")
+        st.caption("暂无文档。点击下方输入栏「➕」上传 PDF。")
         return
 
     for doc in docs:
@@ -411,7 +413,7 @@ def _render_chat(client: ApiClient) -> None:
     _ensure_documents_loaded(client)
     ready_docs = _get_ready_documents()
     if not ready_docs:
-        st.info("暂无可用文档（状态为「就绪」），请先在左侧「📄 文档列表」上传 PDF。")
+        st.info("暂无可用文档（状态为「就绪」），请点击下方输入栏「➕」上传 PDF。")
         return
 
     current_conv_id: str | None = st.session_state.get("current_conversation_id")
@@ -466,6 +468,9 @@ def _render_chat(client: ApiClient) -> None:
                 # 用 cast 协助 mypy 类型收窄（运行时 cast 无操作）。
                 _render_feedback_buttons(client, cast("str", msg.request_id))
 
+    # 输入栏工具栏：「+」上传按钮 + 免责声明（Issue #112）
+    _render_input_toolbar(client)
+
     # 底部输入框（回车发送，自动清空）
     question = st.chat_input("输入你的问题，回车发送…")
     if question and question.strip():
@@ -474,6 +479,42 @@ def _render_chat(client: ApiClient) -> None:
             None if current_conv_id is not None else st.session_state.get(_PENDING_DOC_IDS_KEY)
         )
         _handle_question(client, question.strip(), current_conv_id, doc_ids_for_query)
+
+
+def _render_input_toolbar(client: ApiClient) -> None:
+    """渲染输入栏上方工具栏：「+」上传按钮 + 免责声明（Issue #112）。
+
+    Streamlit ``st.chat_input`` 固定底部且无法嵌入其他组件，因此在
+    ``st.chat_input`` 上方渲染一行工具栏：左侧「➕」按钮用 ``st.popover``
+    包裹文件上传（选择文件后自动上传），右侧显示免责声明小字。
+    """
+
+    col_upload, col_disclaimer = st.columns([1, 4])
+    with col_upload, st.popover("➕", use_container_width=True):
+        st.caption("上传 PDF 文档")
+        uploaded = st.file_uploader(
+            "选择 PDF 文件",
+            type=["pdf"],
+            help="上传后将自动解析、切分并建立向量索引。",
+            key="input-toolbar-uploader",
+        )
+        if uploaded is not None:
+            if not _is_valid_pdf_filename(uploaded.name):
+                st.error("仅支持 PDF 文件")
+            else:
+                try:
+                    with st.spinner("正在上传并解析文档…"):
+                        doc = client.upload_document(uploaded.getvalue(), uploaded.name)
+                    st.success(
+                        f"上传成功：{doc.original_name}"
+                        f"（{doc.page_count} 页，状态：{doc.status}）"
+                    )
+                    _refresh_documents()
+                    st.rerun()
+                except ApiClientError as exc:
+                    st.error(f"上传失败：{exc.detail}")
+    with col_disclaimer:
+        st.caption(_UPLOAD_DISCLAIMER)
 
 
 def _handle_question(
