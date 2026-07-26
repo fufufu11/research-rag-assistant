@@ -337,7 +337,7 @@ def _render_chat(client: ApiClient) -> None:
                 _render_citations_inline(msg.citations)
             # 历史消息反馈按钮（Issue #92）：仅 assistant 消息且有 request_id 时渲染。
             # 旧消息（request_id=None）隐藏按钮——点击必然 404，体验差。
-            if msg.role == "assistant" and msg.request_id:
+            if _should_render_feedback_for_message(msg):
                 _render_feedback_buttons(client, msg.request_id)
 
     # 底部输入框（回车发送，自动清空）
@@ -459,6 +459,33 @@ def _handle_question(
             st.rerun()
 
 
+def _feedback_state_key(request_id: str) -> str:
+    """构造反馈状态在 ``session_state`` 中的 key（``feedback-{request_id}``）。
+
+    ``_init_feedback_state_for_history`` 与 ``_render_feedback_buttons`` 共享
+    此 key 格式，提取为 helper 避免格式漂移。
+    """
+
+    return f"feedback-{request_id}"
+
+
+def _should_render_feedback_for_message(msg: MessageInfo) -> bool:
+    """判断历史消息是否应渲染反馈按钮（Issue #92）。
+
+    仅 assistant 消息且有 ``request_id`` 时渲染；user 消息与旧消息
+    （``request_id=None``）隐藏按钮——旧消息点击反馈必然 404，体验差，
+    隐藏比禁用+tooltip 更干净。
+
+    Args:
+        msg: 历史会话消息。
+
+    Returns:
+        是否渲染反馈按钮。
+    """
+
+    return msg.role == "assistant" and msg.request_id is not None
+
+
 def _init_feedback_state_for_history(
     client: ApiClient,
     messages: list[MessageInfo],
@@ -484,7 +511,7 @@ def _init_feedback_state_for_history(
     for msg in messages:
         if msg.request_id is None:
             continue
-        state_key = f"feedback-{msg.request_id}"
+        state_key = _feedback_state_key(msg.request_id)
         if state_key in session_state:
             # 已有状态（用户本会话刚操作过），不覆盖
             continue
@@ -509,7 +536,7 @@ def _render_feedback_buttons(client: ApiClient, request_id: str) -> None:
         request_id: 关联的问答 request_id（来自 SSE ``done`` 事件）。
     """
 
-    state_key = f"feedback-{request_id}"
+    state_key = _feedback_state_key(request_id)
     current_rating: str | None = st.session_state.get(state_key)
 
     # 按钮行：点赞 / 点踩（已选时用 primary 高亮）

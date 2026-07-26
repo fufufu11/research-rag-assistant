@@ -16,7 +16,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from research_rag.ui.api_client import FeedbackInfo, MessageInfo
-from research_rag.ui.app import _init_feedback_state_for_history
+from research_rag.ui.app import (
+    _init_feedback_state_for_history,
+    _should_render_feedback_for_message,
+)
 
 
 def _make_assistant_msg(request_id: str | None) -> MessageInfo:
@@ -144,3 +147,29 @@ class TestInitFeedbackStateForHistory:
         client.get_feedback.assert_not_called()
         # 已有状态不覆盖
         assert session_state["feedback-req-1"] == "like"
+
+
+class TestShouldRenderFeedbackForMessage:
+    """历史消息反馈按钮渲染判断（Issue #92 验收标准：历史消息渲染分支 +
+    request_id=None 隐藏分支）。"""
+
+    def test_assistant_with_request_id_returns_true(self) -> None:
+        """assistant 消息且有 request_id：渲染反馈按钮。"""
+
+        msg = _make_assistant_msg(request_id="req-1")
+        assert _should_render_feedback_for_message(msg) is True
+
+    def test_assistant_with_none_request_id_returns_false(self) -> None:
+        """旧消息（assistant 但 request_id=None）：隐藏反馈按钮。
+
+        旧消息点击反馈必然 404，体验差，故隐藏而非禁用。
+        """
+
+        msg = _make_assistant_msg(request_id=None)
+        assert _should_render_feedback_for_message(msg) is False
+
+    def test_user_message_returns_false(self) -> None:
+        """user 消息：不渲染反馈按钮（反馈主关联键是 assistant 答案的 request_id）。"""
+
+        msg = _make_user_msg()
+        assert _should_render_feedback_for_message(msg) is False
