@@ -205,3 +205,235 @@ class TestPostgresPasswordFile:
             "POSTGRES_PASSWORD 应保留作为开发/CI 默认路径；生产环境设置"
             "POSTGRES_PASSWORD_FILE 时由 Postgres 官方镜像优先使用文件内容"
         )
+
+
+# ---------------------------------------------------------------------------
+# docker-compose.prod.yml docker secrets 配置（阶段 11.6 切片 D #101）
+# ---------------------------------------------------------------------------
+
+# 8 个 secrets 名字与对应环境变量后缀的映射（名字以下划线分隔，docker secrets 约定）。
+# Postgres 官方镜像用 POSTGRES_PASSWORD_FILE，其余 7 个由应用层 get_secret helper 读取。
+EXPECTED_PROD_SECRETS: list[str] = [
+    "postgres_password",
+    "llm_api_key",
+    "judge_llm_api_key",
+    "api_keys",
+    "langfuse_public_key",
+    "langfuse_secret_key",
+    "dashscope_api_key",
+    "jina_api_key",
+]
+
+
+class TestProdComposeDockerSecrets:
+    """``docker-compose.prod.yml`` docker secrets 配置测试（阶段 11.6 切片 D #101）。
+
+    生产环境用 docker compose ``secrets:`` 顶级键 + 各服务 ``secrets:`` 引用，
+    把 8 个密钥以文件形式挂载到 ``/run/secrets/<name>``，避免 secrets 进程环境变量
+    （``docker inspect`` 不可见）。决策见 ADR 0004。
+    """
+
+    @pytest.fixture(scope="class")
+    def compose(self) -> dict:
+        return _load_yaml(REPO_ROOT / "docker-compose.prod.yml")
+
+    def test_top_level_secrets_block_exists(self, compose: dict) -> None:
+        """顶层必须有 ``secrets:`` 块声明所有 docker secrets。"""
+        assert "secrets" in compose, (
+            "docker-compose.prod.yml 缺少顶层 'secrets:' 块：阶段 11.6 切片 D 要求"
+            "生产环境用 docker secrets 把密钥以文件形式挂载到 /run/secrets/<name>"
+        )
+
+    def test_all_eight_secrets_defined_with_file(self, compose: dict) -> None:
+        """8 个 secrets 必须全部定义，且每个含 ``file:`` 指向宿主机文件路径。"""
+        secrets = compose.get("secrets", {})
+        missing = [name for name in EXPECTED_PROD_SECRETS if name not in secrets]
+        assert not missing, f"docker-compose.prod.yml secrets 缺少: {missing}"
+
+        for name in EXPECTED_PROD_SECRETS:
+            secret_def = secrets[name]
+            assert isinstance(secret_def, dict), (
+                f"secrets.{name} 应为 dict 含 'file:' 字段，实际 {type(secret_def)}"
+            )
+            assert "file" in secret_def, (
+                f"secrets.{name} 缺少 'file:' 字段：docker secrets 必须指定宿主机文件路径"
+            )
+            file_value = secret_def["file"]
+            assert isinstance(file_value, str) and file_value, (
+                f"secrets.{name}.file 必须是非空字符串，实际 {file_value!r}"
+            )
+
+    def test_api_service_references_seven_secrets(self, compose: dict) -> None:
+        """api 服务必须引用 7 个 secrets（除 postgres_password）挂载到 /run/secrets/。
+
+        postgres_password 由 postgres 服务独占（api 不直连 postgres 卷读取密码，
+        而是通过 DATABASE_URL 拼装，由 entrypoint 读 POSTGRES_PASSWORD_FILE 内容）。
+        """
+        api_secrets = compose["services"]["api"].get("secrets", [])
+        # docker compose secrets: 可为列表（短语法）或 dict（长语法），统一提取 name
+        if isinstance(api_secrets, dict):
+            api_secret_names = list(api_secrets.keys())
+        else:
+            api_secret_names = [
+                s if isinstance(s, str) else s.get("source", "") for s in api_secrets
+            ]
+
+        expected_api_secrets = [
+            name for name in EXPECTED_PROD_SECRETS if name != "postgres_password"
+        ]
+        missing = [n for n in expected_api_secrets if n not in api_secret_names]
+        assert not missing, (
+            f"api 服务 secrets 缺少: {missing}（应引用除 postgres_password 外的 7 个 secrets）"
+        )
+
+    def test_postgres_service_references_password_secret(self, compose: dict) -> None:
+        """postgres 服务必须引用 postgres_password secret 挂载到 /run/secrets/。"""
+        pg_secrets = compose["services"].get("postgres", {}).get("secrets", [])
+        if isinstance(pg_secrets, dict):
+            pg_secret_names = list(pg_secrets.keys())
+        else:
+            pg_secret_names = [s if isinstance(s, str) else s.get("source", "") for s in pg_secrets]
+        assert "postgres_password" in pg_secret_names, (
+            "postgres 服务 secrets 必须引用 postgres_password（用于挂载到"
+            "/run/secrets/postgres_password 供 POSTGRES_PASSWORD_FILE 读取）"
+        )
+
+    def test_postgres_password_file_points_to_secret_mount(self, compose: dict) -> None:
+        """postgres.environment.POSTGRES_PASSWORD_FILE 必须指向 /run/secrets/postgres_password。
+
+        覆盖 base docker-compose.yml 的 ``${POSTGRES_PASSWORD_FILE:-}``（开发为空），
+        生产环境固定指向 docker secrets 挂载路径，由 Postgres 官方镜像读取文件内容。
+        """
+        pg_env = compose["services"]["postgres"]["environment"]
+        assert pg_env.get("POSTGRES_PASSWORD_FILE") == "/run/secrets/postgres_password", (
+            "生产环境 POSTGRES_PASSWORD_FILE 应固定为 /run/secrets/postgres_password"
+            f"（覆盖 base compose 的 ${{POSTGRES_PASSWORD_FILE:-}}），实际 {pg_env.get('POSTGRES_PASSWORD_FILE')!r}"
+        )
+
+    def test_api_environment_has_seven_file_vars(self, compose: dict) -> None:
+        """api.environment 必须含 7 个 ``{NAME}_FILE`` 指向 ``/run/secrets/<secret_name>``。
+
+        应用层 ``get_secret`` helper（src/research_rag/secrets.py）优先读 ``{NAME}_FILE``
+        环境变量指向的文件内容；生产环境必须把这 7 个 ``_FILE`` 变量指向 docker secrets
+        挂载路径（``/run/secrets/<secret_name>``），secrets 才能被 helper 读到。
+        """
+        api_env = compose["services"]["api"].get("environment", {})
+        # 7 个 secrets（除 postgres_password）对应的环境变量名 → 挂载路径
+        # 命名约定：环境变量名 = secret_name 大写；挂载路径 = /run/secrets/<secret_name>
+        expected_file_vars = {
+            "LLM_API_KEY_FILE": "/run/secrets/llm_api_key",
+            "JUDGE_LLM_API_KEY_FILE": "/run/secrets/judge_llm_api_key",
+            "API_KEYS_FILE": "/run/secrets/api_keys",
+            "LANGFUSE_PUBLIC_KEY_FILE": "/run/secrets/langfuse_public_key",
+            "LANGFUSE_SECRET_KEY_FILE": "/run/secrets/langfuse_secret_key",
+            "DASHSCOPE_API_KEY_FILE": "/run/secrets/dashscope_api_key",
+            "JINA_API_KEY_FILE": "/run/secrets/jina_api_key",
+        }
+        missing = [k for k in expected_file_vars if k not in api_env]
+        assert not missing, f"api.environment 缺少 _FILE 变量: {missing}"
+
+        for var, expected_path in expected_file_vars.items():
+            assert api_env[var] == expected_path, (
+                f"api.environment.{var} 应为 {expected_path!r}，实际 {api_env[var]!r}"
+            )
+
+    def test_service_secret_refs_declared_at_top_level(self, compose: dict) -> None:
+        """所有服务 ``secrets:`` 引用的 secret 名必须在顶级 ``secrets:`` 块中声明。
+
+        防止拼写错误：若服务引用了未声明的 secret，docker compose 启动时会报错
+        ``secret not found``；本测试在 CI 阶段提前捕获此类配置漂移。
+        """
+        top_level_secrets = set(compose.get("secrets", {}).keys())
+        assert top_level_secrets, "顶级 secrets: 块应为非空（前序测试已验证）"
+
+        for service_name, service_def in compose["services"].items():
+            service_secrets = service_def.get("secrets", [])
+            if isinstance(service_secrets, dict):
+                ref_names = set(service_secrets.keys())
+            else:
+                ref_names = {
+                    s if isinstance(s, str) else s.get("source", "") for s in service_secrets
+                }
+            undeclared = ref_names - top_level_secrets
+            assert not undeclared, (
+                f"服务 {service_name} 引用了未在顶级 secrets: 声明的 secret: {undeclared}"
+            )
+
+    def test_api_env_file_paths_match_declared_secrets(self, compose: dict) -> None:
+        """api.environment 的 ``{NAME}_FILE`` 路径必须与 ``api.secrets`` 引用一致。
+
+        防止路径拼写错误：如 ``LLM_API_KEY_FILE: /run/secrets/llm_apikey``（少下划线）
+        会导致 ``get_secret`` 读到空文件（secret 挂载在 ``/run/secrets/llm_api_key``）。
+        """
+        api_secrets = compose["services"]["api"].get("secrets", [])
+        if isinstance(api_secrets, dict):
+            api_secret_names = set(api_secrets.keys())
+        else:
+            api_secret_names = {
+                s if isinstance(s, str) else s.get("source", "") for s in api_secrets
+            }
+
+        api_env = compose["services"]["api"].get("environment", {})
+        file_vars = {k: v for k, v in api_env.items() if k.endswith("_FILE")}
+        for var, path in file_vars.items():
+            # 路径形如 /run/secrets/<secret_name>
+            assert path.startswith("/run/secrets/"), (
+                f"api.environment.{var} 路径应以 /run/secrets/ 开头，实际 {path!r}"
+            )
+            secret_name = path.removeprefix("/run/secrets/")
+            assert secret_name in api_secret_names, (
+                f"api.environment.{var} 指向 /run/secrets/{secret_name}，"
+                f"但 api.secrets 未引用该 secret（拼写错误？）"
+            )
+
+
+class TestDockerSecretsEnvExample:
+    """``.env.docker.secrets.example`` 示例文件测试（阶段 11.6 切片 D #101）。
+
+    生产环境 secrets 文件路径通过 ``.env.docker.secrets`` 文件注入 docker compose
+    的 ``${VAR}_FILE`` 引用（指向宿主机 secrets 文件路径）。example 文件提供占位
+    模板，运维复制为 ``.env.docker.secrets`` 后填入真实路径。
+    """
+
+    @pytest.fixture(scope="class")
+    def example_text(self) -> str:
+        path = REPO_ROOT / ".env.docker.secrets.example"
+        assert path.exists(), (
+            ".env.docker.secrets.example 不存在：阶段 11.6 切片 D 要求提供"
+            "8 个 secrets 文件路径占位的示例文件供运维参考"
+        )
+        return path.read_text(encoding="utf-8")
+
+    def test_example_contains_all_eight_secret_file_vars(self, example_text: str) -> None:
+        """示例文件必须含 8 个 ``{NAME}_FILE`` 变量占位。"""
+        expected_vars = [
+            "POSTGRES_PASSWORD_FILE",
+            "LLM_API_KEY_FILE",
+            "JUDGE_LLM_API_KEY_FILE",
+            "API_KEYS_FILE",
+            "LANGFUSE_PUBLIC_KEY_FILE",
+            "LANGFUSE_SECRET_KEY_FILE",
+            "DASHSCOPE_API_KEY_FILE",
+            "JINA_API_KEY_FILE",
+        ]
+        missing = [v for v in expected_vars if v not in example_text]
+        assert not missing, (
+            f".env.docker.secrets.example 缺少变量: {missing}（应含 8 个 _FILE 变量占位）"
+        )
+
+    def test_example_uses_placeholder_paths(self, example_text: str) -> None:
+        """每个 ``_FILE`` 变量应赋值为占位路径（非空），引导运维填入真实宿主机路径。"""
+        # 简单校验：每个 _FILE 变量行应形如 VAR=/some/path（不能只声明变量名不赋值）
+        lines = [
+            line.strip()
+            for line in example_text.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        file_var_lines = [line for line in lines if "_FILE=" in line]
+        assert len(file_var_lines) >= 8, (
+            f".env.docker.secrets.example 应含至少 8 行 _FILE 赋值，实际 {len(file_var_lines)} 行"
+        )
+        for line in file_var_lines:
+            # 形如 VAR=/path/to/file（= 后必须紧跟非空路径）
+            _, _, value = line.partition("=")
+            assert value.strip(), f".env.docker.secrets.example 行 {line!r} 的 _FILE 变量未赋值"
