@@ -190,7 +190,7 @@ class ConversationCreate(BaseModel):
 
 
 class MessageRead(BaseModel):
-    """会话消息响应（阶段 9.2）。
+    """会话消息响应（阶段 9.2；阶段 10.2 加 ``request_id`` 读出）。
 
     ``from_attributes=True`` 让 ``model_validate(orm_message)`` 直接读 ORM
     ``Message`` 属性。``citations`` 字段在 ORM 中是 JSON ``list[dict]``，
@@ -201,6 +201,9 @@ class MessageRead(BaseModel):
         role: 消息角色（``user`` / ``assistant``）。
         content: 消息文本。``assistant`` 消息含 ``[C1]`` 等引用标记原文。
         citations: ``assistant`` 消息的引用元数据快照；``user`` 消息为 ``None``。
+        request_id: ``assistant`` 消息关联的问答 ``request_id``（ADR 0003）。
+            ``user`` 消息与旧消息（迁移前）为 ``None``。前端用此字段反查
+            ``Feedback`` 实现历史消息反馈按钮。
         created_at: 创建时间（UTC）。
     """
 
@@ -210,6 +213,7 @@ class MessageRead(BaseModel):
     role: str
     content: str
     citations: list[CitationRead] | None = None
+    request_id: uuid.UUID | None = None
     created_at: datetime
 
 

@@ -335,6 +335,54 @@ def test_answer_first_turn_persists_messages_and_sets_title(
     assert refreshed_conv.title == "深度学习是什么？"
 
 
+def test_answer_persists_request_id_on_assistant_message(
+    service: QaService, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """answer 路径：assistant 消息持久化 ``request_id``（与响应一致）。
+
+    验证 ADR 0003 的写入路径：``_persist_turn`` 把 ``request_id`` 透传到
+    assistant ``Message``（user 消息不写）。本测试聚焦 assistant 写入，
+    user 不写入由独立测试覆盖。
+    """
+
+    _make_doc(session, "论文.pdf", chunks=[(1, 0, "深度学习内容。")])
+    conv = service.create_conversation()
+    monkeypatch.setattr("research_rag.services.qa_service.answer_question", _mock_answer())
+
+    response = service.answer("深度学习是什么？", conversation_id=conv.id)
+
+    assert response.request_id is not None
+    msgs = service.list_messages(conv.id)
+    assert len(msgs) == 2
+    assistant_msg = msgs[1]
+    assert assistant_msg.role == MessageRole.ASSISTANT
+    # assistant 消息的 request_id 与响应返回的 request_id 一致
+    assert assistant_msg.request_id == response.request_id
+
+
+def test_answer_does_not_persist_request_id_on_user_message(
+    service: QaService, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """user 消息不写 ``request_id``（保持 None）。
+
+    ADR 0003：反馈主关联键是 assistant 答案的 ``request_id``，user 消息
+    无问答关联，不应写。多条 NULL 不冲突（SQL 标准对 NULL 的唯一约束语义）。
+    """
+
+    _make_doc(session, "论文.pdf", chunks=[(1, 0, "深度学习内容。")])
+    conv = service.create_conversation()
+    monkeypatch.setattr("research_rag.services.qa_service.answer_question", _mock_answer())
+
+    service.answer("深度学习是什么？", conversation_id=conv.id)
+
+    msgs = service.list_messages(conv.id)
+    assert len(msgs) == 2
+    user_msg = msgs[0]
+    assert user_msg.role == MessageRole.USER
+    # user 消息 request_id 必须为 None（不能误传）
+    assert user_msg.request_id is None
+
+
 def test_answer_first_turn_long_question_title_truncated(
     service: QaService, session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -623,6 +671,34 @@ async def test_answer_stream_multi_turn_persists_and_done_has_conversation_id(
     assert msgs[2].content == "追问"
     assert msgs[3].role == MessageRole.ASSISTANT
     assert msgs[3].content == "答案 [C1]。"
+
+
+async def test_answer_stream_persists_request_id_on_assistant_message(
+    service: QaService, session: Session
+) -> None:
+    """流式路径：assistant 消息持久化 ``request_id``（与 done 事件一致）。
+
+    与 ``test_answer_persists_request_id_on_assistant_message`` 对称，覆盖
+    ``answer_stream`` 路径（``_persist_turn`` 在流末调用，透传 ``request_id``）。
+    """
+
+    _make_doc(session, "论文.pdf", chunks=[(1, 0, "深度学习内容。")])
+    conv = service.create_conversation()
+    service._chat_model = _StreamFakeChatModel(tokens=["答案", " [C1]", "。"])
+
+    events = await _collect_events(service, "深度学习", conversation_id=conv.id, top_k=1)
+
+    done_events = [e for e in events if isinstance(e, StreamDoneEvent)]
+    assert len(done_events) == 1
+    done = done_events[0]
+    assert done.request_id is not None
+
+    msgs = service.list_messages(conv.id)
+    assert len(msgs) == 2
+    assistant_msg = msgs[1]
+    assert assistant_msg.role == MessageRole.ASSISTANT
+    # assistant 消息的 request_id 与 done 事件返回的 request_id 一致
+    assert assistant_msg.request_id == done.request_id
 
 
 async def test_answer_stream_with_nonexistent_conversation_emits_error(

@@ -304,7 +304,7 @@ class QaService:
 
         # 7. 持久化消息（若关联会话）
         if conv is not None:
-            self._persist_turn(conv, question, result.answer_text, citations)
+            self._persist_turn(conv, question, result.answer_text, citations, request_id)
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
@@ -452,7 +452,7 @@ class QaService:
 
         # 3. 持久化消息（若关联会话）
         if conv is not None:
-            self._persist_turn(conv, question, answer_text, citations)
+            self._persist_turn(conv, question, answer_text, citations, request_id)
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         yield StreamDoneEvent(
@@ -596,12 +596,14 @@ class QaService:
         question: str,
         answer_text: str,
         citations: list[CitationRead],
+        request_id: uuid.UUID,
     ) -> None:
-        """持久化一轮问答到 DB（阶段 9.2）。
+        """持久化一轮问答到 DB（阶段 9.2；阶段 10.2 加 ``request_id`` 透传）。
 
         写入两条消息（user + assistant），assistant 消息的 ``citations``
-        字段存引用元数据快照（JSON）。首条消息时（会话标题为空）用问题
-        截取设置标题，便于 UI 列表展示。
+        字段存引用元数据快照（JSON），``request_id`` 字段透传 ADR 0003 的
+        反馈关联键。首条消息时（会话标题为空）用问题截取设置标题，便于
+        UI 列表展示。
 
         事务提交由调用方（API 层 ``get_db``）控制，本方法只 flush。
 
@@ -610,6 +612,8 @@ class QaService:
             question: 用户问题原文。
             answer_text: 模型生成的答案文本（含 ``[C1]`` 等标记原文）。
             citations: 服务端映射后的引用列表（结构对齐 ``CitationRead``）。
+            request_id: 本轮问答的 ``request_id``（仅写到 assistant 消息，
+                user 消息不写）。
         """
 
         # 首条消息时设置标题（截取前 30 字符，避免过长）
@@ -617,14 +621,14 @@ class QaService:
             title = question[:30].strip() or "新会话"
             self.conv_repo.update_title(conv, title)
 
-        # user 消息（无 citations）
+        # user 消息（无 citations，无 request_id）
         self.conv_repo.add_message(
             conv.id,
             role=MessageRole.USER,
             content=question,
             citations=None,
         )
-        # assistant 消息（含 citations 快照）
+        # assistant 消息（含 citations 快照 + request_id 透传）
         # CitationRead 是 Pydantic BaseModel，转 dict 存 JSON
         citations_snapshot = [c.model_dump(mode="json") for c in citations] if citations else None
         self.conv_repo.add_message(
@@ -632,6 +636,7 @@ class QaService:
             role=MessageRole.ASSISTANT,
             content=answer_text,
             citations=citations_snapshot,
+            request_id=request_id,
         )
 
     # ------------------------------------------------------------------

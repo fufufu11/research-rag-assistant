@@ -367,6 +367,52 @@ def test_list_messages_success(client: TestClient, mock_service: MagicMock) -> N
     mock_service.list_messages.assert_called_once_with(conv_id)
 
 
+def test_list_messages_response_includes_request_id(
+    client: TestClient, mock_service: MagicMock
+) -> None:
+    """消息列表响应含 ``request_id``：assistant 消息返回 UUID 字符串，user 消息返回 null。
+
+    验证 ADR 0003 的读出路径：``MessageRead`` schema 暴露 ``request_id`` 字段，
+    ``GET /conversations/{id}/messages`` 响应自动携带（Pydantic 序列化）。
+    旧消息（迁移前）与 user 消息的 ``request_id`` 为 null。
+    """
+
+    conv_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    # user 消息：request_id 未设置（默认 None）
+    msg1 = make_message(conversation_id=conv_id, role=MessageRole.USER, content="问题")
+    # assistant 消息：显式设置 request_id（模拟 #90 写入路径产出）
+    msg2 = make_message(
+        conversation_id=conv_id,
+        role=MessageRole.ASSISTANT,
+        content="答案 [C1]。",
+        request_id=request_id,
+    )
+    # 旧消息（迁移前）：assistant 消息但 request_id 为 None
+    msg3 = make_message(
+        conversation_id=conv_id,
+        role=MessageRole.ASSISTANT,
+        content="旧答案 [C2]。",
+        request_id=None,
+    )
+    mock_service.list_messages.return_value = [msg1, msg2, msg3]
+
+    response = client.get(f"/api/v1/conversations/{conv_id}/messages")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 3
+    # user 消息 request_id 为 null
+    assert body[0]["role"] == "user"
+    assert body[0]["request_id"] is None
+    # assistant 消息 request_id 与写入一致（UUID 字符串形式）
+    assert body[1]["role"] == "assistant"
+    assert body[1]["request_id"] == str(request_id)
+    # 旧 assistant 消息 request_id 为 null（迁移前未持久化）
+    assert body[2]["role"] == "assistant"
+    assert body[2]["request_id"] is None
+
+
 def test_list_messages_empty(client: TestClient, mock_service: MagicMock) -> None:
     """会话无消息：返回 200 + 空数组。"""
 
