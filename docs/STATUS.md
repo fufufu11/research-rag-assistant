@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v2.6` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11.6 生产安全加固进行中（切片 A #97 + 切片 C #99 已完成）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A（PR #103 / Issue #97）完成 `secrets.py` helper 支持 `{NAME}_FILE` 优先 + fallback env；阶段 11.6 切片 C（PR #104 / Issue #99）完成 5 个文件 8 个密钥读取点替换为 `get_secret` + docker-compose.yml postgres `POSTGRES_PASSWORD_FILE` 支持，854 条测试通过，CI 三项全绿。
+`v2.7` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11.6 生产安全加固进行中（切片 A #97 + 切片 B #98 + 切片 C #99 已完成）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A（PR #103 / Issue #97）完成 `secrets.py` helper 支持 `{NAME}_FILE` 优先 + fallback env；阶段 11.6 切片 C（PR #104 / Issue #99）完成 5 个文件 8 个密钥读取点替换为 `get_secret` + docker-compose.yml postgres `POSTGRES_PASSWORD_FILE` 支持；阶段 11.6 切片 B（PR #105 / Issue #98）完成 api 容器非 root 改造（Dockerfile 加 `USER 65532` + `groupadd/useradd/chown` + entrypoint.sh 改用 `/app/.venv/bin/uvicorn` 和 `/app/.venv/bin/alembic` 直接调用绕开 uv cache 写权限问题），861 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -165,7 +165,13 @@
   - **docker-compose.yml postgres 服务**：`environment` 新增 `POSTGRES_PASSWORD_FILE: ${POSTGRES_PASSWORD_FILE:-}`，Postgres 官方镜像原生支持 `_FILE` 后缀（设置后优先读文件内容作为密码，忽略 `POSTGRES_PASSWORD`）；未设置时为空字符串，镜像忽略 `_FILE` 后缀回退到 `POSTGRES_PASSWORD`（开发/CI 默认路径）；生产环境设置 `POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password` 即可启用 docker secrets（切片 D #101 配置）
   - **测试覆盖**（7 个文件 +24 测试，837→854）：每个密钥读取点都有 `_FILE` 优先 / fallback env / 缺失返回 None 三条路径的单元测试；`test_deployment_config.py` 新增 `TestPostgresPasswordFile` 3 测试验证 compose 字段声明
   - **向后兼容**：所有调用点保留 fallback env 行为，开发/CI 不挂载 secrets 时行为不变；830 基线零回归
-- **切片 B #98（待实施）**：`Dockerfile` 加 `USER 65532` + `chown -R 65532 /app`；`docker/entrypoint.sh` 从 `uv run uvicorn` 改为 `/app/.venv/bin/uvicorn` 直接调用
+- **切片 B #98（已完成，PR #105）**：api 容器非 root 改造
+  - `Dockerfile` 加 `RUN groupadd -r app && useradd -r -g app -u 65532 app && chown -R app:app /app`（创建 UID 65532 的 app 用户 + chown /app 让非 root 用户可读 `.venv`/源码 + 可写 `data/uploads`，必须在所有 COPY 之后执行确保 entrypoint.sh 也被 chown）
+  - `Dockerfile` 加 `USER 65532`（在 chown 之后，否则 chown 以非 root 执行会失败）
+  - `docker/entrypoint.sh` 从 `uv run uvicorn` / `uv run alembic` 改为 `/app/.venv/bin/uvicorn` / `/app/.venv/bin/alembic` 直接调用（非 root 用户无权写 `~/.cache/uv`，`uv run` 会因 cache 写入失败而崩溃，直接调用 venv 内可执行文件绕开）
+  - 保留 `exec` 让 uvicorn 接管 PID 1，`docker stop` 能优雅关闭（SIGTERM 直接给 uvicorn 而非 sh）
+  - 7 个新增单元测试（`tests/unit/test_dockerfile_non_root.py`）：`TestDockerfileNonRoot`（4 个：USER 65532 / groupadd+useradd / chown / 顺序约束）+ `TestEntrypointScript`（3 个：venv uvicorn / venv alembic / exec 保留）
+  - 容器行为测试（`id` 命令 / 健康检查 / uploads 可写）需真实 Docker 构建后验证，本地 pytest 只验证文件结构与关键指令存在性
 - **切片 D #101（待实施，阻塞于 #98 + #99）**：`docker-compose.prod.yml` 加 `secrets:` 块声明 docker secrets + 各服务 `secrets:` 挂载到 `/run/secrets/<name>`；`api` 服务的 `DATABASE_URL` 通过 entrypoint 脚本动态拼装
 - **切片 E #100（待实施，阻塞于 #98）**：新增 `nginx` 服务 + certbot 容器，TLS 证书自动签发与续期，反代到 api:8000
 - **切片 F #102（待实施，阻塞于 #98-#101 全部完成）**：同步 ROADMAP / STATUS / README / ADR 0004 状态
@@ -208,7 +214,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：854 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个、#92 历史消息反馈前端 UI 渲染新增 8 个、#97 secrets.py helper 新增 7 个、#99 密钥读取点替换 + postgres 密码文件支持新增 24 个）
+- pytest：861 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个、#92 历史消息反馈前端 UI 渲染新增 8 个、#97 secrets.py helper 新增 7 个、#99 密钥读取点替换 + postgres 密码文件支持新增 24 个、#98 非 root 容器 Dockerfile 改造新增 7 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -224,5 +230,5 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 - 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩—— **prefactor 已完成**（PR #93 / Issue #89：`Message.request_id` 列 + ADR 0003）；**写入读出已完成**（PR #94 / Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展）；**前端 model+client 已完成**（PR #95 / Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）；**前端 UI 渲染已完成**（PR #96 / Issue #92：`_render_feedback_buttons` 扩展到历史消息 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮）；历史消息反馈端到端体验闭环完成
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
-- 生产级安全加固（阶段 11.6 进行中）：非 root 容器用户 + docker secrets 文件挂载 + Nginx TLS 反代——**切片 A #97 + 切片 C #99 已完成**（密钥 helper + 8 个读取点替换 + postgres 密码文件支持），**切片 B/D/E/F 待实施**（非 root 容器 / docker secrets 配置 / Nginx TLS / 文档同步）
+- 生产级安全加固（阶段 11.6 进行中）：非 root 容器用户 + docker secrets 文件挂载 + Nginx TLS 反代——**切片 A #97 + 切片 B #98 + 切片 C #99 已完成**（密钥 helper + 8 个读取点替换 + postgres 密码文件支持 + 非 root 容器 Dockerfile 改造），**切片 D/E/F 待实施**（docker secrets 配置 / Nginx TLS / 文档同步）
 - 表格感知切分与公式识别（阶段 12）
