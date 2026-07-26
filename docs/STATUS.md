@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v2.0` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官，796 条测试通过，CI 三项全绿。
+`v2.1` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入，805 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -68,7 +68,7 @@
 
 ### 用户反馈闭环
 
-- 用户对答案点赞/点踩并记录到 DB，用于持续优化（阶段 10.2）
+- 用户对答案点赞/点踩并记录到 DB，用于持续优化（阶段 10.2 后端 + 前端补充）
 - `Feedback` ORM 模型：`request_id` 唯一主关联键 + 可空 `message_id` 外键（`ondelete=SET NULL`）+ `rating` 枚举（like/dislike）+ `comment`（最长 2000 字符）；`FeedbackRating` 枚举 + `FeedbackNotFoundError` 异常
 - `FeedbackRepository`：`upsert` / `get_by_request_id` / `list`（按 rating / conversation_id 筛选）/ `delete`，只 `flush` 不 `commit`（事务由路由层显式控制）
 - Alembic 迁移：创建 `feedback` 表
@@ -76,7 +76,9 @@
 - Schemas：`FeedbackCreate` / `FeedbackRead` / `FeedbackList`（Pydantic v2）
 - 路由直接调 Repository，不新建 `FeedbackService`（避免空模块）
 - `request_id` 作为主关联键的决策与已知局限见 [ADR 0001](./adr/0001-request-id-as-feedback-key.md)
-- 30 个单元测试（Repository 12 + API 18，端到端验证）
+- 后端 30 个单元测试（Repository 12 + API 18，端到端验证）
+- **前端补充**（PR #87 / Issue #86）：`ApiClient.submit_feedback` / `delete_feedback` 封装 POST/DELETE；`_render_feedback_buttons` 在 assistant 气泡内渲染点赞/点踩按钮，状态缓存在 `st.session_state`，Upsert 语义切换赞↔踩，再次点击撤销 DELETE，点踩后展开 `st.text_area` 收集文字评论；9 个新增单元测试（`TestSubmitFeedback` 6 + `TestDeleteFeedback` 3）
+- 不在范围：历史消息反馈（后端 `Message` 模型无 `request_id` 字段，前端 `MessageInfo` 也缺失，待后续 Issue 跟踪）
 
 ### 性能优化
 
@@ -178,7 +180,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：796 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 新增 30 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个）
+- pytest：805 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -192,7 +194,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 后续可选方向
 
-- 阶段 10.2 前端补充：Streamlit 点赞/点踩按钮接入反馈 API（后端已完成）
+- 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
 - 生产级安全加固：非 root 容器用户、密钥管理（Vault/secrets manager）、TLS 终止（Nginx 反代）
 - 表格感知切分与公式识别（阶段 12）

@@ -117,7 +117,7 @@
 
 ### 10.2 用户反馈闭环
 
-- **状态**：✅ 已完成（PR #60，Issue #59）
+- **状态**：✅ 已完成（后端 PR #60 / Issue #59；前端补充 PR #87 / Issue #86）
 - **目标**：用户对答案点赞/点踩，记录到 DB 用于持续优化
 - **技术方案**：
   - `Feedback` ORM 模型：`request_id` 唯一主关联键 + 可空 `message_id` 外键（`ondelete=SET NULL`）+ `rating` 枚举（like/dislike）+ `comment`（最长 2000 字符）；`FeedbackRating` 枚举 + `FeedbackNotFoundError` 异常
@@ -125,9 +125,12 @@
   - Alembic 迁移：创建 `feedback` 表
   - 路由直接调 Repository，不新建 `FeedbackService`（避免空模块）
   - `request_id` 作为主关联键的决策与已知局限见 [ADR 0001](./adr/0001-request-id-as-feedback-key.md)
-- **交付**：`src/research_rag/db/models.py`（Feedback / FeedbackRating / FeedbackNotFoundError）+ `src/research_rag/db/repositories.py`（FeedbackRepository）+ `alembic/versions/2026_07_24_1413-aa7a10e898fd_add_feedback_table_for_user_feedback_.py` + `src/research_rag/api/routes/feedback.py`（4 个端点）+ `CONTEXT.md` 术语表 + `docs/adr/0001-request-id-as-feedback-key.md` + 30 个单元测试（Repository 12 + API 18）
-- **验收**：DB 可查询某答案的反馈，支持按赞/踩筛选；`POST /api/v1/feedback` Upsert（201 新建 / 200 更新）、`GET /api/v1/feedback/{request_id}`（200 / 404）、`GET /api/v1/feedback?rating=&conversation_id=&limit=`、`DELETE /api/v1/feedback/{request_id}`（204 / 404）端到端测试通过
-- **不在范围**：Streamlit 前端点赞/点踩按钮（后端已就绪，前端接入待后续）
+  - **前端补充**（PR #87）：`ApiClient.submit_feedback` / `delete_feedback` 封装 POST/DELETE；`_render_feedback_buttons` 在 assistant 气泡内渲染点赞/点踩按钮，状态缓存在 `st.session_state`，Upsert 语义切换赞↔踩，点踩后展开 `st.text_area` 收集评论
+- **交付**：
+  - 后端：`src/research_rag/db/models.py`（Feedback / FeedbackRating / FeedbackNotFoundError）+ `src/research_rag/db/repositories.py`（FeedbackRepository）+ `alembic/versions/2026_07_24_1413-aa7a10e898fd_add_feedback_table_for_user_feedback_.py` + `src/research_rag/api/routes/feedback.py`（4 个端点）+ `CONTEXT.md` 术语表 + `docs/adr/0001-request-id-as-feedback-key.md` + 30 个单元测试（Repository 12 + API 18）
+  - 前端：`src/research_rag/ui/api_client.py`（`FeedbackInfo` dataclass + `submit_feedback` / `delete_feedback` 方法 + `_parse_feedback`）+ `src/research_rag/ui/app.py`（`_render_feedback_buttons` 函数）+ 9 个单元测试（`TestSubmitFeedback` 6 + `TestDeleteFeedback` 3）
+- **验收**：DB 可查询某答案的反馈，支持按赞/踩筛选；`POST /api/v1/feedback` Upsert（201 新建 / 200 更新）、`GET /api/v1/feedback/{request_id}`（200 / 404）、`GET /api/v1/feedback?rating=&conversation_id=&limit=`、`DELETE /api/v1/feedback/{request_id}`（204 / 404）端到端测试通过；前端流式渲染后显示点赞/点踩按钮，点击切换 Upsert，再次点击撤销 DELETE，点踩后可补充文字评论
+- **不在范围**：历史消息反馈（后端 `Message` 模型无 `request_id` 字段，前端 `MessageInfo` 也缺失，待后续 Issue 跟踪）
 
 ### 10.3 性能优化
 
