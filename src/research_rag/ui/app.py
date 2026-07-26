@@ -42,9 +42,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, cast
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from research_rag.ui.api_client import (
     ApiClient,
@@ -158,6 +160,59 @@ div[data-testid="stChatInput"] {{
 }}
 </style>
 """
+
+
+def _strip_markdown_to_plain_text(text: str) -> str:
+    """去除 markdown 标记，提取纯文本（Issue #113）。
+
+    覆盖常见标记：行内代码、链接、粗体、斜体、标题。复杂 markdown（表格、
+    列表）不做完整解析，仅清理常见标记。
+
+    Args:
+        text: 含 markdown 标记的文本。
+
+    Returns:
+        纯文本。
+    """
+
+    # 行内代码 `code` → code
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # 链接 [text](url) → text
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # 粗体 **text** → text
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    # 斜体 *text* → text
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    # 标题 # text → text（行首，多个 #）
+    text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+    return text
+
+
+def _render_copy_button(text: str, key_suffix: str) -> None:
+    """渲染复制按钮（Issue #113）。
+
+    点击后用 JS 注入 ``navigator.clipboard.writeText`` 把纯文本（去除
+    markdown 标记）写入剪贴板，并显示 ``st.toast`` 提示。
+
+    Args:
+        text: 要复制的原始文本（含 markdown 标记）。
+        key_suffix: 按钮 key 后缀（保证唯一性，如 request_id 或消息索引）。
+    """
+
+    if st.button("📋 复制", key=f"copy-{key_suffix}"):
+        plain_text = _strip_markdown_to_plain_text(text)
+        # 转义 JS 字符串字面量
+        escaped = (
+            plain_text.replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+        )
+        components.html(
+            f"<script>navigator.clipboard.writeText('{escaped}');</script>",
+            height=0,
+        )
+        st.toast("已复制到剪贴板")
 
 
 def _render_nav_section(
@@ -492,11 +547,15 @@ def _render_chat(client: ApiClient) -> None:
         msgs,
         cast("MutableMapping[str, object]", st.session_state),
     )
-    for msg in msgs:
+    for idx, msg in enumerate(msgs):
         with st.chat_message(msg.role):
             st.write(msg.content)
             if msg.citations:
                 _render_citations_inline(msg.citations)
+            # 复制按钮（仅 assistant 消息，Issue #113）
+            if msg.role == "assistant":
+                key_suffix = msg.id or msg.request_id or f"idx-{idx}"
+                _render_copy_button(msg.content, key_suffix=key_suffix)
             # 历史消息反馈按钮（Issue #92）：仅 assistant 消息且有 request_id 时渲染。
             # 旧消息（request_id=None）隐藏按钮——点击必然 404，体验差。
             if _should_render_feedback_for_message(msg):
@@ -626,6 +685,9 @@ def _handle_question(
         elapsed_ms = holder["elapsed_ms"]
         request_id = str(holder["request_id"])
         st.caption(f"耗时 {elapsed_ms} ms | 请求 ID: `{request_id}`")
+
+        # 复制按钮（Issue #113）
+        _render_copy_button(answer, key_suffix=request_id)
 
         # 渲染点赞/点踩按钮（阶段 10.2 前端补充，对接 feedback API）
         if request_id:
