@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v2.1` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入，805 条测试通过，CI 三项全绿。
+`v2.2` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进，812 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -75,10 +75,10 @@
 - API：`POST /api/v1/feedback`（Upsert，201 新建 / 200 更新）、`GET /api/v1/feedback/{request_id}`（200 / 404）、`GET /api/v1/feedback?rating=&conversation_id=&limit=`（列表筛选）、`DELETE /api/v1/feedback/{request_id}`（204 / 404）
 - Schemas：`FeedbackCreate` / `FeedbackRead` / `FeedbackList`（Pydantic v2）
 - 路由直接调 Repository，不新建 `FeedbackService`（避免空模块）
-- `request_id` 作为主关联键的决策与已知局限见 [ADR 0001](./adr/0001-request-id-as-feedback-key.md)
+- `request_id` 作为主关联键的决策与已知局限见 [ADR 0001](./adr/0001-request-id-as-feedback-key.md)（已被 [ADR 0003](./adr/0003-message-request-id.md) 部分取代：`request_id` 现持久化到 `Message` 表）
 - 后端 30 个单元测试（Repository 12 + API 18，端到端验证）
 - **前端补充**（PR #87 / Issue #86）：`ApiClient.submit_feedback` / `delete_feedback` 封装 POST/DELETE；`_render_feedback_buttons` 在 assistant 气泡内渲染点赞/点踩按钮，状态缓存在 `st.session_state`，Upsert 语义切换赞↔踩，再次点击撤销 DELETE，点踩后展开 `st.text_area` 收集文字评论；9 个新增单元测试（`TestSubmitFeedback` 6 + `TestDeleteFeedback` 3）
-- 不在范围：历史消息反馈（后端 `Message` 模型无 `request_id` 字段，前端 `MessageInfo` 也缺失，待后续 Issue 跟踪）
+- **历史消息反馈 prefactor**（PR #93 / Issue #89）：`Message` 表新增可空 `request_id` 列（唯一索引）+ Alembic 迁移 `b8f2a3c4d5e6` + ADR 0001 标记 Superseded + ADR 0003 新写 + CONTEXT.md 术语微调；7 个新增单元测试（4 模型层 + 3 迁移层）；剩余切片 #90（后端写入 + API 读出）/ #91（前端 model + client）/ #92（UI 渲染 + 交互）跟踪
 
 ### 性能优化
 
@@ -180,7 +180,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：805 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个）
+- pytest：812 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -194,7 +194,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 后续可选方向
 
-- 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩
+- 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩—— **prefactor 已完成**（PR #93 / Issue #89：`Message.request_id` 列 + ADR 0003）；剩余切片 #90（后端 `_persist_turn` 写入 + `MessageRead` schema）/ #91（前端 `MessageInfo` + `ApiClient.get_feedback`）/ #92（`_render_feedback_buttons` 扩展到历史消息）跟踪
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
 - 生产级安全加固：非 root 容器用户、密钥管理（Vault/secrets manager）、TLS 终止（Nginx 反代）
 - 表格感知切分与公式识别（阶段 12）
