@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v3.0` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 + 11.6 全部完成（阶段 11.6 生产安全加固 6 个切片 A-F 全部完成：#97 #98 #99 #101 #100 #102）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A（PR #103 / Issue #97）完成 `secrets.py` helper 支持 `{NAME}_FILE` 优先 + fallback env；阶段 11.6 切片 C（PR #104 / Issue #99）完成 5 个文件 8 个密钥读取点替换为 `get_secret` + docker-compose.yml postgres `POSTGRES_PASSWORD_FILE` 支持；阶段 11.6 切片 B（PR #105 / Issue #98）完成 api 容器非 root 改造（Dockerfile 加 `USER 65532` + `groupadd/useradd/chown` + entrypoint.sh 改用 `/app/.venv/bin/uvicorn` 和 `/app/.venv/bin/alembic` 直接调用绕开 uv cache 写权限问题）；阶段 11.6 切片 D（PR #106 / Issue #101）完成 docker-compose.prod.yml 配置 8 个 docker secrets 挂载（顶级 `secrets:` 块 + api 引用 7 + postgres 引用 password + api environment 7 个 `_FILE` + `.env.docker.secrets.example` 模板）；阶段 11.6 切片 E（PR #107 / Issue #100）完成 nginx + certbot 容器化 + TLS 反代（`nginx/nginx.conf` 模板含 HTTP→HTTPS 重定向 + ACME webroot + `proxy_pass http://api:8000` + `${DOMAIN}` envsubst 占位 + `docker/nginx/entrypoint.sh` 含 envsubst + 占位自签证书 + crond reload + `docker/certbot/entrypoint.sh` 含 certbot certonly --webroot 首次签发 + certbot renew 续期 cron + docker-compose.prod.yml 加 nginx/certbot 服务 + 共享 webroot/证书卷 + api 用 `ports: !reset []` 清空 8000 端口发布）；阶段 11.6 切片 F（PR #108 / Issue #102）完成文档同步收官（ROADMAP.md 标记阶段 11.6 ✅ 已完成 + 新增三个子方向总结 + 设计取舍汇总 + 验收结果汇总 + STATUS.md v2.9 → v3.0 标记阶段 11.6 完成，纯文档变更无新增测试），905 条测试通过，CI 三项全绿。
+`v3.1` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 + 11.6 全部完成（阶段 11.6 生产安全加固 6 个切片 A-F 全部完成：#97 #98 #99 #101 #100 #102）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A（PR #103 / Issue #97）完成 `secrets.py` helper 支持 `{NAME}_FILE` 优先 + fallback env；阶段 11.6 切片 C（PR #104 / Issue #99）完成 5 个文件 8 个密钥读取点替换为 `get_secret` + docker-compose.yml postgres `POSTGRES_PASSWORD_FILE` 支持；阶段 11.6 切片 B（PR #105 / Issue #98）完成 api 容器非 root 改造（Dockerfile 加 `USER 65532` + `groupadd/useradd/chown` + entrypoint.sh 改用 `/app/.venv/bin/uvicorn` 和 `/app/.venv/bin/alembic` 直接调用绕开 uv cache 写权限问题）；阶段 11.6 切片 D（PR #106 / Issue #101）完成 docker-compose.prod.yml 配置 8 个 docker secrets 挂载（顶级 `secrets:` 块 + api 引用 7 + postgres 引用 password + api environment 7 个 `_FILE` + `.env.docker.secrets.example` 模板）；阶段 11.6 切片 E（PR #107 / Issue #100）完成 nginx + certbot 容器化 + TLS 反代（`nginx/nginx.conf` 模板含 HTTP→HTTPS 重定向 + ACME webroot + `proxy_pass http://api:8000` + `${DOMAIN}` envsubst 占位 + `docker/nginx/entrypoint.sh` 含 envsubst + 占位自签证书 + crond reload + `docker/certbot/entrypoint.sh` 含 certbot certonly --webroot 首次签发 + certbot renew 续期 cron + docker-compose.prod.yml 加 nginx/certbot 服务 + 共享 webroot/证书卷 + api 用 `ports: !reset []` 清空 8000 端口发布）；阶段 11.6 切片 F（PR #108 / Issue #102）完成文档同步收官（ROADMAP.md 标记阶段 11.6 ✅ 已完成 + 新增三个子方向总结 + 设计取舍汇总 + 验收结果汇总 + STATUS.md v2.9 → v3.0 标记阶段 11.6 完成，纯文档变更无新增测试），905 条测试通过，CI 三项全绿；**UI 体验优化阶段二**（基于 ChatGPT 界面截图的二轮迭代，5 个 ticket 全部 squash 合并到 main：左侧导航重构 #109（PR +6 测试）+ 输入栏「+」上传按钮+底部免责声明 #112（PR +8 测试）+ 对话区居中+宽度收窄布局 #111（PR +5 测试）+ AI 回复复制按钮 #113（PR #117 +8 测试）+ 顶部模型选择下拉占位 #110（PR #118 +6 测试），共 +33 测试，905 → 938 测试基线零回归），938 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -46,6 +46,32 @@
 - 文档范围锁定：左侧文档多选 + 「新建会话」按钮，新建时调 `client.create_conversation(document_ids=selected_ids)` 锁定范围（修复多文档会话只检索到一篇的 Bug）；单轮问答也支持文档范围限定
 - 引用卡片标注来源文档名（`[C1] paper1.pdf · 第3页`），多文档场景可直观区分
 - 通过 HTTP 调用 FastAPI，不直接 import 业务层
+
+### UI 体验优化阶段二（#109-#113）
+
+基于 ChatGPT 界面截图的二轮 UI 迭代，5 个 ticket 全部 squash 合并到 main，905 → 938 测试基线零回归（+33 新增）：
+
+- **#109 左侧导航重构**（commit `5b6cbef`，+6 测试）：图标分组 + 可折叠会话/文档列表
+  - 新增 `_render_nav_section` / `_is_nav_section_expanded` / `_is_sidebar_collapsed` 纯函数
+  - 上层分组：新建会话 / 搜索会话 / 历史会话列表（可折叠，默认展开）/ 文档列表（可折叠，默认展开，支持选择/删除但不上传）
+  - 下层分组：设置 / 帮助
+- **#112 输入栏「+」上传按钮+底部免责声明**（commit `e589cc0`，+8 测试）
+  - 新增 `_render_input_toolbar` / `_is_valid_pdf_filename` 纯函数 + `_UPLOAD_DISCLAIMER` 常量
+  - 输入栏左侧「+」按钮触发 PDF 上传（移除原左侧导航的文档管理上传入口，统一到输入栏）
+  - 底部免责声明：「AI 可能出错，请核查重要信息」
+- **#111 对话区居中+宽度收窄布局**（commit `012624a`，+5 测试）
+  - 新增 `_get_chat_layout_css` 纯函数注入 CSS
+  - 对话区域居中 + 最大宽度收窄（移动宽屏下阅读体验改善）
+- **#113 AI 回复复制按钮**（PR #117，commit `9aba590`，+8 测试）
+  - 新增 `_render_copy_button` / `_strip_markdown_to_plain_text` 纯函数
+  - 用 `streamlit.components.v1.html` 注入 `navigator.clipboard.writeText` JS + Toast 提示复制成功
+  - 复制内容为剥离 Markdown 标记后的纯文本
+- **#110 顶部模型选择下拉（占位）**（PR #118，commit `cc27531`，+6 测试）
+  - 新增 `_render_model_dropdown` / `_get_current_model_name` / `_get_model_dropdown_options` 纯函数
+  - `st.selectbox` + `disabled=True` 单元素 options 实现「展示但不切换」的占位下拉
+  - 真切换需后端补 `/api/v1/config` 端点，留待后续 issue
+- **设计取舍**：纯函数与 Streamlit side-effect 分离（参考 `tests/unit/test_ui_*.py` 测试风格），用 `_make_session_state` 工厂函数模拟 `st.session_state`，`monkeypatch.setenv/delenv` 处理环境变量，函数内延迟导入避免模块加载副作用
+- **不在范围**：模型真切换（需后端补端点）、用户登录页（需 JWT 用户系统）、移动端响应式适配
 
 ### 评测与质量优化
 
@@ -228,7 +254,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：861 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个、#92 历史消息反馈前端 UI 渲染新增 8 个、#97 secrets.py helper 新增 7 个、#99 密钥读取点替换 + postgres 密码文件支持新增 24 个、#98 非 root 容器 Dockerfile 改造新增 7 个）
+- pytest：938 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个、#92 历史消息反馈前端 UI 渲染新增 8 个、#97 secrets.py helper 新增 7 个、#99 密钥读取点替换 + postgres 密码文件支持新增 24 个、#98 非 root 容器 Dockerfile 改造新增 7 个、#101 docker-compose.prod.yml docker secrets 配置新增 10 个、#100 nginx + certbot 容器化 + TLS 反代新增 33 个、#102 文档同步收官纯文档无新增、UI 体验优化阶段二新增 33 个：#109 左侧导航重构 +6 / #112 输入栏上传按钮+免责声明 +8 / #111 对话区居中布局 +5 / #113 AI 回复复制按钮 +8 / #110 顶部模型下拉占位 +6）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -243,5 +269,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 ## 后续可选方向
 
 - 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩—— **prefactor 已完成**（PR #93 / Issue #89：`Message.request_id` 列 + ADR 0003）；**写入读出已完成**（PR #94 / Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展）；**前端 model+client 已完成**（PR #95 / Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）；**前端 UI 渲染已完成**（PR #96 / Issue #92：`_render_feedback_buttons` 扩展到历史消息 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮）；历史消息反馈端到端体验闭环完成
+- UI 体验优化阶段二（#109-#113）：基于 ChatGPT 界面截图的二轮迭代—— **已完成**（左侧导航重构 #109 + 输入栏上传按钮+免责声明 #112 + 对话区居中布局 #111 + AI 回复复制按钮 #113 + 顶部模型下拉占位 #110，5 个 ticket 全部 squash 合并到 main，905 → 938 测试基线零回归，+33 新增）
+- 顶部模型选择下拉真切换（占位升级）：需后端补 `/api/v1/config` 端点返回可用模型列表，前端 `_render_model_dropdown` 移除 `disabled=True` 后接入
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
 - 表格感知切分与公式识别（阶段 12）
