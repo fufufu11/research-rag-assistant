@@ -42,6 +42,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 import re
 from typing import TYPE_CHECKING, cast
@@ -188,12 +189,315 @@ def _is_valid_pdf_filename(filename: str) -> bool:
     return filename.lower().endswith(".pdf")
 
 
-def _get_chat_layout_css(max_width_px: int = 800) -> str:
-    """生成对话区居中布局的 CSS（Issue #111）。
+def _get_claude_style_css(max_width_px: int = 720) -> str:
+    """生成 Claude 静谧极简风格的 CSS（Issue #121）。
 
-    限制对话区消息流与输入栏最大宽度并居中，视觉更聚焦（贴近截图风格）。
-    user/assistant 气泡对齐依赖 Streamlit 原生行为（user 右对齐、assistant
-    左对齐），本 CSS 只负责宽度收窄与居中。
+    把 HTML 预览（``.trae/handoffs/ui_claude_v1.html``）确认的 Claude 风格
+    落地为 Streamlit 可注入的 CSS，覆盖默认样式。包含：
+
+    - **Google Fonts 导入**：Newsreader（衬线，消息正文）+ IBM Plex Sans
+      （无衬线，UI）+ IBM Plex Mono（代码/ID）
+    - **CSS 变量**：暖米色背景 ``#faf9f7`` + 深棕侧栏 ``#1c1815`` + 赤陶土
+      强调色 ``#c96442`` + 引用卡片彩色边框（4 色）
+    - **全局背景**：暖米色 + SVG 噪声纹理叠加（暖纸质感）
+    - **消息流**：``stChatMessage`` 宽度收窄居中（默认 720px）+ Newsreader
+      衬线字体渲染 assistant 段落
+    - **输入栏**：``stChatInput`` 同步居中收窄
+    - **按钮**：圆角 + hover 赤陶土边框
+    - **引用卡片**：双列网格 + 彩色左边框 + hover 抬升（配合
+      ``_render_citations_inline`` 的 HTML 卡片渲染）
+
+    保留 ``max-width`` / ``auto`` 关键字以维持 ``test_ui_chat_layout`` 兼容。
+
+    Args:
+        max_width_px: 对话区最大宽度（像素），默认 720（Claude 风格更收窄）。
+
+    Returns:
+        CSS 字符串（含 ``<style>`` 标签，用于 ``st.markdown`` 注入）。
+    """
+
+    return f"""
+<style>
+/* Google Fonts 导入（Newsreader 衬线 + IBM Plex Sans/Mono） */
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+/* Claude 风格 CSS 变量（赤陶土暖色系） */
+:root {{
+    --claude-bg: #faf9f7;
+    --claude-surface: #ffffff;
+    --claude-sidebar: #1c1815;
+    --claude-sidebar-soft: #28221e;
+    --claude-fg: #2d2a26;
+    --claude-fg-secondary: #6b655c;
+    --claude-fg-muted: #9b948a;
+    --claude-fg-on-dark: #f5efe6;
+    --claude-fg-on-dark-muted: #a8a094;
+    --claude-accent: #c96442;
+    --claude-accent-soft: #e8a48a;
+    --claude-accent-bg: #fdf3ee;
+    --claude-accent-hover: #b75636;
+    --claude-border: #ebe5dc;
+    --claude-border-strong: #d9d2c5;
+    --claude-border-on-dark: #3a322a;
+    --claude-code-bg: #f4efe8;
+    --claude-cite-1: #c96442;
+    --claude-cite-2: #4a7c59;
+    --claude-cite-3: #8b5a8c;
+    --claude-cite-4: #2c5f8a;
+    --claude-shadow-sm: 0 1px 2px rgba(45, 42, 38, 0.04);
+    --claude-shadow-md: 0 1px 3px rgba(45, 42, 38, 0.06), 0 4px 12px rgba(45, 42, 38, 0.04);
+    --claude-shadow-input: 0 1px 4px rgba(45, 42, 38, 0.06), 0 8px 24px rgba(45, 42, 38, 0.04);
+}}
+
+/* 全局背景：暖米色 + IBM Plex Sans */
+.stApp {{
+    background: var(--claude-bg);
+    color: var(--claude-fg);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}}
+
+/* 噪声纹理叠加（暖纸质感） */
+.stApp::after {{
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='0.035'/></svg>");
+    pointer-events: none;
+    z-index: 1;
+    mix-blend-mode: multiply;
+}}
+
+/* 对话区消息流：宽度收窄居中 + Newsreader 衬线字体（Claude 标志性） */
+div[data-testid="stChatMessage"] {{
+    max-width: {max_width_px}px;
+    margin-left: auto;
+    margin-right: auto;
+    font-family: "Newsreader", "Source Han Serif SC", "Songti SC", serif;
+    font-size: 16px;
+    line-height: 1.72;
+    letter-spacing: 0.003em;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 8px 0;
+}}
+
+/* assistant 气泡内正文段落 */
+div[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p {{
+    margin-bottom: 14px;
+    line-height: 1.72;
+}}
+div[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p:last-child {{
+    margin-bottom: 0;
+}}
+
+/* 强调文字（strong/em）用赤陶土 */
+div[data-testid="stChatMessage"] strong {{
+    color: var(--claude-accent);
+    font-weight: 600;
+}}
+
+/* 行内代码 */
+div[data-testid="stChatMessage"] code {{
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    background: var(--claude-code-bg);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--claude-accent-hover);
+}}
+
+/* 输入栏居中收窄 */
+div[data-testid="stChatInput"] {{
+    max-width: {max_width_px}px;
+    margin-left: auto;
+    margin-right: auto;
+}}
+div[data-testid="stChatInput"] textarea {{
+    border-radius: 16px !important;
+    border-color: var(--claude-border-strong) !important;
+    font-family: "IBM Plex Sans", sans-serif !important;
+    font-size: 14px !important;
+    box-shadow: var(--claude-shadow-input) !important;
+    transition: all 0.18s !important;
+}}
+div[data-testid="stChatInput"] textarea:focus {{
+    border-color: var(--claude-accent) !important;
+    box-shadow: 0 0 0 3px var(--claude-accent-bg), var(--claude-shadow-input) !important;
+}}
+
+/* 按钮圆角 + hover 赤陶土 */
+.stButton > button {{
+    border-radius: 8px;
+    font-family: "IBM Plex Sans", sans-serif;
+    transition: all 0.18s;
+}}
+.stButton > button:hover {{
+    border-color: var(--claude-accent);
+    color: var(--claude-accent);
+    background: var(--claude-accent-bg);
+}}
+.stButton > button[kind="primary"] {{
+    background: var(--claude-accent);
+    color: var(--claude-surface);
+    border-color: var(--claude-accent);
+}}
+.stButton > button[kind="primary"]:hover {{
+    background: var(--claude-accent-hover);
+    border-color: var(--claude-accent-hover);
+    color: var(--claude-surface);
+}}
+
+/* 顶部模型下拉样式 */
+div[data-testid="stSelectbox"] {{
+    max-width: 280px;
+}}
+div[data-testid="stSelectbox"] > div > div {{
+    border-radius: 8px;
+    border-color: var(--claude-border-strong);
+    background: var(--claude-surface);
+    transition: all 0.15s;
+}}
+div[data-testid="stSelectbox"] > div > div:hover {{
+    border-color: var(--claude-accent);
+    box-shadow: var(--claude-shadow-sm);
+}}
+
+/* 文本输入框 */
+.stTextInput > div > input {{
+    border-radius: 6px;
+    border-color: var(--claude-border-strong);
+    font-family: "IBM Plex Sans", sans-serif;
+    transition: all 0.15s;
+}}
+.stTextInput > div > input:focus {{
+    border-color: var(--claude-accent);
+    box-shadow: 0 0 0 2px rgba(201, 100, 66, 0.15);
+}}
+
+/* 多选框 */
+div[data-testid="stMultiSelect"] {{
+    font-family: "IBM Plex Sans", sans-serif;
+}}
+
+/* expander（保留折叠引用详情的备用样式） */
+div[data-testid="stExpander"] {{
+    border-radius: 8px;
+    border-color: var(--claude-border);
+    background: var(--claude-surface);
+}}
+
+/* 引用卡片样式（配合 _render_citations_inline 的 HTML 渲染） */
+.claude-citations {{
+    margin-top: 20px;
+    padding-top: 18px;
+    border-top: 1px dashed var(--claude-border-strong);
+}}
+.claude-citations-title {{
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--claude-fg-muted);
+    margin-bottom: 12px;
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 500;
+}}
+.claude-citation-cards {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}}
+@media (max-width: 600px) {{
+    .claude-citation-cards {{
+        grid-template-columns: 1fr;
+    }}
+}}
+.claude-cite-card {{
+    background: var(--claude-surface);
+    border: 1px solid var(--claude-border);
+    border-left: 3px solid var(--claude-cite-1);
+    border-radius: 6px;
+    padding: 10px 12px;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: default;
+}}
+.claude-cite-card.cite-2 {{ border-left-color: var(--claude-cite-2); }}
+.claude-cite-card.cite-3 {{ border-left-color: var(--claude-cite-3); }}
+.claude-cite-card.cite-4 {{ border-left-color: var(--claude-cite-4); }}
+.claude-cite-card:hover {{
+    transform: translateY(-2px);
+    box-shadow: var(--claude-shadow-md);
+    border-color: var(--claude-border-strong);
+}}
+.claude-cite-card .num {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    background: var(--claude-accent-bg);
+    color: var(--claude-accent);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 4px;
+    margin-right: 8px;
+    vertical-align: middle;
+}}
+.claude-cite-card.cite-2 .num {{ color: var(--claude-cite-2); background: rgba(74, 124, 89, 0.08); }}
+.claude-cite-card.cite-3 .num {{ color: var(--claude-cite-3); background: rgba(139, 90, 140, 0.08); }}
+.claude-cite-card.cite-4 .num {{ color: var(--claude-cite-4); background: rgba(44, 95, 138, 0.08); }}
+.claude-cite-card .doc-name {{
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--claude-fg);
+    display: inline;
+}}
+.claude-cite-card .doc-meta {{
+    font-size: 11px;
+    color: var(--claude-fg-muted);
+    margin-top: 4px;
+    font-family: "IBM Plex Mono", monospace;
+    letter-spacing: 0.02em;
+}}
+.claude-cite-card .snippet {{
+    font-size: 12px;
+    color: var(--claude-fg-secondary);
+    margin-top: 6px;
+    line-height: 1.5;
+    max-height: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+}}
+
+/* 选中文字 */
+::selection {{
+    background: var(--claude-accent-soft);
+    color: var(--claude-sidebar);
+}}
+
+/* 滚动条 */
+::-webkit-scrollbar {{ width: 8px; height: 8px; }}
+::-webkit-scrollbar-track {{ background: transparent; }}
+::-webkit-scrollbar-thumb {{
+    background: var(--claude-border-strong);
+    border-radius: 4px;
+}}
+::-webkit-scrollbar-thumb:hover {{ background: var(--claude-fg-muted); }}
+</style>
+"""
+
+
+def _get_chat_layout_css(max_width_px: int = 800) -> str:
+    """生成对话区居中布局的 CSS（Issue #111，向后兼容）。
+
+    保留以兼容 ``test_ui_chat_layout`` 测试。新代码请用
+    ``_get_claude_style_css``（Issue #121，包含完整 Claude 风格）。
 
     Args:
         max_width_px: 对话区最大宽度（像素），默认 800。
@@ -556,8 +860,8 @@ def _render_chat(client: ApiClient) -> None:
     - Issue #111：注入 CSS 限制对话区宽度并居中，视觉更聚焦
     """
 
-    # 注入对话区居中布局 CSS（Issue #111）
-    st.markdown(_get_chat_layout_css(), unsafe_allow_html=True)
+    # 注入 Claude 风格 CSS（Issue #121，扩展自 Issue #111 居中布局）
+    st.markdown(_get_claude_style_css(), unsafe_allow_html=True)
 
     _ensure_documents_loaded(client)
     ready_docs = _get_ready_documents()
@@ -933,10 +1237,16 @@ def _render_feedback_buttons(client: ApiClient, request_id: str) -> None:
 
 
 def _render_citations_inline(citations: list[Citation]) -> None:
-    """在 assistant 消息气泡内渲染引用详情（折叠式）。
+    """在 assistant 消息气泡内渲染引用卡片（Claude 风格双列网格，Issue #121）。
 
-    引用标题明确标注来源文档名，便于多文档场景区分（问题 4 改进）：
-    ``[C1] paper1.pdf · 第3页 · 片段 5``
+    改造自原 ``st.expander`` 折叠式（问题 4 改进）为 Claude 风格双列卡片：
+    - 卡片左侧彩色边框（4 色循环，区分来源文档）
+    - 编号 + 文档名 + 页码范围 + 片段索引
+    - 相似度分数（mono 字体小字）
+    - 片段预览（最多 3 行，webkit-line-clamp 截断）
+    - hover 抬升 + 阴影（CSS 在 ``_get_claude_style_css`` 中定义）
+
+    单条引用时仍渲染为卡片（保持视觉一致）。
 
     Args:
         citations: 引用列表（按模型引用顺序）。
@@ -945,13 +1255,37 @@ def _render_citations_inline(citations: list[Citation]) -> None:
     if not citations:
         return
 
-    with st.expander(f"📎 引用详情（{len(citations)} 条）", expanded=False):
-        for idx, cite in enumerate(citations, start=1):
-            page_range = _format_page_range(cite.start_page, cite.end_page)
-            st.write(f"**[C{idx}] {cite.document_name} · {page_range} · 片段 {cite.chunk_index}**")
-            st.caption(f"相似度分数 {cite.score:.4f} | 文档 ID: `{cite.document_id[:8]}…`")
-            st.text(cite.snippet)
-            st.divider()
+    # 卡片 HTML 拼接（避免 XSS：用 html.escape 转义用户内容）
+    cards_html_parts: list[str] = []
+    for idx, cite in enumerate(citations, start=1):
+        # 4 色循环：1=赤陶 / 2=森林绿 / 3=紫罗兰 / 4=深海蓝
+        color_class = f"cite-{((idx - 1) % 4) + 1}"
+        page_range = _format_page_range(cite.start_page, cite.end_page)
+        doc_name_escaped = html.escape(cite.document_name)
+        doc_meta_escaped = html.escape(f"{page_range} · 片段 {cite.chunk_index}")
+        snippet_escaped = html.escape(cite.snippet.strip())
+        doc_id_short = html.escape(cite.document_id[:8])
+        cards_html_parts.append(f"""
+        <div class="claude-cite-card {color_class}">
+            <div><span class="num">{idx}</span><span class="doc-name">{doc_name_escaped}</span></div>
+            <div class="doc-meta">{doc_meta_escaped} · score {cite.score:.4f}</div>
+            <div class="snippet">{snippet_escaped}</div>
+            <div class="doc-meta">文档 ID: {doc_id_short}…</div>
+        </div>
+        """)
+
+    cards_html = "".join(cards_html_parts)
+    st.markdown(
+        f"""
+<div class="claude-citations">
+    <div class="claude-citations-title">引用来源 · {len(citations)} 条</div>
+    <div class="claude-citation-cards">
+        {cards_html}
+    </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 def main() -> None:
