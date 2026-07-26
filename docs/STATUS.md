@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v2.7` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11.6 生产安全加固进行中（切片 A #97 + 切片 B #98 + 切片 C #99 已完成）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A（PR #103 / Issue #97）完成 `secrets.py` helper 支持 `{NAME}_FILE` 优先 + fallback env；阶段 11.6 切片 C（PR #104 / Issue #99）完成 5 个文件 8 个密钥读取点替换为 `get_secret` + docker-compose.yml postgres `POSTGRES_PASSWORD_FILE` 支持；阶段 11.6 切片 B（PR #105 / Issue #98）完成 api 容器非 root 改造（Dockerfile 加 `USER 65532` + `groupadd/useradd/chown` + entrypoint.sh 改用 `/app/.venv/bin/uvicorn` 和 `/app/.venv/bin/alembic` 直接调用绕开 uv cache 写权限问题），861 条测试通过，CI 三项全绿。
+`v2.8` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11.6 生产安全加固进行中（切片 A #97 + 切片 B #98 + 切片 C #99 + 切片 D #101 已完成）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A（PR #103 / Issue #97）完成 `secrets.py` helper 支持 `{NAME}_FILE` 优先 + fallback env；阶段 11.6 切片 C（PR #104 / Issue #99）完成 5 个文件 8 个密钥读取点替换为 `get_secret` + docker-compose.yml postgres `POSTGRES_PASSWORD_FILE` 支持；阶段 11.6 切片 B（PR #105 / Issue #98）完成 api 容器非 root 改造（Dockerfile 加 `USER 65532` + `groupadd/useradd/chown` + entrypoint.sh 改用 `/app/.venv/bin/uvicorn` 和 `/app/.venv/bin/alembic` 直接调用绕开 uv cache 写权限问题）；阶段 11.6 切片 D（PR #106 / Issue #101）完成 docker-compose.prod.yml 配置 8 个 docker secrets 挂载（顶级 `secrets:` 块 + api 引用 7 + postgres 引用 password + api environment 7 个 `_FILE` + `.env.docker.secrets.example` 模板），871 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -172,7 +172,13 @@
   - 保留 `exec` 让 uvicorn 接管 PID 1，`docker stop` 能优雅关闭（SIGTERM 直接给 uvicorn 而非 sh）
   - 7 个新增单元测试（`tests/unit/test_dockerfile_non_root.py`）：`TestDockerfileNonRoot`（4 个：USER 65532 / groupadd+useradd / chown / 顺序约束）+ `TestEntrypointScript`（3 个：venv uvicorn / venv alembic / exec 保留）
   - 容器行为测试（`id` 命令 / 健康检查 / uploads 可写）需真实 Docker 构建后验证，本地 pytest 只验证文件结构与关键指令存在性
-- **切片 D #101（待实施，阻塞于 #98 + #99）**：`docker-compose.prod.yml` 加 `secrets:` 块声明 docker secrets + 各服务 `secrets:` 挂载到 `/run/secrets/<name>`；`api` 服务的 `DATABASE_URL` 通过 entrypoint 脚本动态拼装
+- **切片 D #101（已完成，PR #106）**：docker-compose.prod.yml 配置 8 个 docker secrets 挂载
+  - 顶级 `secrets:` 块声明 8 个 secrets（`postgres_password` / `llm_api_key` / `judge_llm_api_key` / `api_keys` / `langfuse_public_key` / `langfuse_secret_key` / `dashscope_api_key` / `jina_api_key`），每个用 `file: ${VAR_FILE:?must point to host file path}` 指向宿主机路径（未设置时 `:?` 报错引导运维配置）
+  - `api` 服务 `secrets:` 引用 7 个 secrets（除 `postgres_password`）+ `environment` 加 7 个 `{NAME}_FILE` 指向 `/run/secrets/<name>`，应用层 `get_secret` helper 优先读 `_FILE` 文件内容
+  - `postgres` 服务 `secrets:` 引用 `postgres_password` + `POSTGRES_PASSWORD_FILE` 覆盖为 `/run/secrets/postgres_password`（Postgres 官方镜像读取文件内容作为密码）
+  - 新增 `.env.docker.secrets.example` 示例文件（8 个 secrets 文件宿主机路径占位，运维复制为 `.env.docker.secrets` 后填入真实路径）；`.gitignore` 加 `.env.docker.secrets`（真实路径文件不入 git，`.example` 可提交）
+  - 10 个新增单元测试（`tests/unit/test_deployment_config.py`）：`TestProdComposeDockerSecrets`（8 个：顶级 secrets 块 / 8 secrets 定义 / api 引用 7 / postgres 引用 password / POSTGRES_PASSWORD_FILE 路径 / api environment 7 个 _FILE / 服务引用一致性 / env 路径与 secret 名一致性）+ `TestDockerSecretsEnvExample`（2 个：example 文件存在 + 含 8 个 _FILE 变量 + 路径非空）
+  - 已知局限：`api` 服务的 `DATABASE_URL` 仍用 base compose 的 `${POSTGRES_PASSWORD:-rrag}` 模式（生产环境需通过 entrypoint 脚本读 `POSTGRES_PASSWORD_FILE` 内容动态拼装，留待后续 issue 处理）
 - **切片 E #100（待实施，阻塞于 #98）**：新增 `nginx` 服务 + certbot 容器，TLS 证书自动签发与续期，反代到 api:8000
 - **切片 F #102（待实施，阻塞于 #98-#101 全部完成）**：同步 ROADMAP / STATUS / README / ADR 0004 状态
 - 决策与设计取舍见 [ADR 0004](./adr/0004-docker-secrets-helper.md)：方案 A（代码层 helper）而非方案 B（pydantic-settings BaseSettings），YAGNI；postgres 用原生 `POSTGRES_PASSWORD_FILE` 而非自定义 entrypoint
