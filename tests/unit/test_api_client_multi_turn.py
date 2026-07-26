@@ -99,6 +99,7 @@ def make_message_dict(**overrides: object) -> dict[str, object]:
         "role": "user",
         "content": "用户问题。",
         "citations": None,
+        "request_id": None,
         "created_at": "2026-07-22T10:00:01",
     }
     base.update(overrides)
@@ -435,6 +436,54 @@ class TestListMessages:
 
         assert len(msgs) == 1
         assert msgs[0].role == "user"
+
+
+# ---------------------------------------------------------------------------
+# MessageInfo.request_id 解析（#91 历史消息反馈链路）
+# ---------------------------------------------------------------------------
+
+
+class TestMessageInfoRequestId:
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_request_id_parsed_from_messages_endpoint(self, mock_request: MagicMock) -> None:
+        """``list_messages`` 响应含 ``request_id`` 时正确解析到 ``MessageInfo.request_id``。"""
+
+        mock_request.return_value = make_response(
+            200,
+            [
+                make_message_dict(
+                    role="assistant",
+                    content="答案 [C1]。",
+                    request_id="req-uuid-abc",
+                ),
+            ],
+        )
+
+        client = ApiClient()
+        msgs = client.list_messages("conv-1")
+
+        assert len(msgs) == 1
+        assert msgs[0].request_id == "req-uuid-abc"
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_request_id_none_when_absent_from_dict(self, mock_request: MagicMock) -> None:
+        """``list_messages`` 响应缺 ``request_id`` 键时 ``MessageInfo.request_id`` 为 None。
+
+        模拟 ``user`` 消息与迁移前旧消息：server 不返回 ``request_id`` 字段，
+        ``_parse_message`` 用 ``data.get`` 兜底为 None。
+        """
+
+        # 故意不传 request_id（模拟 user 消息或旧消息）
+        mock_request.return_value = make_response(
+            200,
+            [make_message_dict(role="user", content="问题")],
+        )
+
+        client = ApiClient()
+        msgs = client.list_messages("conv-1")
+
+        assert len(msgs) == 1
+        assert msgs[0].request_id is None
 
 
 # ---------------------------------------------------------------------------

@@ -180,6 +180,9 @@ class MessageInfo:
         role: 消息角色（``user`` / ``assistant``）。
         content: 消息文本。``assistant`` 消息含 ``[C1]`` 等引用标记原文。
         citations: ``assistant`` 消息的引用元数据快照；``user`` 消息为 ``None``。
+        request_id: ``assistant`` 消息关联的问答 ``request_id``（ADR 0003）。
+            ``user`` 消息与旧消息（迁移前）为 ``None``。前端用此字段反查
+            ``Feedback`` 实现历史消息反馈按钮。
         created_at: 创建时间（ISO 字符串）。
     """
 
@@ -187,6 +190,7 @@ class MessageInfo:
     role: str
     content: str
     citations: list[Citation] | None = None
+    request_id: str | None = None
     created_at: str = ""
 
 
@@ -579,6 +583,29 @@ class ApiClient:
 
         self._request("DELETE", f"/feedback/{request_id}")
 
+    def get_feedback(self, request_id: str) -> FeedbackInfo | None:
+        """查询单条反馈（GET /feedback/{request_id}）。
+
+        - 200 → 返回 ``FeedbackInfo``。
+        - 404 → 返回 ``None``（不抛异常，前端用 ``None`` 表示「未反馈」）。
+        - 其他 HTTP 错误（401/500 等）仍抛 ``ApiClientError``，避免掩盖真实错误。
+
+        Args:
+            request_id: 关联的问答 request_id。
+
+        Returns:
+            反馈信息；不存在时为 ``None``。
+        """
+
+        try:
+            response = self._request("GET", f"/feedback/{request_id}")
+        except ApiClientError as exc:
+            # 404 表示「未反馈」，前端用 None 判断按钮状态；其他错误仍抛
+            if exc.status_code == 404:
+                return None
+            raise
+        return _parse_feedback(response.json())
+
 
 def _parse_document(data: Mapping[str, Any]) -> DocumentInfo:
     """从 API 响应 JSON 解析 ``DocumentInfo``。"""
@@ -618,11 +645,13 @@ def _parse_message(data: Mapping[str, Any]) -> MessageInfo:
         if isinstance(citations_raw, list)
         else None
     )
+    request_id_raw = data.get("request_id")
     return MessageInfo(
         id=str(data["id"]),
         role=str(data["role"]),
         content=str(data["content"]),
         citations=citations,
+        request_id=str(request_id_raw) if request_id_raw is not None else None,
         created_at=str(data.get("created_at", "")),
     )
 

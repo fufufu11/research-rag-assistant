@@ -751,3 +751,53 @@ class TestDeleteFeedback:
             client.delete_feedback("req-1")
 
         assert exc_info.value.status_code == 0
+
+
+# ---------------------------------------------------------------------------
+# get_feedback（#91 历史消息反馈链路）
+# ---------------------------------------------------------------------------
+
+
+class TestGetFeedback:
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_returns_feedback_when_200(self, mock_request: MagicMock) -> None:
+        """反馈存在（200）：返回 FeedbackInfo，GET /feedback/{request_id}。"""
+
+        mock_request.return_value = make_response(
+            200,
+            make_feedback_dict(request_id="req-1", rating="like"),
+        )
+
+        client = ApiClient()
+        result = client.get_feedback("req-1")
+
+        assert isinstance(result, FeedbackInfo)
+        assert result.request_id == "req-1"
+        assert result.rating == "like"
+
+        call_kwargs = mock_request.call_args.kwargs
+        assert call_kwargs["method"] == "GET"
+        assert call_kwargs["url"] == f"{DEFAULT_API_BASE_URL}/feedback/req-1"
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_returns_none_when_404(self, mock_request: MagicMock) -> None:
+        """反馈不存在（404）：返回 None，不抛异常。"""
+
+        mock_request.return_value = make_response(404, {"detail": "反馈不存在"})
+
+        client = ApiClient()
+        result = client.get_feedback("nonexistent-req-id")
+
+        assert result is None
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_raises_error_when_500(self, mock_request: MagicMock) -> None:
+        """服务器错误（500）：仍抛 ApiClientError，不吞异常（仅 404 转 None）。"""
+
+        mock_request.return_value = make_response(500, {"detail": "服务端错误"})
+
+        client = ApiClient()
+        with pytest.raises(ApiClientError) as exc_info:
+            client.get_feedback("req-1")
+
+        assert exc_info.value.status_code == 500
