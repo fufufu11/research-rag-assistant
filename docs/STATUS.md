@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v2.3` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展，817 条测试通过，CI 三项全绿。
+`v2.4` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None，822 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -79,7 +79,8 @@
 - 后端 30 个单元测试（Repository 12 + API 18，端到端验证）
 - **前端补充**（PR #87 / Issue #86）：`ApiClient.submit_feedback` / `delete_feedback` 封装 POST/DELETE；`_render_feedback_buttons` 在 assistant 气泡内渲染点赞/点踩按钮，状态缓存在 `st.session_state`，Upsert 语义切换赞↔踩，再次点击撤销 DELETE，点踩后展开 `st.text_area` 收集文字评论；9 个新增单元测试（`TestSubmitFeedback` 6 + `TestDeleteFeedback` 3）
 - **历史消息反馈 prefactor**（PR #93 / Issue #89）：`Message` 表新增可空 `request_id` 列（唯一索引）+ Alembic 迁移 `b8f2a3c4d5e6` + ADR 0001 标记 Superseded + ADR 0003 新写 + CONTEXT.md 术语微调；7 个新增单元测试（4 模型层 + 3 迁移层）
-- **历史消息反馈写入读出**（PR #94 / Issue #90）：`_persist_turn` 加 `request_id` 必填参数，`answer` / `answer_stream` 两条路径透传到 assistant `Message`（user 消息不写）；`ConversationRepository.add_message` 签名加可选 `request_id: uuid.UUID | None = None`（保持 ORM 写入唯一入口约定）；`MessageRead` schema 加 `request_id: uuid.UUID | None`，`GET /api/v1/conversations/{id}/messages` 响应自动携带；5 个新增单元测试（写入路径 3 + 读出路径 1 + repository 签名 1）；剩余切片 #91（前端 model + client）/ #92（UI 渲染 + 交互）跟踪
+- **历史消息反馈写入读出**（PR #94 / Issue #90）：`_persist_turn` 加 `request_id` 必填参数，`answer` / `answer_stream` 两条路径透传到 assistant `Message`（user 消息不写）；`ConversationRepository.add_message` 签名加可选 `request_id: uuid.UUID | None = None`（保持 ORM 写入唯一入口约定）；`MessageRead` schema 加 `request_id: uuid.UUID | None`，`GET /api/v1/conversations/{id}/messages` 响应自动携带；5 个新增单元测试（写入路径 3 + 读出路径 1 + repository 签名 1）
+- **历史消息反馈前端 model+client**（PR #95 / Issue #91）：`MessageInfo` dataclass 加 `request_id: str | None = None` 字段，`_parse_message` 从 API 响应 dict 解析 `request_id`（缺失时 None，兼容 user 消息与迁移前旧消息）；新增 `ApiClient.get_feedback(request_id) -> FeedbackInfo | None` 封装 `GET /api/v1/feedback/{request_id}`：200 返回 `FeedbackInfo`，404 返回 `None`（不抛异常，前端用 None 表示「未反馈」），其他 HTTP 错误仍抛 `ApiClientError`（仅 404 转 None，避免掩盖 401/500 等真实错误）；同步更新 `make_message_dict` helper 加 `request_id` 键；5 个新增单元测试（`MessageInfo.request_id` 解析 2 + `get_feedback` 三分支 3）；剩余切片 #92（UI 渲染 + 交互）跟踪
 
 ### 性能优化
 
@@ -181,7 +182,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：817 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个）
+- pytest：822 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行

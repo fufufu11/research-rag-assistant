@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）
-- **测试**：817 个单元测试通过（含 #90 新增 5 个：写入路径 3 + 读出路径 1 + repository 签名 1）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）
+- **测试**：822 个单元测试通过（含 #91 新增 5 个：`MessageInfo.request_id` 解析 2 + `get_feedback` 三分支 3）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -130,7 +130,7 @@
   - 后端：`src/research_rag/db/models.py`（Feedback / FeedbackRating / FeedbackNotFoundError）+ `src/research_rag/db/repositories.py`（FeedbackRepository）+ `alembic/versions/2026_07_24_1413-aa7a10e898fd_add_feedback_table_for_user_feedback_.py` + `src/research_rag/api/routes/feedback.py`（4 个端点）+ `CONTEXT.md` 术语表 + `docs/adr/0001-request-id-as-feedback-key.md` + 30 个单元测试（Repository 12 + API 18）
   - 前端：`src/research_rag/ui/api_client.py`（`FeedbackInfo` dataclass + `submit_feedback` / `delete_feedback` 方法 + `_parse_feedback`）+ `src/research_rag/ui/app.py`（`_render_feedback_buttons` 函数）+ 9 个单元测试（`TestSubmitFeedback` 6 + `TestDeleteFeedback` 3）
 - **验收**：DB 可查询某答案的反馈，支持按赞/踩筛选；`POST /api/v1/feedback` Upsert（201 新建 / 200 更新）、`GET /api/v1/feedback/{request_id}`（200 / 404）、`GET /api/v1/feedback?rating=&conversation_id=&limit=`、`DELETE /api/v1/feedback/{request_id}`（204 / 404）端到端测试通过；前端流式渲染后显示点赞/点踩按钮，点击切换 Upsert，再次点击撤销 DELETE，点踩后可补充文字评论
-- **不在范围**：历史消息反馈（后端 `Message` 模型无 `request_id` 字段，前端 `MessageInfo` 也缺失）—— **prefactor 已完成**（PR #93 / Issue #89）：`Message` 表新增 `request_id` 列 + ADR 0001 标记 Superseded + ADR 0003 新写；**写入读出已完成**（PR #94 / Issue #90）：`_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；剩余切片 #91（前端 model + client）/ #92（UI 渲染 + 交互）跟踪
+- **不在范围**：历史消息反馈（后端 `Message` 模型无 `request_id` 字段，前端 `MessageInfo` 也缺失）—— **prefactor 已完成**（PR #93 / Issue #89）：`Message` 表新增 `request_id` 列 + ADR 0001 标记 Superseded + ADR 0003 新写；**写入读出已完成**（PR #94 / Issue #90）：`_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；**前端 model+client 已完成**（PR #95 / Issue #91）：`MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；剩余切片 #92（UI 渲染 + 交互）跟踪
 
 ### 10.3 性能优化
 
