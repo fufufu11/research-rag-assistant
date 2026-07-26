@@ -49,6 +49,8 @@ from research_rag.answer_evaluation import (
 from research_rag.qa_service import ContextPiece
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from langchain_core.callbacks import CallbackManagerForLLMRun
     from langchain_core.outputs import ChatResult
 
@@ -729,6 +731,19 @@ class TestJudgeAnswer:
 
 
 class TestLoadJudgeConfigFromEnv:
+    @pytest.fixture(autouse=True)
+    def _clear_judge_file_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """清理 ``_FILE`` 后缀变量（阶段 11.6 切片 C：docker secrets 支持）。
+
+        避免本机系统环境变量中已有 ``_FILE`` 变量污染测试。
+        """
+
+        for name in (
+            "JUDGE_LLM_API_KEY_FILE",
+            "LLM_API_KEY_FILE",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
     def test_judge_env_overrides_llm_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """JUDGE_LLM_* 应优先于 LLM_*。"""
         monkeypatch.setenv("LLM_BASE_URL", "https://api.default.com")
@@ -834,6 +849,59 @@ class TestLoadJudgeConfigFromEnv:
         config = load_judge_config_from_env()
 
         assert config.timeout == 30.0
+
+    def test_judge_api_key_reads_from_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``JUDGE_LLM_API_KEY_FILE`` 指向文件时优先读文件（覆盖 env 与 LLM fallback）。
+
+        阶段 11.6 切片 C：judge LLM 密钥支持 docker secrets ``_FILE`` 后缀，
+        优先级：``JUDGE_LLM_API_KEY_FILE`` > ``JUDGE_LLM_API_KEY`` env > ``LLM_API_KEY``。
+        """
+
+        judge_key_file = tmp_path / "judge_key.txt"
+        judge_key_file.write_text("sk-judge-from-file\n", encoding="utf-8")
+
+        monkeypatch.setenv("JUDGE_LLM_API_KEY_FILE", str(judge_key_file))
+        # 即使 env 也设置了，_FILE 优先
+        monkeypatch.setenv("JUDGE_LLM_API_KEY", "sk-judge-env-ignored")
+        # LLM_API_KEY 也设置，但 JUDGE 优先
+        monkeypatch.setenv("LLM_API_KEY", "sk-llm-ignored")
+
+        config = load_judge_config_from_env()
+        assert config.api_key == "sk-judge-from-file"
+
+    def test_judge_api_key_falls_back_to_llm_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``JUDGE_LLM_API_KEY`` 未设时 fallback ``LLM_API_KEY_FILE`` 文件内容。
+
+        judge 专属密钥未配置时回退主 LLM 配置，主 LLM 也支持 ``_FILE`` 后缀。
+        """
+
+        llm_key_file = tmp_path / "llm_key.txt"
+        llm_key_file.write_text("sk-llm-from-file\n", encoding="utf-8")
+
+        # JUDGE_LLM_API_KEY 未设（autouse fixture 已清理 _FILE）
+        monkeypatch.delenv("JUDGE_LLM_API_KEY", raising=False)
+        monkeypatch.setenv("LLM_API_KEY_FILE", str(llm_key_file))
+        # 即使 LLM_API_KEY env 也设置了，_FILE 优先
+        monkeypatch.setenv("LLM_API_KEY", "sk-llm-env-ignored")
+
+        config = load_judge_config_from_env()
+        assert config.api_key == "sk-llm-from-file"
+
+    def test_judge_api_key_falls_back_to_env_when_file_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``_FILE`` 指向不存在文件时 fallback env（开发/CI 兼容路径）。"""
+
+        nonexistent = tmp_path / "does-not-exist.txt"
+        monkeypatch.setenv("JUDGE_LLM_API_KEY_FILE", str(nonexistent))
+        monkeypatch.setenv("JUDGE_LLM_API_KEY", "sk-judge-env-fallback")
+
+        config = load_judge_config_from_env()
+        assert config.api_key == "sk-judge-env-fallback"
 
 
 # ---------------------------------------------------------------------------

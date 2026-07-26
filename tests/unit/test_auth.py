@@ -37,6 +37,7 @@ from research_rag.ui.api_client import ApiClient
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
     from fastapi import FastAPI
 
@@ -80,6 +81,12 @@ class TestIsAuthEnabled:
 class TestGetValidApiKeys:
     """``API_KEYS`` 环境变量解析（逗号分隔 + 空白去除）。"""
 
+    @pytest.fixture(autouse=True)
+    def _clear_api_keys_file_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """清理 ``API_KEYS_FILE`` 后缀变量（阶段 11.6 切片 C：docker secrets 支持）。"""
+
+        monkeypatch.delenv("API_KEYS_FILE", raising=False)
+
     def test_single_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("API_KEYS", "key1")
         assert _get_valid_api_keys() == {"key1"}
@@ -99,6 +106,44 @@ class TestGetValidApiKeys:
     def test_empty_when_only_separators(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("API_KEYS", " , , ")
         assert _get_valid_api_keys() == set()
+
+    def test_reads_from_file_when_file_var_set(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``API_KEYS_FILE`` 指向文件时优先读文件内容（逗号分隔多 key）。
+
+        阶段 11.6 切片 C：docker secrets 通过 ``_FILE`` 后缀挂载密钥文件，
+        文件内容支持逗号分隔多 key（与环境变量格式一致）。
+        """
+
+        keys_file = tmp_path / "api_keys.txt"
+        keys_file.write_text("key-from-file-1,key-from-file-2\n", encoding="utf-8")
+
+        monkeypatch.setenv("API_KEYS_FILE", str(keys_file))
+        # 即使环境变量也设置了，_FILE 优先
+        monkeypatch.setenv("API_KEYS", "env-key-should-be-ignored")
+
+        assert _get_valid_api_keys() == {"key-from-file-1", "key-from-file-2"}
+
+    def test_single_key_from_file(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """``API_KEYS_FILE`` 文件只含一个 key 时返回单元素集合。"""
+
+        keys_file = tmp_path / "api_keys.txt"
+        keys_file.write_text("single-key\n", encoding="utf-8")
+
+        monkeypatch.setenv("API_KEYS_FILE", str(keys_file))
+        assert _get_valid_api_keys() == {"single-key"}
+
+    def test_falls_back_to_env_when_file_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``API_KEYS_FILE`` 指向不存在文件时 fallback ``API_KEYS`` 环境变量。"""
+
+        nonexistent = tmp_path / "does-not-exist.txt"
+        monkeypatch.setenv("API_KEYS_FILE", str(nonexistent))
+        monkeypatch.setenv("API_KEYS", "env-fallback-key")
+
+        assert _get_valid_api_keys() == {"env-fallback-key"}
 
 
 # ---------------------------------------------------------------------------

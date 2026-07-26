@@ -3,10 +3,13 @@
 测试覆盖：
 - 从环境变量读 EMBEDDING_MODEL
 - 环境变量未设置/空/纯空白时回退到 DEFAULT_EMBEDDING_MODEL（bge-small-zh-v1.5）
+- ``DASHSCOPE_API_KEY_FILE`` / ``JINA_API_KEY_FILE`` 优先于环境变量（docker secrets 支持）
 - 返回 EmbeddingConfig 实例
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -18,12 +21,18 @@ from research_rag.embedding import (
     EmbeddingConfig,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 # 相关 Embedding 环境变量清单（测试间清理用，避免本机 .env 污染）
+# 含 ``_FILE`` 后缀变量（阶段 11.6 切片 C：docker secrets 支持）
 _EMBEDDING_ENV_KEYS = (
     "EMBEDDING_MODEL",
     "EMBEDDING_PROVIDER",
     "DASHSCOPE_API_KEY",
+    "DASHSCOPE_API_KEY_FILE",
     "JINA_API_KEY",
+    "JINA_API_KEY_FILE",
     "EMBEDDING_BASE_URL",
     "EMBEDDING_DIMENSIONS",
     "EMBEDDING_BATCH_SIZE",
@@ -326,3 +335,48 @@ def test_get_embedding_config_jina_ignores_dashscope_key(
     config = get_embedding_config()
 
     assert config.api_key == "jina-used"
+
+
+# ---------------------------------------------------------------------------
+# docker secrets 支持（阶段 11.6 切片 C：_FILE 后缀优先）
+# ---------------------------------------------------------------------------
+
+
+def test_get_embedding_config_dashscope_reads_api_key_from_file(
+    clean_embedding_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``DASHSCOPE_API_KEY_FILE`` 指向文件时优先读文件内容。
+
+    阶段 11.6 切片 C：docker secrets 通过 ``_FILE`` 后缀挂载密钥文件，
+    即使 ``DASHSCOPE_API_KEY`` 环境变量也设置了，也用文件内容。
+    """
+
+    key_file = tmp_path / "dashscope_key.txt"
+    key_file.write_text("sk-from-file\n", encoding="utf-8")
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "dashscope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY_FILE", str(key_file))
+    # 即使环境变量也设置了，_FILE 优先
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-env-should-be-ignored")
+
+    config = get_embedding_config()
+
+    assert config.api_key == "sk-from-file"
+
+
+def test_get_embedding_config_jina_reads_api_key_from_file(
+    clean_embedding_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``JINA_API_KEY_FILE`` 指向文件时优先读文件内容。"""
+
+    key_file = tmp_path / "jina_key.txt"
+    key_file.write_text("jina-from-file\n", encoding="utf-8")
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "jina")
+    monkeypatch.setenv("JINA_API_KEY_FILE", str(key_file))
+    # 即使环境变量也设置了，_FILE 优先
+    monkeypatch.setenv("JINA_API_KEY", "jina-env-should-be-ignored")
+
+    config = get_embedding_config()
+
+    assert config.api_key == "jina-from-file"

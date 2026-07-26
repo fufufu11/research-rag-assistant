@@ -70,7 +70,13 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: rrag
+      # 开发/CI 默认路径：POSTGRES_PASSWORD 环境变量直接传明文密码（默认 rrag）
+      # 生产路径：设置 POSTGRES_PASSWORD_FILE 指向 docker secrets 挂载的文件路径
+      # （如 /run/secrets/postgres_password），Postgres 官方镜像原生支持 _FILE 后缀，
+      # 设置后优先读取文件内容作为密码，忽略 POSTGRES_PASSWORD（阶段 11.6 切片 C #99）。
+      # 两者均未设置时镜像默认 POSTGRES_HOST_AUTH_METHOD=trust（仅本地开发用，勿用于生产）。
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rrag}
+      POSTGRES_PASSWORD_FILE: ${POSTGRES_PASSWORD_FILE:-}
       POSTGRES_DB: rrag
     volumes:
       - postgres-data:/var/lib/postgresql/data

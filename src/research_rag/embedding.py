@@ -27,9 +27,10 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from research_rag.secrets import get_secret
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -265,11 +266,11 @@ def _create_api_embeddings(config: EmbeddingConfig) -> Embeddings:
         api_key_env = "DASHSCOPE_API_KEY"
         provider_label = "DashScope"
 
-    api_key = config.api_key or os.environ.get(api_key_env, "")
+    api_key = config.api_key or get_secret(api_key_env) or ""
     if not api_key:
         msg = (
             f"{provider_label} API 模式缺少 API Key：请在 config.api_key 传入，或设置 "
-            f"环境变量 {api_key_env}。注意 .env 不会被自动加载，需显式设置。"
+            f"环境变量 {api_key_env} 或 {api_key_env}_FILE。注意 .env 不会被自动加载，需显式设置。"
         )
         raise EmbeddingServiceError(msg)
 

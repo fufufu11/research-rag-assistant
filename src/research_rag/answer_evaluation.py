@@ -42,6 +42,7 @@ from research_rag.qa_service import (
     DEFAULT_LLM_TIMEOUT,
     LlmConfig,
 )
+from research_rag.secrets import get_secret
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -548,6 +549,10 @@ def load_judge_config_from_env() -> LlmConfig:
     优先读 ``JUDGE_LLM_*`` 环境变量（允许 judge 用与 generator 不同的 LLM，
     避免同模型自评偏差）；未设置时回退到主 ``LLM_*`` 配置（与 generator 同一 LLM）。
 
+    密钥类字段（``JUDGE_LLM_API_KEY`` / ``LLM_API_KEY``）通过 ``get_secret`` 读取，
+    支持 ``{NAME}_FILE`` 后缀挂载 docker secrets（阶段 11.6 切片 C）。
+    ``base_url`` / ``model`` 不是密钥，仍从环境变量读取。
+
     环境变量：
         - ``JUDGE_LLM_BASE_URL`` / ``JUDGE_LLM_API_KEY`` / ``JUDGE_LLM_MODEL``：
           judge 专属配置（可选）。未设置时回退 ``LLM_BASE_URL`` / ``LLM_API_KEY``
@@ -558,8 +563,9 @@ def load_judge_config_from_env() -> LlmConfig:
     Returns:
         ``LlmConfig``：可直接传给 ``qa_service.create_chat_model``。
     """
+
     base_url = os.environ.get("JUDGE_LLM_BASE_URL") or os.environ.get("LLM_BASE_URL", "")
-    api_key = os.environ.get("JUDGE_LLM_API_KEY") or os.environ.get("LLM_API_KEY", "")
+    api_key = get_secret("JUDGE_LLM_API_KEY") or get_secret("LLM_API_KEY") or ""
     model = os.environ.get("JUDGE_LLM_MODEL") or os.environ.get("LLM_MODEL", "")
     timeout = _parse_float(
         os.environ.get("JUDGE_LLM_TIMEOUT", "") or os.environ.get("LLM_TIMEOUT", ""),
