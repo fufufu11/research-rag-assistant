@@ -109,4 +109,77 @@ describe("ApiClient", () => {
       "http://localhost:8000/api/v1/documents",
     );
   });
+
+  it("uploadDocument 使用 FormData 上传单个 PDF", async () => {
+    const document = {
+      id: "doc-1",
+      original_name: "paper.pdf",
+      stored_name: "doc-1.pdf",
+      sha256: "abc123",
+      page_count: 3,
+      status: "pending" as const,
+      error_message: null,
+      created_at: "2026-07-27T00:00:00Z",
+      updated_at: "2026-07-27T00:00:00Z",
+    };
+    const fetchSpy = mockFetchOk(document, 201);
+    const client = new ApiClient();
+    const file = new File(["pdf"], "paper.pdf", {
+      type: "application/pdf",
+    });
+
+    await expect(client.uploadDocument(file)).resolves.toEqual(document);
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/documents");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeInstanceOf(FormData);
+    expect((init?.body as FormData).get("file")).toBe(file);
+    expect(new Headers(init?.headers).has("Content-Type")).toBe(false);
+  });
+
+  it("deleteDocument 调用文档删除接口并接受 204 空响应", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const client = new ApiClient();
+
+    await expect(client.deleteDocument("doc-1")).resolves.toBeUndefined();
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/documents/doc-1");
+    expect(init?.method).toBe("DELETE");
+  });
+
+  it.each([
+    [400, "只支持 PDF", "upload"],
+    [404, "文档不存在", "delete"],
+    [500, "存储服务不可用", "list"],
+  ] as const)(
+    "文档接口 %i 错误抛出包含状态码与 detail 的结构化错误",
+    async (status, detail, operation) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ detail }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      const client = new ApiClient();
+
+      const action =
+        operation === "upload"
+          ? client.uploadDocument(
+              new File(["pdf"], "paper.pdf", { type: "application/pdf" }),
+            )
+          : operation === "delete"
+            ? client.deleteDocument("missing")
+            : client.listDocuments();
+
+      await expect(action).rejects.toMatchObject({
+        name: "ApiClientError",
+        status,
+        detail,
+      });
+    },
+  );
 });
