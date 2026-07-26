@@ -329,7 +329,13 @@ def _render_chat(client: ApiClient) -> None:
     # 批量初始化历史消息反馈状态（Issue #92）：进入历史会话时查询每条
     # assistant 消息的反馈状态，供 _render_feedback_buttons 读取初始高亮。
     # 已有状态不覆盖（用户本会话刚操作的反馈保留）。
-    _init_feedback_state_for_history(client, msgs, st.session_state)
+    # cast：streamlit SessionStateProxy 运行时实现 MutableMapping 接口，
+    # 但静态类型未声明，用 cast 桥接（函数内只用 in/[]=/[] 操作）。
+    _init_feedback_state_for_history(
+        client,
+        msgs,
+        cast("MutableMapping[str, object]", st.session_state),
+    )
     for msg in msgs:
         with st.chat_message(msg.role):
             st.write(msg.content)
