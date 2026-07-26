@@ -67,17 +67,21 @@ class LangfuseConfig:
 def load_langfuse_config_from_env() -> LangfuseConfig | None:
     """从环境变量构造 ``LangfuseConfig``，未配置完整时返回 ``None``。
 
-    三项环境变量（``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY`` /
-    ``LANGFUSE_HOST``）必须全部非空才返回配置，任一缺失返回 ``None``
-    （表示未启用 Langfuse，调用方走 no-op 路径）。
+    密钥类字段（``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY``）通过
+    ``get_secret`` 读取，支持 ``{NAME}_FILE`` 后缀挂载 docker secrets
+    （阶段 11.6 切片 C）。``LANGFUSE_HOST`` 不是密钥，仍从环境变量读取。
+    三项必须全部非空才返回配置，任一缺失返回 ``None``（表示未启用 Langfuse，
+    调用方走 no-op 路径）。
 
     Returns:
         ``LangfuseConfig`` 实例或 ``None``（未启用）。
     """
 
-    public_key = os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
-    secret_key = os.environ.get("LANGFUSE_SECRET_KEY", "").strip()
-    host = os.environ.get("LANGFUSE_HOST", "").strip()
+    from research_rag.secrets import get_secret
+
+    public_key = (get_secret("LANGFUSE_PUBLIC_KEY") or "").strip()
+    secret_key = (get_secret("LANGFUSE_SECRET_KEY") or "").strip()
+    host = (os.environ.get("LANGFUSE_HOST") or "").strip()
     if not (public_key and secret_key and host):
         return None
     return LangfuseConfig(public_key=public_key, secret_key=secret_key, host=host)

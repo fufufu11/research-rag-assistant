@@ -1,8 +1,9 @@
-"""部署配置文件测试（阶段 11.5）。
+"""部署配置文件测试（阶段 11.5 / 11.6）。
 
 验证 CI/CD 相关的 YAML 配置文件语法正确且结构符合预期：
 - ``.github/workflows/deploy.yml``：deploy workflow 存在，含 build-and-push / deploy job
 - ``docker-compose.prod.yml``：生产覆盖文件存在，api 服务引用 GHCR 镜像
+- ``docker-compose.yml``：postgres 服务支持 ``POSTGRES_PASSWORD_FILE``（阶段 11.6 切片 C）
 
 这些配置文件无法用 pytest 直接测试行为（GitHub Actions 在云端运行，
 docker compose 需要真实 Docker），但验证 YAML 语法与关键结构能在本地
@@ -155,3 +156,52 @@ class TestProdCompose:
         # ${IMAGE_TAG:-latest} 模式：支持环境变量覆盖，默认 latest
         assert "IMAGE_TAG" in image
         assert "latest" in image
+
+
+# ---------------------------------------------------------------------------
+# docker-compose.yml postgres 密钥文件支持（阶段 11.6 切片 C #99）
+# ---------------------------------------------------------------------------
+
+
+class TestPostgresPasswordFile:
+    """``docker-compose.yml`` postgres 服务支持 ``POSTGRES_PASSWORD_FILE``。
+
+    Postgres 官方镜像原生支持 ``POSTGRES_PASSWORD_FILE`` 环境变量：设置后
+    容器启动时读取文件内容作为密码（优先于 ``POSTGRES_PASSWORD``），用于
+    docker secrets 场景（生产环境把密码以文件形式挂载到 ``/run/secrets/``）。
+    本测试验证 compose 文件显式传递该变量到 postgres 容器，使切片 D
+    （#101 docker secrets 配置）能直接通过设置 ``POSTGRES_PASSWORD_FILE``
+    环境变量启用文件密钥，无需再改 compose。
+    """
+
+    @pytest.fixture(scope="class")
+    def compose(self) -> dict:
+        return _load_yaml(REPO_ROOT / "docker-compose.yml")
+
+    def test_postgres_service_exists(self, compose: dict) -> None:
+        assert "postgres" in compose["services"]
+
+    def test_postgres_password_file_var_present(self, compose: dict) -> None:
+        """postgres environment 必须显式声明 ``POSTGRES_PASSWORD_FILE``。
+
+        使用 ``${POSTGRES_PASSWORD_FILE:-}`` 模式：未设置环境变量时为空字符串
+        （Postgres 官方镜像遇空值忽略 ``_FILE`` 后缀，回退到 ``POSTGRES_PASSWORD``），
+        保持开发/CI 向后兼容；生产环境设置该变量为 docker secrets 文件路径即可启用。
+        """
+        env = compose["services"]["postgres"]["environment"]
+        assert "POSTGRES_PASSWORD_FILE" in env, (
+            "postgres.environment 缺少 POSTGRES_PASSWORD_FILE：阶段 11.6 切片 C 要求"
+            "显式声明以支持 docker secrets 文件挂载（生产），未设置时回退到"
+            "POSTGRES_PASSWORD 环境变量（开发/CI）"
+        )
+        # ${POSTGRES_PASSWORD_FILE:-} 模式：空时回退到空字符串
+        value = env["POSTGRES_PASSWORD_FILE"]
+        assert "POSTGRES_PASSWORD_FILE" in value
+
+    def test_postgres_password_var_still_present(self, compose: dict) -> None:
+        """``POSTGRES_PASSWORD`` 必须保留（开发/CI 不挂载 secrets 时使用）。"""
+        env = compose["services"]["postgres"]["environment"]
+        assert "POSTGRES_PASSWORD" in env, (
+            "POSTGRES_PASSWORD 应保留作为开发/CI 默认路径；生产环境设置"
+            "POSTGRES_PASSWORD_FILE 时由 Postgres 官方镜像优先使用文件内容"
+        )

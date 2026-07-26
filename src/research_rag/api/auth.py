@@ -37,6 +37,8 @@ import secrets
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from research_rag.secrets import get_secret
+
 # HTTPBearer 从 Authorization: Bearer <token> 提取 credentials。
 # auto_error=False：无 Authorization 头或格式错误时不自动抛 403，
 # 改由 verify_api_key 手动返回 401（与 ROADMAP 验收「未认证 401」一致）。
@@ -54,13 +56,15 @@ def is_auth_enabled() -> bool:
 
 
 def _get_valid_api_keys() -> set[str]:
-    """从 ``API_KEYS`` 环境变量读取有效 key 集合。
+    """从 ``API_KEYS`` 读取有效 key 集合。
 
-    逗号分隔，自动去除空白。空字符串或未设置时返回空集合。
-    启用认证但集合为空时，``verify_api_key`` 会拒绝所有请求（安全失败）。
+    通过 ``get_secret`` 读取，支持 ``API_KEYS_FILE`` 后缀挂载 docker secrets
+    （阶段 11.6 切片 C）。文件内容或环境变量值均为逗号分隔，自动去除空白。
+    空字符串或未设置时返回空集合。启用认证但集合为空时，``verify_api_key``
+    会拒绝所有请求（安全失败）。
     """
 
-    raw = os.environ.get("API_KEYS", "")
+    raw = get_secret("API_KEYS") or ""
     return {k.strip() for k in raw.split(",") if k.strip()}
 
 

@@ -56,6 +56,7 @@ from research_rag.qa_service import (
     DEFAULT_LLM_TIMEOUT,
     LlmConfig,
 )
+from research_rag.secrets import get_secret
 from research_rag.services.document_service import DocumentService
 from research_rag.services.qa_service import QaService
 
@@ -174,7 +175,8 @@ def _parse_int(value: str, default: int) -> int:
 def get_llm_config() -> LlmConfig:
     """从环境变量构造 ``LlmConfig``（PROJECT_PLAN.md 第 9.1 节、.env.example）。
 
-    读 ``LLM_BASE_URL`` / ``LLM_API_KEY`` / ``LLM_MODEL``。
+    读 ``LLM_BASE_URL`` / ``LLM_MODEL``，``LLM_API_KEY`` 通过 ``get_secret``
+    读取（支持 ``LLM_API_KEY_FILE`` 后缀挂载 docker secrets，阶段 11.6 切片 C）。
     ``LLM_TIMEOUT`` / ``LLM_MAX_RETRIES`` 做 int/float 转换，格式错误时回退
     默认值，避免请求因配置格式错误而失败。
 
@@ -187,7 +189,7 @@ def get_llm_config() -> LlmConfig:
 
     return LlmConfig(
         base_url=os.environ.get("LLM_BASE_URL", ""),
-        api_key=os.environ.get("LLM_API_KEY", ""),
+        api_key=get_secret("LLM_API_KEY") or "",
         model=os.environ.get("LLM_MODEL", ""),
         timeout=timeout,
         max_retries=max_retries,
@@ -233,7 +235,7 @@ def get_embedding_config() -> EmbeddingConfig:
         return EmbeddingConfig(
             provider="dashscope",
             model_name=model_name or DASHSCOPE_DEFAULT_MODEL,
-            api_key=os.environ.get("DASHSCOPE_API_KEY", ""),
+            api_key=get_secret("DASHSCOPE_API_KEY") or "",
             base_url=os.environ.get("EMBEDDING_BASE_URL", ""),
             dimensions=_parse_int(os.environ.get("EMBEDDING_DIMENSIONS", ""), 0),
             batch_size=_parse_int(os.environ.get("EMBEDDING_BATCH_SIZE", ""), 0),
@@ -243,7 +245,7 @@ def get_embedding_config() -> EmbeddingConfig:
         return EmbeddingConfig(
             provider="jina",
             model_name=model_name or JINA_DEFAULT_MODEL,
-            api_key=os.environ.get("JINA_API_KEY", ""),
+            api_key=get_secret("JINA_API_KEY") or "",
             base_url=os.environ.get("EMBEDDING_BASE_URL", ""),
             dimensions=_parse_int(os.environ.get("EMBEDDING_DIMENSIONS", ""), 0),
             batch_size=_parse_int(os.environ.get("EMBEDDING_BATCH_SIZE", ""), 0),

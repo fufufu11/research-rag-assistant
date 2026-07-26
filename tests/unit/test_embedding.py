@@ -42,6 +42,7 @@ from research_rag.embedding import (
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +449,33 @@ def test_create_embeddings_dashscope_uses_env_api_key(
     assert emb.kwargs["model"] == DASHSCOPE_DEFAULT_MODEL  # 默认 text-embedding-v4
 
 
+def test_create_embeddings_dashscope_reads_api_key_from_file(
+    monkeypatch: pytest.MonkeyPatch,
+    _reset_mock_embeddings: None,
+    tmp_path: Path,
+) -> None:
+    """``DASHSCOPE_API_KEY_FILE`` 指向文件时优先读文件内容（覆盖 env）。
+
+    阶段 11.6 切片 C：embedding 模块在 ``config.api_key`` 为空时从环境变量
+    fallback 读取，该 fallback 路径也支持 ``_FILE`` 后缀挂载 docker secrets。
+    """
+
+    import langchain_openai
+
+    monkeypatch.setattr(langchain_openai, "OpenAIEmbeddings", _MockOpenAIEmbeddings)
+
+    key_file = tmp_path / "dashscope_key.txt"
+    key_file.write_text("sk-from-file\n", encoding="utf-8")
+    monkeypatch.setenv("DASHSCOPE_API_KEY_FILE", str(key_file))
+    # 即使环境变量也设置了，_FILE 优先
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-env-should-be-ignored")
+
+    config = EmbeddingConfig(provider="dashscope")  # api_key 为空，触发 fallback
+    emb = create_embeddings(config)
+
+    assert emb.kwargs["api_key"] == "sk-from-file"
+
+
 def test_create_embeddings_dashscope_custom_dimensions_and_batch(
     monkeypatch: pytest.MonkeyPatch,
     _reset_mock_embeddings: None,
@@ -543,6 +571,29 @@ def test_create_embeddings_jina_uses_env_api_key(
     assert emb.kwargs["api_key"] == "jina-env"
     assert emb.kwargs["model"] == JINA_DEFAULT_MODEL
     assert emb.kwargs["base_url"] == JINA_DEFAULT_BASE_URL
+
+
+def test_create_embeddings_jina_reads_api_key_from_file(
+    monkeypatch: pytest.MonkeyPatch,
+    _reset_mock_embeddings: None,
+    tmp_path: Path,
+) -> None:
+    """``JINA_API_KEY_FILE`` 指向文件时优先读文件内容（覆盖 env）。"""
+
+    import langchain_openai
+
+    monkeypatch.setattr(langchain_openai, "OpenAIEmbeddings", _MockOpenAIEmbeddings)
+
+    key_file = tmp_path / "jina_key.txt"
+    key_file.write_text("jina-from-file\n", encoding="utf-8")
+    monkeypatch.setenv("JINA_API_KEY_FILE", str(key_file))
+    # 即使环境变量也设置了，_FILE 优先
+    monkeypatch.setenv("JINA_API_KEY", "jina-env-should-be-ignored")
+
+    config = EmbeddingConfig(provider="jina")  # api_key 为空，触发 fallback
+    emb = create_embeddings(config)
+
+    assert emb.kwargs["api_key"] == "jina-from-file"
 
 
 def test_create_embeddings_jina_does_not_use_dashscope_env(

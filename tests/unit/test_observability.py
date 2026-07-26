@@ -40,6 +40,7 @@ from research_rag.observability import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -49,11 +50,20 @@ if TYPE_CHECKING:
 
 @pytest.fixture(autouse=True)
 def _clear_langfuse_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """自动清理 Langfuse 环境变量，确保默认测试走 no-op 路径。"""
+    """自动清理 Langfuse 环境变量，确保默认测试走 no-op 路径。
 
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
+    同时清理 ``_FILE`` 后缀变量（阶段 11.6 切片 C：docker secrets 支持），
+    避免上一个测试设置的文件路径污染下一个测试。
+    """
+
+    for name in (
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+        "LANGFUSE_PUBLIC_KEY_FILE",
+        "LANGFUSE_SECRET_KEY_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _set_langfuse_env(
@@ -131,6 +141,52 @@ class TestLangfuseConfig:
         assert config.public_key == "pk-lf-test"
         assert config.secret_key == "sk-lf-test"
         assert config.host == "http://localhost:3000"
+
+    def test_load_config_reads_from_file_when_file_var_set(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``LANGFUSE_PUBLIC_KEY_FILE`` / ``LANGFUSE_SECRET_KEY_FILE`` 指向文件时优先读文件。
+
+        阶段 11.6 切片 C：docker secrets 通过 ``_FILE`` 后缀挂载密钥文件，
+        ``get_secret`` 优先读文件内容（strip 尾部换行），不读进程环境变量。
+        ``LANGFUSE_HOST`` 不是密钥，仍从环境变量读取。
+        """
+
+        pub_file = tmp_path / "lf_pub.txt"
+        pub_file.write_text("pk-from-file\n", encoding="utf-8")
+        sec_file = tmp_path / "lf_sec.txt"
+        sec_file.write_text("sk-from-file\n", encoding="utf-8")
+
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY_FILE", str(pub_file))
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY_FILE", str(sec_file))
+        # 即使环境变量也设置了，_FILE 优先
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env-should-be-ignored")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env-should-be-ignored")
+        monkeypatch.setenv("LANGFUSE_HOST", "http://localhost:3000")
+
+        config = load_langfuse_config_from_env()
+        assert config is not None
+        assert config.public_key == "pk-from-file"
+        assert config.secret_key == "sk-from-file"
+        assert config.host == "http://localhost:3000"
+
+    def test_load_config_falls_back_to_env_when_file_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``_FILE`` 指向不存在文件时 fallback 环境变量（开发/CI 兼容路径）。"""
+
+        nonexistent_pub = tmp_path / "does-not-exist-pub.txt"
+        nonexistent_sec = tmp_path / "does-not-exist-sec.txt"
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY_FILE", str(nonexistent_pub))
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY_FILE", str(nonexistent_sec))
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env-fallback")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env-fallback")
+        monkeypatch.setenv("LANGFUSE_HOST", "http://localhost:3000")
+
+        config = load_langfuse_config_from_env()
+        assert config is not None
+        assert config.public_key == "pk-env-fallback"
+        assert config.secret_key == "sk-env-fallback"
 
 
 # ---------------------------------------------------------------------------
