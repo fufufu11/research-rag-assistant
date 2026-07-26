@@ -1,0 +1,50 @@
+/* Claude 静谧极简风格主题（ADR 0005）
+ * 设计稿参考：.trae/handoffs/ui_claude_v1.html
+ * 通过 CSS 变量统一管理设计 token，组件按需引用。
+ */
+:root {
+  /* 背景与表面 */
+  --bg-canvas: #faf9f7;
+  --bg-surface: #ffffff;
+  --bg-sidebar: #1c1815;
+  --bg-sidebar-soft: #28221e;
+  --bg-input: #ffffff;
+  --bg-code: #f4efe8;
+
+  /* 文字 */
+  --fg-primary: #2d2a26;
+  --fg-secondary: #6b655c;
+  --fg-muted: #9b948a;
+  --fg-on-dark: #f5efe6;
+  --fg-on-dark-muted: #a8a094;
+
+  /* 强调色（赤陶土，学术温暖感） */
+  --accent: #c96442;
+  --accent-soft: #e8a48a;
+  --accent-bg: #fdf3ee;
+  --accent-hover: #b75636;
+
+  /* 边框 */
+  --border: #ebe5dc;
+  --border-strong: #d9d2c5;
+  --border-on-dark: #3a322a;
+
+  /* 引用卡片彩色边框（区分来源文档，T5 引用卡片复用） */
+  --cite-1: #c96442;
+  --cite-2: #4a7c59;
+  --cite-3: #8b5a8c;
+  --cite-4: #2c5f8a;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(45, 42, 38, 0.04);
+  --shadow-md: 0 1px 3px rgba(45, 42, 38, 0.06),
+    0 4px 12px rgba(45, 42, 38, 0.04);
+  --shadow-lg: 0 4px 12px rgba(45, 42, 38, 0.08),
+    0 12px 32px rgba(45, 42, 38, 0.06);
+  --shadow-input: 0 1px 4px rgba(45, 42, 38, 0.06),
+    0 8px 24px rgba(45, 42, 38, 0.04);
+
+  /* 布局尺寸 */
+  --sidebar-width: 260px;
+  --content-max-width: 720px;
+}
