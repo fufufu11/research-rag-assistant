@@ -48,4 +48,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+# 创建非 root 用户并 chown /app（阶段 11.6 切片 B #98）
+# - groupadd/useradd：创建 UID 65532 的 app 用户（distroless 标准，不与宿主机普通用户冲突）
+# - chown -R app:app /app：让非 root 用户可读 .venv/源码 + 可写 data/uploads
+#   必须在所有 COPY 之后执行，确保 entrypoint.sh 也被 chown
+RUN groupadd -r app && useradd -r -g app -u 65532 app && chown -R app:app /app
+
+# 以非 root 用户运行
+USER 65532
+
 ENTRYPOINT ["/app/entrypoint.sh"]

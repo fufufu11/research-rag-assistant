@@ -4,7 +4,7 @@
 set -e
 
 echo "[entrypoint] Running database migrations (alembic upgrade head)..."
-uv run alembic upgrade head
+/app/.venv/bin/alembic upgrade head
 
 echo "[entrypoint] Starting API server on 0.0.0.0:8000..."
-exec uv run uvicorn research_rag.api.app:create_app --factory --host 0.0.0.0 --port 8000
+exec /app/.venv/bin/uvicorn research_rag.api.app:create_app --factory --host 0.0.0.0 --port 8000
