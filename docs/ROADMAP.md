@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化阶段一（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）+ 历史消息反馈前端 UI 渲染（Issue #92：`_render_feedback_buttons` 扩展到历史消息 + 旧消息隐藏按钮 + `_init_feedback_state_for_history` 批量初始化反馈状态）+ 阶段 11.6 生产安全加固（切片 A #97：`secrets.py` helper + 切片 B #98：非 root 容器 Dockerfile 改造 + 切片 C #99：8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持 + 切片 D #101：docker-compose.prod.yml 配置 8 个 docker secrets 挂载 + `.env.docker.secrets.example` 示例文件 + 切片 E #100：nginx + certbot 容器化 + TLS 反代 Let's Encrypt webroot 模式 + 切片 F #102：文档同步收官）+ **UI 体验优化阶段二**（基于 ChatGPT 界面截图的二轮迭代：#109 左侧导航重构-图标分组+可折叠会话/文档列表 + #112 输入栏「+」上传按钮+底部免责声明 + #111 对话区居中+宽度收窄布局 + #113 AI 回复复制按钮 + #110 顶部模型选择下拉占位，5 个 ticket 全部 squash 合并到 main，905 → 938 测试零回归）+ **UI 体验优化阶段三过渡切片**（Issue #121 / PR #122：Claude 静谧极简风格落地到 Streamlit，新增 `_get_claude_style_css()` 注入完整 CSS + 改造 `_render_citations_inline()` 为 HTML 双列卡片网格，作为 React SPA 完成前的过渡方案）+ **React SPA 阶段 T1**（Issue #124：`frontend/` Vite + React 18 + TypeScript 骨架 + ApiClient + 9 前端测试 + CI frontend job + 删除 Streamlit UI 层 + 后端 938→829 零回归）
-- **测试**：829 个后端单元测试通过 + 9 个前端 Vitest 测试通过（T1 删除 Streamlit UI 层后端减 109 个 UI/ApiClient 测试，前端新增 9 个 ApiClient/App 测试，详见 ADR 0005）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化阶段一（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）+ 历史消息反馈前端 UI 渲染（Issue #92：`_render_feedback_buttons` 扩展到历史消息 + 旧消息隐藏按钮 + `_init_feedback_state_for_history` 批量初始化反馈状态）+ 阶段 11.6 生产安全加固（切片 A #97：`secrets.py` helper + 切片 B #98：非 root 容器 Dockerfile 改造 + 切片 C #99：8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持 + 切片 D #101：docker-compose.prod.yml 配置 8 个 docker secrets 挂载 + `.env.docker.secrets.example` 示例文件 + 切片 E #100：nginx + certbot 容器化 + TLS 反代 Let's Encrypt webroot 模式 + 切片 F #102：文档同步收官）+ **UI 体验优化阶段二**（基于 ChatGPT 界面截图的二轮迭代：#109 左侧导航重构-图标分组+可折叠会话/文档列表 + #112 输入栏「+」上传按钮+底部免责声明 + #111 对话区居中+宽度收窄布局 + #113 AI 回复复制按钮 + #110 顶部模型选择下拉占位，5 个 ticket 全部 squash 合并到 main，905 → 938 测试零回归）+ **UI 体验优化阶段三过渡切片**（Issue #121 / PR #122：Claude 静谧极简风格落地到 Streamlit，新增 `_get_claude_style_css()` 注入完整 CSS + 改造 `_render_citations_inline()` 为 HTML 双列卡片网格，作为 React SPA 完成前的过渡方案）+ **React SPA 阶段 T1**（Issue #124：`frontend/` Vite + React 18 + TypeScript 骨架 + ApiClient + 9 前端测试 + CI frontend job + 删除 Streamlit UI 层 + 后端 938→829 零回归）+ **React SPA 阶段 T2**（Issue #125：Claude 风格主题 + 基础布局骨架——新增 `claude-theme.css` 完整 CSS 变量 + `globals.css` 重写为 `@import` + grid 主布局 + `Sidebar`/`ChatArea`/`ModelDropdown` 三组件 + Google Fonts + 24 个新增 Vitest 测试）
+- **测试**：829 个后端单元测试通过 + 33 个前端 Vitest 测试通过（T1 9 + T2 新增 24：App 3 + Sidebar 6 + ChatArea 4 + ModelDropdown 4 + claude-theme 9）
 - **CI**：ruff format + ruff check + mypy + pytest（后端）+ tsc + vitest + vite build（前端）四项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -423,7 +423,7 @@
 | 序号 | 任务 | 状态 | 依赖 | Issue |
 |---|---|---|---|---|
 | T1 | React 项目骨架 + 删除 Streamlit + CI 集成 | ✅ 已完成 | 无 | #124 |
-| T2 | Claude 风格主题 + 基础布局骨架 | 待实施 | T1 | #125 |
+| T2 | Claude 风格主题 + 基础布局骨架 | ✅ 已完成 | T1 | #125 |
 | T3 | 文档管理 UI（列表 + 上传 + 删除） | 待实施 | T2 | #126 |
 | T4 | 会话管理 UI（列表 + 创建 + 删除 + 切换） | 待实施 | T2 | #127 |
 | T5 | SSE 流式问答 + 消息渲染 + 引用卡片 + 复制按钮 | 待实施 | T3, T4 | #128 |
@@ -452,6 +452,25 @@
   - **不引入 E2E**：首 ticket 仅 Vitest + RTL，E2E 留待后续
   - **dev 用 vite proxy**：避免开发环境 CORS 问题，生产同源托管
 - **验收**：829 后端测试零回归 + 9 前端测试全绿，CI 四项全绿（Lint / Type Check / Test / Frontend）
+
+### T2 Claude 风格主题 + 基础布局骨架
+
+- **状态**：✅ 已完成（Issue #125）
+- **目标**：落地 `ui_claude_v1.html` 设计稿的 Claude 静谧极简风格 CSS 主题与基础布局骨架（260px 左侧栏 + 右侧主区 + 顶部模型下拉占位）
+- **技术方案**：
+  - 新增 `frontend/src/styles/claude-theme.css`：完整 CSS 变量（背景/表面色、文字色、赤陶土强调色 `#c96442`、边框、引用卡片彩色边框 `--cite-1` ~ `--cite-4`、阴影、布局尺寸 `--sidebar-width=260px` / `--content-max-width=720px`）
+  - 重写 `frontend/src/styles/globals.css`：`@import` claude-theme.css + `.app` grid 主布局（260px 左侧栏 + 1fr 右侧主区）+ 左侧栏深棕 `#1c1815` + 右侧主区暖米色 `#faf9f7` + 模型下拉占位 + 居中收窄 720px 内容占位样式
+  - `frontend/index.html`：引入 Google Fonts（Newsreader 衬线 + IBM Plex Sans UI + IBM Plex Mono 代码，含 preconnect）
+  - 新增 `frontend/src/components/Sidebar/Sidebar.tsx`：左侧栏组件（header logo dot + research·rag 品牌 / 新建对话按钮 / 搜索输入框 / 历史会话与文档库分组占位空状态 / 下层设置 + 帮助按钮）
+  - 新增 `frontend/src/components/ChatArea/ChatArea.tsx`：右侧主聊天区（顶部栏 ModelDropdown + 未选择会话提示 + 居中 720px 内容占位「科研文献智能问答」）
+  - 新增 `frontend/src/components/ModelDropdown/ModelDropdown.tsx`：`<select disabled>` 单元素占位（research-rag + 占位 badge，不响应切换；真实切换需后端补 `/api/v1/config` 端点）
+  - 重写 `frontend/src/App.tsx`：从 T1 hello-world 升级为 `<div class="app"><Sidebar /><ChatArea /></div>` 双栏布局
+- **设计取舍**：
+  - **占位文本而非真实数据**：本 ticket 仅落地样式与布局骨架，业务数据由 T3/T4 接入
+  - **模型下拉 disabled**：真实切换需后端补 `/api/v1/config` 端点，留待后续
+  - **不引入图标库**：用 emoji 或 SVG inline，避免依赖
+  - **CSS 变量测试用 fs.readFileSync**：vitest `css: false` 配置下 `?raw` 后缀返回空字符串，改用 Node fs 模块直接读 CSS 原文断言
+- **验收**：33 前端测试全绿（T1 9 + T2 新增 24，覆盖布局结构、CSS 变量完整性、模型下拉占位状态、左侧栏分组渲染）+ 后端 829 测试零回归 + CI 四项全绿
 
 ---
 
