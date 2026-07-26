@@ -6,8 +6,6 @@
   启用+有效通过 / 启用+空 key 集合 401 / 启用+多 key 任一命中 / 启用+错误 scheme 401
 - 集成测试（``TestClient`` + mock ``DocumentService``）：禁用可访问 /
   启用 401 / 启用+无效 401 / 启用+有效 200 / 启用+空 key 集合 401 / 启用+多 key 任一 200
-- ``ApiClient``：设置 ``api_key`` 时携带 ``Authorization`` 头 / 未设置时不携带 /
-  从 ``API_KEY`` 环境变量读取
 
 测试策略：
 - 纯单元测试：用 ``monkeypatch.setenv`` / ``delenv`` 控制 ``API_KEY_ENABLED`` 与
@@ -16,6 +14,9 @@
   ``get_document_service`` 为 ``MagicMock``，用 ``TestClient`` 发真实 HTTP 请求，
   验证认证依赖对所有 ``/api/v1/*`` 端点生效。``verify_api_key`` 是请求级依赖，
   每次请求读环境变量，``monkeypatch`` 在测试函数内设置即可生效。
+
+注：原 ``ApiClient`` 携带 API Key 的测试已随 Streamlit UI 层删除移除（ADR 0005），
+前端 ``ApiClient`` 的等价测试在 ``frontend/src/api/client.test.ts``。
 """
 
 from __future__ import annotations
@@ -33,7 +34,6 @@ from research_rag.api.auth import _get_valid_api_keys, is_auth_enabled, verify_a
 from research_rag.api.dependencies import get_document_service
 from research_rag.db.session import create_session_factory
 from research_rag.services.document_service import DocumentService
-from research_rag.ui.api_client import ApiClient
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -390,34 +390,3 @@ def test_disabled_auth_applies_to_all_routers(
     # GET 端点应返回 200（非 401）
     response = client.get("/api/v1/documents")
     assert response.status_code == 200
-
-
-# ---------------------------------------------------------------------------
-# ApiClient 携带 API Key 测试
-# ---------------------------------------------------------------------------
-
-
-class TestApiClientApiKey:
-    """``ApiClient`` 的 ``api_key`` 参数与 ``API_KEY`` 环境变量。"""
-
-    def test_explicit_api_key_sends_header(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("API_KEY", raising=False)
-        client = ApiClient(api_key="my-secret")
-        assert client._get_headers() == {"Authorization": "Bearer my-secret"}
-
-    def test_no_api_key_no_header(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("API_KEY", raising=False)
-        client = ApiClient()
-        assert client._get_headers() == {}
-
-    def test_reads_api_key_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("API_KEY", "env-key")
-        client = ApiClient()
-        assert client._get_headers() == {"Authorization": "Bearer env-key"}
-
-    def test_explicit_api_key_overrides_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """构造参数优先于环境变量。"""
-
-        monkeypatch.setenv("API_KEY", "env-key")
-        client = ApiClient(api_key="explicit-key")
-        assert client._get_headers() == {"Authorization": "Bearer explicit-key"}

@@ -12,8 +12,8 @@
   现代（FastAPI 0.93+ 推荐 ``lifespan``，旧 API 已弃用）。
   - 如果调用方传入了 ``session_factory``（测试场景），lifespan 不再创建 engine，
     也不在关闭时 dispose（由调用方管理生命周期）。
-- **CORS 中间件**：开发环境允许 localhost 前端（Streamlit 默认 8501、Vite 默认
-  5173、常见 dev server 3000/8000）访问。生产环境应通过环境变量收紧 origins。
+- **CORS 中间件**：开发环境允许 localhost 前端（Vite 默认 5173、常见 dev
+  server 3000/8000）访问。生产环境同源托管静态文件无需 CORS（ADR 0005）。
 - **异常处理器集中注册**：``DuplicateDocumentError`` → 409 Conflict，
   ``DocumentNotFoundError`` → 404 Not Found，统一返回 ``ErrorResponse`` 格式
   （``{"detail": "..."}``）。业务 service 只抛异常，不感知 HTTP（PROJECT_PLAN
@@ -65,15 +65,13 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine
     from sqlalchemy.orm import Session
 
-# 开发环境允许的前端来源（Streamlit 8501 / Vite 5173 / 常见 dev server）。
-# 生产环境应通过环境变量收紧；本 Issue 范围不实现配置化（验收标准未要求）。
+# 开发环境允许的前端来源（Vite 5173 / 常见 dev server）。
+# 生产环境后端托管 frontend/dist 静态文件，同源无需 CORS（ADR 0005）。
 DEFAULT_CORS_ORIGINS = [
     "http://localhost",
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:8000",
-    "http://localhost:8501",
-    "http://127.0.0.1:8501",
 ]
 
 

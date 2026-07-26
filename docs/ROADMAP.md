@@ -5,9 +5,9 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化阶段一（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）+ 历史消息反馈前端 UI 渲染（Issue #92：`_render_feedback_buttons` 扩展到历史消息 + 旧消息隐藏按钮 + `_init_feedback_state_for_history` 批量初始化反馈状态）+ 阶段 11.6 生产安全加固（切片 A #97：`secrets.py` helper + 切片 B #98：非 root 容器 Dockerfile 改造 + 切片 C #99：8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持 + 切片 D #101：docker-compose.prod.yml 配置 8 个 docker secrets 挂载 + `.env.docker.secrets.example` 示例文件 + 切片 E #100：nginx + certbot 容器化 + TLS 反代 Let's Encrypt webroot 模式 + 切片 F #102：文档同步收官）+ **UI 体验优化阶段二**（基于 ChatGPT 界面截图的二轮迭代：#109 左侧导航重构-图标分组+可折叠会话/文档列表 + #112 输入栏「+」上传按钮+底部免责声明 + #111 对话区居中+宽度收窄布局 + #113 AI 回复复制按钮 + #110 顶部模型选择下拉占位，5 个 ticket 全部 squash 合并到 main，905 → 938 测试零回归）+ **UI 体验优化阶段三过渡切片**（Issue #121 / PR #122：Claude 静谧极简风格落地到 Streamlit，新增 `_get_claude_style_css()` 注入完整 CSS + 改造 `_render_citations_inline()` 为 HTML 双列卡片网格，作为 React SPA 完成前的过渡方案）
-- **测试**：938 个单元测试通过（含 #97 新增 7 个 + #99 新增 24 个 + #98 新增 7 个 + #101 新增 10 个 + #100 新增 33 个：observability/llm_config/answer_evaluation/auth/embedding/embedding_config/deployment_config 七个文件的 `_FILE` 优先与 fallback env 路径覆盖 + Dockerfile/entrypoint.sh 非 root 改造的文件结构验证 + docker-compose.prod.yml docker secrets 配置结构与 .env.docker.secrets.example 模板验证 + nginx.conf / docker-compose.prod.yml nginx+certbot 服务 / nginx & certbot entrypoint 结构断言 + UI 体验优化阶段二 5 个 ticket 新增 33 个：#109 nav_state +6 / #112 upload +8 / #111 chat_layout +5 / #113 copy_button +8 / #110 model_dropdown +6）
-- **CI**：ruff format + ruff check + mypy + pytest 三项全绿
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化阶段一（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）+ 历史消息反馈前端 UI 渲染（Issue #92：`_render_feedback_buttons` 扩展到历史消息 + 旧消息隐藏按钮 + `_init_feedback_state_for_history` 批量初始化反馈状态）+ 阶段 11.6 生产安全加固（切片 A #97：`secrets.py` helper + 切片 B #98：非 root 容器 Dockerfile 改造 + 切片 C #99：8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持 + 切片 D #101：docker-compose.prod.yml 配置 8 个 docker secrets 挂载 + `.env.docker.secrets.example` 示例文件 + 切片 E #100：nginx + certbot 容器化 + TLS 反代 Let's Encrypt webroot 模式 + 切片 F #102：文档同步收官）+ **UI 体验优化阶段二**（基于 ChatGPT 界面截图的二轮迭代：#109 左侧导航重构-图标分组+可折叠会话/文档列表 + #112 输入栏「+」上传按钮+底部免责声明 + #111 对话区居中+宽度收窄布局 + #113 AI 回复复制按钮 + #110 顶部模型选择下拉占位，5 个 ticket 全部 squash 合并到 main，905 → 938 测试零回归）+ **UI 体验优化阶段三过渡切片**（Issue #121 / PR #122：Claude 静谧极简风格落地到 Streamlit，新增 `_get_claude_style_css()` 注入完整 CSS + 改造 `_render_citations_inline()` 为 HTML 双列卡片网格，作为 React SPA 完成前的过渡方案）+ **React SPA 阶段 T1**（Issue #124：`frontend/` Vite + React 18 + TypeScript 骨架 + ApiClient + 9 前端测试 + CI frontend job + 删除 Streamlit UI 层 + 后端 938→829 零回归）
+- **测试**：829 个后端单元测试通过 + 9 个前端 Vitest 测试通过（T1 删除 Streamlit UI 层后端减 109 个 UI/ApiClient 测试，前端新增 9 个 ApiClient/App 测试，详见 ADR 0005）
+- **CI**：ruff format + ruff check + mypy + pytest（后端）+ tsc + vitest + vite build（前端）四项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
 ---
@@ -412,6 +412,46 @@
 - **5 个 ticket 全部完成**，905 → 938 测试（+33 新增，零回归），CI 三项全绿
 - **5 个 PR 依次 squash 合并到 main**：#109 → #112 → #111 → #113 (PR #117) → #110 (PR #118)
 - **不在范围**：模型真切换（需后端补 `/api/v1/config` 端点）、用户登录页（需 JWT 用户系统）、移动端响应式适配、暗色模式
+
+---
+
+## React SPA 阶段：UI 层重写（ADR 0005）
+
+> 用 React 18 + TypeScript + Vite 的 SPA 替换 Streamlit UI 层，落地 Claude 静谧极简风格。
+> 共 8 个 ticket（T1-T8），按依赖顺序推进。
+
+| 序号 | 任务 | 状态 | 依赖 | Issue |
+|---|---|---|---|---|
+| T1 | React 项目骨架 + 删除 Streamlit + CI 集成 | ✅ 已完成 | 无 | #124 |
+| T2 | Claude 风格主题 + 基础布局骨架 | 待实施 | T1 | #125 |
+| T3 | 文档管理 UI（列表 + 上传 + 删除） | 待实施 | T2 | #126 |
+| T4 | 会话管理 UI（列表 + 创建 + 删除 + 切换） | 待实施 | T2 | #127 |
+| T5 | SSE 流式问答 + 消息渲染 + 引用卡片 + 复制按钮 | 待实施 | T3, T4 | #128 |
+| T6 | 历史消息加载 + 多轮对话 | 待实施 | T5 | #129 |
+| T7 | 反馈 UI（点赞/点踩 + 历史消息反馈） | 待实施 | T6 | #130 |
+| T8 | 设置页 + API Key 管理 + 后端 /web 路由 + docker 集成 | 待实施 | T7 | #131 |
+
+### T1 React 项目骨架 + 删除 Streamlit + CI 集成
+
+- **状态**：✅ 已完成（Issue #124）
+- **目标**：搭建 `frontend/` React 18 + TypeScript + Vite 项目骨架，删除 Streamlit UI 层，新增 frontend CI job
+- **技术方案**：
+  - `frontend/` 目录建立 Vite + React 18 + TypeScript 项目，`npm run dev` 在 5173 端口跑 hello world
+  - `frontend/src/api/client.ts`：ApiClient fetch 封装（baseUrl + apiKey + Authorization header + ApiClientError）
+  - `frontend/src/api/types.ts`：严格对应 `schemas.py` 的核心类型（DocumentRead / QueryRequest / QueryResponse / CitationRead / ConversationRead / MessageRead / FeedbackCreate / FeedbackRead 等）
+  - `frontend/src/App.tsx`：hello world + API 健康检查（GET `/api/v1/documents`）
+  - Vitest + React Testing Library + jsdom 配置，9 个前端测试
+  - `.github/workflows/ci.yml` 新增 frontend job（node 20 + npm ci + tsc + vitest + vite build）
+  - 后端 CORS 保留 5173（生产同源托管无需 CORS，ADR 0005）
+  - **删除** `src/research_rag/ui/`（Streamlit `app.py` + `api_client.py`）+ 8 个相关测试文件（`test_ui_*.py` × 6 + `test_api_client*.py` × 2）
+  - `pyproject.toml` 移除 `streamlit>=1.40` + `requests>=2.32` 依赖 + mypy streamlit override
+  - `tests/unit/test_auth.py` 移除 `TestApiClientApiKey` 类（前端 `client.test.ts` 替代）
+- **设计取舍**：
+  - **首 ticket 即删除 Streamlit**：双轨并行维护成本高，React 骨架期间无可用 UI 但后端 API 可用 curl/Postman 验证
+  - **不用 React Router**：单页应用用 useState 切换 view
+  - **不引入 E2E**：首 ticket 仅 Vitest + RTL，E2E 留待后续
+  - **dev 用 vite proxy**：避免开发环境 CORS 问题，生产同源托管
+- **验收**：829 后端测试零回归 + 9 前端测试全绿，CI 四项全绿（Lint / Type Check / Test / Frontend）
 
 ---
 
