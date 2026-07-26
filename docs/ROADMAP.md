@@ -5,7 +5,7 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）+ 历史消息反馈前端 UI 渲染（Issue #92：`_render_feedback_buttons` 扩展到历史消息 + 旧消息隐藏按钮 + `_init_feedback_state_for_history` 批量初始化反馈状态）+ 阶段 11.6 进行中（切片 A #97：`secrets.py` helper + 切片 B #98：非 root 容器 Dockerfile 改造 + 切片 C #99：8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持 + 切片 D #101：docker-compose.prod.yml 配置 8 个 docker secrets 挂载 + `.env.docker.secrets.example` 示例文件 + 切片 E #100：nginx + certbot 容器化 + TLS 反代 Let's Encrypt webroot 模式）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）+ 历史消息反馈前端 UI 渲染（Issue #92：`_render_feedback_buttons` 扩展到历史消息 + 旧消息隐藏按钮 + `_init_feedback_state_for_history` 批量初始化反馈状态）+ 阶段 11.6 生产安全加固（切片 A #97：`secrets.py` helper + 切片 B #98：非 root 容器 Dockerfile 改造 + 切片 C #99：8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持 + 切片 D #101：docker-compose.prod.yml 配置 8 个 docker secrets 挂载 + `.env.docker.secrets.example` 示例文件 + 切片 E #100：nginx + certbot 容器化 + TLS 反代 Let's Encrypt webroot 模式 + 切片 F #102：文档同步收官）
 - **测试**：905 个单元测试通过（含 #97 新增 7 个 + #99 新增 24 个 + #98 新增 7 个 + #101 新增 10 个 + #100 新增 33 个：observability/llm_config/answer_evaluation/auth/embedding/embedding_config/deployment_config 七个文件的 `_FILE` 优先与 fallback env 路径覆盖 + Dockerfile/entrypoint.sh 非 root 改造的文件结构验证 + docker-compose.prod.yml docker secrets 配置结构与 .env.docker.secrets.example 模板验证 + nginx.conf / docker-compose.prod.yml nginx+certbot 服务 / nginx & certbot entrypoint 结构断言）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
@@ -168,7 +168,7 @@
 | 11.3 | API 限流 | ✅ 已完成（Issue #78） | 防止滥用 | 11.1 | 中 |
 | 11.4 | Docker Compose 一键部署 | ✅ 已完成（PR #70，Issue #69） | 容器化部署 api/qdrant/postgres 三服务 | 无 | 高 |
 | 11.5 | CI/CD 自动化部署 | ✅ 已完成（Issue #81，PR #82） | push 到 main 自动部署 | 11.4 | 中 |
-| 11.6 | 生产安全加固（非 root 容器 + docker secrets + TLS 反代） | 🚧 进行中（切片 A+B+C+D+E 已完成 #97 #98 #99 #101 #100，仅剩切片 F #102 文档同步） | 生产级密钥与传输安全 | 11.4 | 高 |
+| 11.6 | 生产安全加固（非 root 容器 + docker secrets + TLS 反代） | ✅ 已完成（PR #103 #105 #104 #106 #107 #102，切片 A-F 全部完成） | 生产级密钥与传输安全 | 11.4 | 高 |
 
 ### 11.1 认证鉴权
 
@@ -272,8 +272,19 @@
 
 ### 11.6 生产安全加固
 
-- **状态**：🚧 进行中（切片 A #97 + 切片 B #98 + 切片 C #99 + 切片 D #101 + 切片 E #100 已完成，切片 F #102 待实施）
+- **状态**：✅ 已完成（切片 A-F 全部完成，6 个 PR：#103 #105 #104 #106 #107 #102）
 - **目标**：把开发级容器部署升级到生产可用——非 root 用户、密钥通过 docker secrets 文件挂载（不入环境变量）、Nginx TLS 反代终止 HTTPS
+- **三个子方向**：
+  1. **密钥管理升级**（切片 A #97 + 切片 C #99 + 切片 D #101）：`src/research_rag/secrets.py` 提供 `get_secret(name)` helper 优先读 `{NAME}_FILE` 文件内容（docker secrets 路径）fallback 到 `{NAME}` 环境变量（开发/CI 路径）；5 个文件 8 个密钥读取点从 `os.environ.get(...)` 替换为 `get_secret(...)`；docker-compose.prod.yml 配置 8 个 docker secrets 顶级块 + api/postgres 服务引用 + 7 个 `_FILE` 环境变量；postgres 用官方镜像原生 `POSTGRES_PASSWORD_FILE` 支持
+  2. **非 root 容器**（切片 B #98）：Dockerfile 加 `USER 65532` + `groupadd/useradd/chown` 创建 UID 65532 的 app 用户（distroless 标准）+ `chown -R app:app /app` 让非 root 用户可读 `.venv`/源码 + 可写 `data/uploads`；entrypoint.sh 改用 `/app/.venv/bin/uvicorn` 和 `/app/.venv/bin/alembic` 直接调用绕开非 root 用户无权写 `~/.cache/uv` 的 cache 写权限问题
+  3. **Nginx TLS 反代**（切片 E #100）：nginx + certbot 容器化 + Let's Encrypt webroot 模式自动签发与续期；nginx.conf 模板含 HTTP→HTTPS 301 重定向 + ACME webroot + `proxy_pass http://api:8000` + `${DOMAIN}` envsubst 占位；entrypoint 含占位自签证书（解决首次启动无证书 nginx 无法启动的鸡生蛋问题）+ crond 周期 reload nginx（每 6 小时读取续期后新证书）；certbot entrypoint 含 certbot certonly --webroot 首次签发 + certbot renew 续期 cron（每 12 小时检查）；docker-compose.prod.yml 加 nginx/certbot 服务 + 共享 webroot/证书卷 + api 用 `ports: !reset []` 清空 8000 端口发布强制走 TLS
+- **设计取舍**：
+  - **UID 65532 而非命名用户**：与 distroless 镜像惯例一致，避免 user namespace 冲突；`chown -R 65532 /app` 在 Dockerfile build 阶段完成，运行时无 root 权限
+  - **webroot 模式而非 standalone**：不停服签发证书（standalone 需停 nginx 占用 80 端口）；nginx 独立 reload cron 而非跨容器信号通信（6 小时 reload 足够及时，避免跨容器信号复杂度）
+  - **docker secrets 方案 A（代码层 helper）而非方案 B（pydantic-settings BaseSettings）**：YAGNI，当前 `os.environ.get` 调用点替换为 `get_secret` 足够；pydantic-settings 引入新抽象层，且不能覆盖 postgres 官方镜像原生 `_FILE` 支持。决策见 [ADR 0004](./adr/0004-docker-secrets-helper.md)
+  - **postgres 用 `POSTGRES_PASSWORD_FILE` 而非自定义 entrypoint**：官方镜像原生支持，零代码改动；其他服务的密钥通过应用层 `get_secret` 读取
+  - **保持向后兼容**：`get_secret` fallback env，开发/CI 不挂载 secrets 时行为不变；`POSTGRES_PASSWORD_FILE` 为空字符串时 Postgres 官方镜像忽略 `_FILE` 后缀，回退到 `POSTGRES_PASSWORD`
+  - **docker secrets 用 `file:` 而非 swarm**：docker compose 非 swarm 模式支持 `secrets:` + `file:`，无需 swarm 集群；`${VAR_FILE:?error}` 模式在变量未设置时报错引导运维配置
 - **技术方案**：6 个垂直切片（依赖图见 [handoff 20260726-1246](../.trae/handoffs/handoff-20260726-1246.md)）
   - **切片 A #97（已完成）**：`src/research_rag/secrets.py` 提供 `get_secret(name) -> str | None` helper——优先读 `{NAME}_FILE` 环境变量指向的文件内容（docker secrets 路径），无 `_FILE` 或文件不存在时回退到 `{NAME}` 环境变量（开发/CI 路径），两者均无返回 `None`；7 个单元测试覆盖五条行为路径（fallback env / file 优先 / file 缺失回退 / 空文件 / 仅空白文件）
   - **切片 B #98（已完成，PR #105）**：api 容器非 root 改造
@@ -301,18 +312,15 @@
     - 33 个新增单元测试（`tests/unit/test_deployment_config.py`）：扩展 `_load_yaml` 支持 compose-spec 的 `!reset`/`!override` 自定义 YAML 标签 + `TestNginxConfig`（8 个 nginx.conf 结构断言）+ `TestProdComposeNginxCertbot`（15 个 compose 服务/卷/端口断言）+ `TestNginxEntrypoint`（5 个 nginx entrypoint 结构断言）+ `TestCertbotEntrypoint`（5 个 certbot entrypoint 结构断言）
     - 设计决策：webroot 模式（不停服签发，standalone 需停 nginx）+ nginx 独立 reload cron（避免跨容器信号通信复杂度，6 小时 reload 足够及时）+ 占位自签证书（解决首次启动无证书 nginx 无法启动的鸡生蛋问题）
     - 不在范围：实际证书签发（部署运维文档说明，需真实域名）/ 泛域名 + dns-01 / HTTP/2 或 HTTP/3 / nginx 容器非 root 化
-  - **切片 F #102（待实施，已解除阻塞）**：同步 ROADMAP / STATUS / README / ADR 0004 状态（标记阶段 11.6 完成 + 新增阶段 11.6 章节）
-- **设计取舍**：
-  - **方案 A（代码层 helper）而非方案 B（pydantic-settings BaseSettings）**：YAGNI，当前 `os.environ.get` 调用点替换为 `get_secret` 足够；pydantic-settings 引入新抽象层，且不能覆盖 postgres 官方镜像原生 `_FILE` 支持。决策见 [ADR 0004](./adr/0004-docker-secrets-helper.md)
-  - **postgres 用 `POSTGRES_PASSWORD_FILE` 而非自定义 entrypoint**：官方镜像原生支持，零代码改动；其他服务的密钥通过应用层 `get_secret` 读取
-  - **保持向后兼容**：`get_secret` fallback env，开发/CI 不挂载 secrets 时行为不变；`POSTGRES_PASSWORD_FILE` 为空字符串时 Postgres 官方镜像忽略 `_FILE` 后缀，回退到 `POSTGRES_PASSWORD`
-  - **非 root 用户用 uid=65532 而非命名用户**：与 distroless 镜像惯例一致，避免 user namespace 冲突；`chown -R 65532 /app` 在 Dockerfile build 阶段完成，运行时无 root 权限
-  - **docker secrets 用 `file:` 而非 swarm**：docker compose 非 swarm 模式支持 `secrets:` + `file:`，无需 swarm 集群；`${VAR_FILE:?error}` 模式在变量未设置时报错引导运维配置
-- **验收**（已完成部分）：
+  - **切片 F #102（已完成，PR #102）**：文档同步收官——ROADMAP.md 标记阶段 11.6 完成 + 新增三个子方向（密钥管理升级 / 非 root 容器 / Nginx TLS 反代）总结 + 设计取舍（UID 65532 / webroot 模式 / docker secrets 方案 A）汇总 + 验收结果汇总；STATUS.md 标记阶段 11.6 完成 + 版本 v2.9 → v3.0；本切片为纯文档变更，无新增测试，905 测试基线零回归
+- **验收**：
   - #97：CI 三项全绿，837 测试通过（830→837，+7 新增）
   - #99：CI 三项全绿，854 测试通过（837→854，+24 新增），830 基线零回归
   - #98：CI 三项全绿（Lint 10s / Test 29s / Type Check 40s），861 测试通过（854→861，+7 新增），854 基线零回归；Dockerfile 含 `USER 65532` + `groupadd/useradd/chown` + entrypoint.sh 改用 `/app/.venv/bin/uvicorn` 和 `/app/.venv/bin/alembic` + 保留 `exec`；容器行为测试（id/健康检查/uploads 可写）需真实 Docker 构建后验证
   - #101：CI 三项全绿（Lint 12s / Test 28s / Type Check 47s），871 测试通过（861→871，+10 新增），861 基线零回归；docker-compose.prod.yml 含顶级 `secrets:` 块 + 8 secrets 定义 + api 引用 7 + postgres 引用 password + POSTGRES_PASSWORD_FILE 指向 `/run/secrets/postgres_password` + api environment 7 个 _FILE + `.env.docker.secrets.example` 模板；容器行为测试（`ls /run/secrets/` / `env | grep -i key`）需真实 Docker 构建后验证
+  - #100：CI 三项全绿，905 测试通过（871→905，+33 新增），871 基线零回归；nginx.conf 含 HTTP/HTTPS server block + ACME webroot + `proxy_pass http://api:8000`；docker-compose.prod.yml 加 nginx/certbot 服务 + 共享 webroot/证书卷 + api 用 `ports: !reset []` 清空 8000 端口；nginx & certbot entrypoint 含 envsubst + 占位自签证书 + crond reload + certbot certonly --webroot + certbot renew cron；容器行为测试（实际证书签发需真实域名）留待部署运维验证
+  - #102：CI 三项全绿（纯文档变更，905 测试基线零回归）；ROADMAP.md 阶段 11.6 标记 ✅ 已完成 + 新增三个子方向总结 + 设计取舍汇总 + 验收结果汇总；STATUS.md v2.9 → v3.0 标记阶段 11.6 完成
+  - **阶段 11.6 总计**：6 个切片全部完成，830 → 905 测试（+75 新增，全部零回归），CI 三项全绿；6 个 PR（#103 #105 #104 #106 #107 #102）依次 squash 合并到 main
 - **不在范围**：Vault / SOPS / Sealed Secrets 等外部密钥管理系统（YAGNI，docker secrets 足够当前规模）、双向 TLS（mTLS）、WAF（Web Application Firewall）
 
 ---

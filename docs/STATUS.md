@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v2.9` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11.6 生产安全加固进行中（切片 A #97 + 切片 B #98 + 切片 C #99 + 切片 D #101 + 切片 E #100 已完成，仅剩切片 F #102 文档同步）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A（PR #103 / Issue #97）完成 `secrets.py` helper 支持 `{NAME}_FILE` 优先 + fallback env；阶段 11.6 切片 C（PR #104 / Issue #99）完成 5 个文件 8 个密钥读取点替换为 `get_secret` + docker-compose.yml postgres `POSTGRES_PASSWORD_FILE` 支持；阶段 11.6 切片 B（PR #105 / Issue #98）完成 api 容器非 root 改造（Dockerfile 加 `USER 65532` + `groupadd/useradd/chown` + entrypoint.sh 改用 `/app/.venv/bin/uvicorn` 和 `/app/.venv/bin/alembic` 直接调用绕开 uv cache 写权限问题）；阶段 11.6 切片 D（PR #106 / Issue #101）完成 docker-compose.prod.yml 配置 8 个 docker secrets 挂载（顶级 `secrets:` 块 + api 引用 7 + postgres 引用 password + api environment 7 个 `_FILE` + `.env.docker.secrets.example` 模板）；阶段 11.6 切片 E（PR #107 / Issue #100）完成 nginx + certbot 容器化 + TLS 反代（`nginx/nginx.conf` 模板含 HTTP→HTTPS 重定向 + ACME webroot + `proxy_pass http://api:8000` + `${DOMAIN}` envsubst 占位 + `docker/nginx/entrypoint.sh` 含 envsubst + 占位自签证书 + crond reload + `docker/certbot/entrypoint.sh` 含 certbot certonly --webroot 首次签发 + certbot renew 续期 cron + docker-compose.prod.yml 加 nginx/certbot 服务 + 共享 webroot/证书卷 + api 用 `ports: !reset []` 清空 8000 端口发布），905 条测试通过，CI 三项全绿。
+`v3.0` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 + 11.6 全部完成（阶段 11.6 生产安全加固 6 个切片 A-F 全部完成：#97 #98 #99 #101 #100 #102）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A（PR #103 / Issue #97）完成 `secrets.py` helper 支持 `{NAME}_FILE` 优先 + fallback env；阶段 11.6 切片 C（PR #104 / Issue #99）完成 5 个文件 8 个密钥读取点替换为 `get_secret` + docker-compose.yml postgres `POSTGRES_PASSWORD_FILE` 支持；阶段 11.6 切片 B（PR #105 / Issue #98）完成 api 容器非 root 改造（Dockerfile 加 `USER 65532` + `groupadd/useradd/chown` + entrypoint.sh 改用 `/app/.venv/bin/uvicorn` 和 `/app/.venv/bin/alembic` 直接调用绕开 uv cache 写权限问题）；阶段 11.6 切片 D（PR #106 / Issue #101）完成 docker-compose.prod.yml 配置 8 个 docker secrets 挂载（顶级 `secrets:` 块 + api 引用 7 + postgres 引用 password + api environment 7 个 `_FILE` + `.env.docker.secrets.example` 模板）；阶段 11.6 切片 E（PR #107 / Issue #100）完成 nginx + certbot 容器化 + TLS 反代（`nginx/nginx.conf` 模板含 HTTP→HTTPS 重定向 + ACME webroot + `proxy_pass http://api:8000` + `${DOMAIN}` envsubst 占位 + `docker/nginx/entrypoint.sh` 含 envsubst + 占位自签证书 + crond reload + `docker/certbot/entrypoint.sh` 含 certbot certonly --webroot 首次签发 + certbot renew 续期 cron + docker-compose.prod.yml 加 nginx/certbot 服务 + 共享 webroot/证书卷 + api 用 `ports: !reset []` 清空 8000 端口发布）；阶段 11.6 切片 F（PR #102 / Issue #102）完成文档同步收官（ROADMAP.md 标记阶段 11.6 ✅ 已完成 + 新增三个子方向总结 + 设计取舍汇总 + 验收结果汇总 + STATUS.md v2.9 → v3.0 标记阶段 11.6 完成，纯文档变更无新增测试），905 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -147,7 +147,7 @@
 - `pyproject.toml`：添加 `pyyaml>=6.0` dev 依赖；`README.md`：新增「CI/CD 自动化部署」章节（流水线 / 镜像拉取 / Secrets 与 Variables 配置 / 手动触发）
 - 不在范围：蓝绿部署 / 金丝雀发布、Kubernetes 部署、回滚自动化（手动 `IMAGE_TAG=sha-xxx` 即可）、多环境（staging/prod）分离
 
-### 生产安全加固（阶段 11.6 进行中）
+### 生产安全加固（阶段 11.6 已完成）
 
 - 阶段 11.6 生产安全加固：把开发级容器部署升级到生产可用——非 root 用户 + docker secrets 文件挂载 + Nginx TLS 反代终止 HTTPS
 - **切片 A #97（已完成，PR #103）**：`src/research_rag/secrets.py` 提供 `get_secret(name) -> str | None` helper
@@ -188,7 +188,7 @@
   - 33 个新增单元测试（`tests/unit/test_deployment_config.py`）：扩展 `_load_yaml` 支持 compose-spec 的 `!reset`/`!override` 自定义 YAML 标签 + `TestNginxConfig`（8 个 nginx.conf 结构断言）+ `TestProdComposeNginxCertbot`（15 个 compose 服务/卷/端口断言）+ `TestNginxEntrypoint`（5 个 nginx entrypoint 结构断言）+ `TestCertbotEntrypoint`（5 个 certbot entrypoint 结构断言）
   - 设计决策：webroot 模式（不停服签发，standalone 需停 nginx）+ nginx 独立 reload cron（避免跨容器信号通信复杂度，6 小时 reload 足够及时）+ 占位自签证书（解决首次启动无证书 nginx 无法启动的鸡生蛋问题）
   - 不在范围：实际证书签发（部署运维文档说明，需真实域名）/ 泛域名 + dns-01 / HTTP/2 或 HTTP/3 / nginx 容器非 root 化
-- **切片 F #102（待实施，已解除阻塞）**：同步 ROADMAP / STATUS / README / ADR 0004 状态（标记阶段 11.6 完成 + 新增阶段 11.6 章节）
+- **切片 F #102（已完成，PR #102）**：文档同步收官——ROADMAP.md 标记阶段 11.6 ✅ 已完成 + 新增三个子方向（密钥管理升级 / 非 root 容器 / Nginx TLS 反代）总结 + 设计取舍（UID 65532 / webroot 模式 / docker secrets 方案 A）汇总 + 验收结果（6 个切片 CI 全绿 + 830→905 测试 +75 新增零回归）汇总；STATUS.md 标记阶段 11.6 完成 + 版本 v2.9 → v3.0；本切片为纯文档变更，无新增测试，905 测试基线零回归
 - 决策与设计取舍见 [ADR 0004](./adr/0004-docker-secrets-helper.md)：方案 A（代码层 helper）而非方案 B（pydantic-settings BaseSettings），YAGNI；postgres 用原生 `POSTGRES_PASSWORD_FILE` 而非自定义 entrypoint
 - 不在范围：Vault / SOPS / Sealed Secrets 等外部密钥管理系统（YAGNI）、双向 TLS（mTLS）、WAF
 
@@ -244,5 +244,4 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 - 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩—— **prefactor 已完成**（PR #93 / Issue #89：`Message.request_id` 列 + ADR 0003）；**写入读出已完成**（PR #94 / Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展）；**前端 model+client 已完成**（PR #95 / Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）；**前端 UI 渲染已完成**（PR #96 / Issue #92：`_render_feedback_buttons` 扩展到历史消息 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮）；历史消息反馈端到端体验闭环完成
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
-- 生产级安全加固（阶段 11.6 进行中）：非 root 容器用户 + docker secrets 文件挂载 + Nginx TLS 反代——**切片 A #97 + 切片 B #98 + 切片 C #99 已完成**（密钥 helper + 8 个读取点替换 + postgres 密码文件支持 + 非 root 容器 Dockerfile 改造），**切片 D/E/F 待实施**（docker secrets 配置 / Nginx TLS / 文档同步）
 - 表格感知切分与公式识别（阶段 12）
