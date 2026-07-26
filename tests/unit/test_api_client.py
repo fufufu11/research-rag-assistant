@@ -30,6 +30,7 @@ from research_rag.ui.api_client import (
     ApiClientError,
     Citation,
     DocumentInfo,
+    FeedbackInfo,
     QueryResult,
     StreamDone,
     StreamError,
@@ -570,3 +571,183 @@ class TestAskQuestionStream:
         assert len(tokens) == 1
         assert tokens[0].text == "Hi"
         assert len(dones) == 1
+
+
+# ---------------------------------------------------------------------------
+# submit_feedback / delete_feedback（阶段 10.2 前端补充）
+# ---------------------------------------------------------------------------
+
+
+def make_feedback_dict(
+    *,
+    feedback_id: str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    request_id: str = "33333333-3333-3333-3333-333333333333",
+    message_id: str | None = None,
+    rating: str = "like",
+    comment: str | None = None,
+    created_at: str = "2026-07-26T10:00:00Z",
+    updated_at: str = "2026-07-26T10:00:00Z",
+) -> dict[str, object]:
+    """构造 ``FeedbackRead`` schema 的 dict（模拟 API 响应）。"""
+
+    return {
+        "id": feedback_id,
+        "request_id": request_id,
+        "message_id": message_id,
+        "rating": rating,
+        "comment": comment,
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+class TestSubmitFeedback:
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_success_create_201(self, mock_request: MagicMock) -> None:
+        """成功创建反馈（201）：返回 FeedbackInfo，请求体含 request_id 和 rating。"""
+
+        mock_request.return_value = make_response(
+            201,
+            make_feedback_dict(rating="like", request_id="req-1"),
+        )
+
+        client = ApiClient()
+        result = client.submit_feedback("req-1", rating="like")
+
+        assert isinstance(result, FeedbackInfo)
+        assert result.request_id == "req-1"
+        assert result.rating == "like"
+        assert result.message_id is None
+        assert result.comment is None
+
+        # 验证请求参数
+        call_kwargs = mock_request.call_args.kwargs
+        assert call_kwargs["method"] == "POST"
+        assert call_kwargs["url"] == f"{DEFAULT_API_BASE_URL}/feedback"
+        assert call_kwargs["json"] == {"request_id": "req-1", "rating": "like"}
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_success_update_200(self, mock_request: MagicMock) -> None:
+        """Upsert 更新（200）：同 request_id 再次提交覆盖 rating。"""
+
+        mock_request.return_value = make_response(
+            200,
+            make_feedback_dict(rating="dislike", request_id="req-1"),
+        )
+
+        client = ApiClient()
+        result = client.submit_feedback("req-1", rating="dislike")
+
+        assert result.rating == "dislike"
+        assert mock_request.call_args.kwargs["json"] == {
+            "request_id": "req-1",
+            "rating": "dislike",
+        }
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_with_message_id_and_comment(self, mock_request: MagicMock) -> None:
+        """带 message_id 和 comment：两者正确传入请求体。"""
+
+        mock_request.return_value = make_response(
+            201,
+            make_feedback_dict(
+                message_id="msg-uuid-1",
+                comment="答案不准确",
+                rating="dislike",
+            ),
+        )
+
+        client = ApiClient()
+        client.submit_feedback(
+            "req-1",
+            rating="dislike",
+            message_id="msg-uuid-1",
+            comment="答案不准确",
+        )
+
+        assert mock_request.call_args.kwargs["json"] == {
+            "request_id": "req-1",
+            "rating": "dislike",
+            "message_id": "msg-uuid-1",
+            "comment": "答案不准确",
+        }
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_invalid_rating_422(self, mock_request: MagicMock) -> None:
+        """非法 rating（如 'love'）：API 返回 422，包装为 ApiClientError。"""
+
+        mock_request.return_value = make_response(422, {"detail": "rating 必须是 like 或 dislike"})
+
+        client = ApiClient()
+        with pytest.raises(ApiClientError) as exc_info:
+            client.submit_feedback("req-1", rating="love")
+
+        assert exc_info.value.status_code == 422
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_network_error_wrapped(self, mock_request: MagicMock) -> None:
+        """网络错误：包装为 ApiClientError（status_code=0）。"""
+
+        mock_request.side_effect = requests.ConnectionError("Connection refused")
+
+        client = ApiClient()
+        with pytest.raises(ApiClientError) as exc_info:
+            client.submit_feedback("req-1", rating="like")
+
+        assert exc_info.value.status_code == 0
+        assert "无法连接" in exc_info.value.detail
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_parses_null_message_id_and_comment(self, mock_request: MagicMock) -> None:
+        """响应中 message_id / comment 为 null：解析为 None。"""
+
+        mock_request.return_value = make_response(
+            201,
+            make_feedback_dict(message_id=None, comment=None),
+        )
+
+        client = ApiClient()
+        result = client.submit_feedback("req-1", rating="like")
+
+        assert result.message_id is None
+        assert result.comment is None
+
+
+class TestDeleteFeedback:
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_success_204(self, mock_request: MagicMock) -> None:
+        """成功撤销反馈（204）：不抛异常，DELETE /feedback/{request_id}。"""
+
+        mock_request.return_value = make_response(204, None, text="")
+
+        client = ApiClient()
+        # 不抛异常即成功
+        client.delete_feedback("req-1")
+
+        call_kwargs = mock_request.call_args.kwargs
+        assert call_kwargs["method"] == "DELETE"
+        assert call_kwargs["url"] == f"{DEFAULT_API_BASE_URL}/feedback/req-1"
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_not_found_404(self, mock_request: MagicMock) -> None:
+        """撤销不存在的反馈（404）：抛 ApiClientError。"""
+
+        mock_request.return_value = make_response(404, {"detail": "反馈不存在"})
+
+        client = ApiClient()
+        with pytest.raises(ApiClientError) as exc_info:
+            client.delete_feedback("nonexistent-req-id")
+
+        assert exc_info.value.status_code == 404
+
+    @patch("research_rag.ui.api_client.requests.request")
+    def test_network_error_wrapped(self, mock_request: MagicMock) -> None:
+        """网络错误：包装为 ApiClientError（status_code=0）。"""
+
+        mock_request.side_effect = requests.ConnectionError("Connection refused")
+
+        client = ApiClient()
+        with pytest.raises(ApiClientError) as exc_info:
+            client.delete_feedback("req-1")
+
+        assert exc_info.value.status_code == 0
