@@ -26,13 +26,12 @@ function renderWithProviders(options?: { includeSidebar?: boolean }) {
     },
   });
   const client = new ApiClient({ apiKey: null });
-  const result = render(
+  return render(
     <QueryClientProvider client={queryClient}>
       {options?.includeSidebar && <Sidebar client={client} />}
       <ChatArea client={client} />
     </QueryClientProvider>,
   );
-  return { ...result, queryClient };
 }
 
 describe("ChatArea", () => {

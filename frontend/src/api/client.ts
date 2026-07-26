@@ -61,7 +61,10 @@ export class ApiClient {
     return `${this.baseUrl}${path}`;
   }
 
-  private async request<T>(path: string, init: RequestInit): Promise<T> {
+  private async fetchResponse(
+    path: string,
+    init: RequestInit,
+  ): Promise<Response> {
     const response = await fetch(this.buildUrl(path), {
       ...init,
       headers: this.buildHeaders(init.headers),
@@ -69,6 +72,11 @@ export class ApiClient {
     if (!response.ok) {
       await throwApiClientError(response);
     }
+    return response;
+  }
+
+  private async request<T>(path: string, init: RequestInit): Promise<T> {
+    const response = await this.fetchResponse(path, init);
     return (await response.json()) as T;
   }
 
@@ -88,12 +96,8 @@ export class ApiClient {
   }
 
   async deleteDocument(id: string): Promise<void> {
-    const response = await fetch(this.buildUrl(`/api/v1/documents/${id}`), {
+    await this.fetchResponse(`/api/v1/documents/${id}`, {
       method: "DELETE",
-      headers: this.buildHeaders(),
     });
-    if (!response.ok) {
-      await throwApiClientError(response);
-    }
   }
 }

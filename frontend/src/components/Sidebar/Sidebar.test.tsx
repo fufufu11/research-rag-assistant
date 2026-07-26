@@ -29,12 +29,11 @@ function renderWithProviders() {
     defaultOptions: { queries: { retry: false } },
   });
   const client = new ApiClient({ apiKey: null });
-  const result = render(
+  return render(
     <QueryClientProvider client={queryClient}>
       <Sidebar client={client} />
     </QueryClientProvider>,
   );
-  return { ...result, queryClient };
 }
 
 describe("Sidebar", () => {
