@@ -59,12 +59,93 @@ from research_rag.ui.api_client import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, MutableMapping
+    from collections.abc import Callable, Iterator, MutableMapping
 
 # 缓存 ApiClient 实例，避免每次 rerun 重建
 _CLIENT_KEY = "_api_client"
 # session_state key：左侧栏选中的文档 ID 列表，供单轮问答和新建会话使用
 _PENDING_DOC_IDS_KEY = "_pending_doc_ids"
+
+# 导航分组默认展开状态（Issue #109 左侧导航重构）
+# history / docs 默认展开，其他分组默认折叠
+_NAV_SECTION_DEFAULT_EXPANDED: dict[str, bool] = {
+    "history": True,
+    "docs": True,
+}
+
+
+def _is_nav_section_expanded(section_key: str, session_state: MutableMapping[str, object]) -> bool:
+    """判断导航分组是否展开（Issue #109）。
+
+    优先读 ``session_state[f"nav-{section_key}-expanded"]``，未设置时用
+    ``_NAV_SECTION_DEFAULT_EXPANDED`` 的默认值（``history`` / ``docs`` 默认
+    展开，其他默认折叠）。
+
+    Args:
+        section_key: 导航分组 key（如 ``"history"`` / ``"docs"``）。
+        session_state: ``st.session_state`` 或测试用普通 dict。
+
+    Returns:
+        是否展开。
+    """
+
+    state_key = f"nav-{section_key}-expanded"
+    if state_key in session_state:
+        return bool(session_state[state_key])
+    return _NAV_SECTION_DEFAULT_EXPANDED.get(section_key, False)
+
+
+def _is_sidebar_collapsed(session_state: MutableMapping[str, object]) -> bool:
+    """判断左侧栏是否整体收起（Issue #109）。
+
+    优先读 ``session_state["sidebar-collapsed"]``，未设置时默认不折叠
+    （返回 ``False``）。
+
+    Args:
+        session_state: ``st.session_state`` 或测试用普通 dict。
+
+    Returns:
+        是否收起。
+    """
+
+    return bool(session_state.get("sidebar-collapsed", False))
+
+
+def _render_nav_section(
+    icon: str,
+    label: str,
+    section_key: str,
+    render_content: Callable[[], None],
+) -> None:
+    """渲染可折叠的导航分组（Issue #109）。
+
+    标题行带图标 + 标签 + 折叠箭头（▶/▼），点击切换展开状态（持久化到
+    ``session_state[f"nav-{section_key}-expanded"]``）。展开时调用
+    ``render_content`` 渲染分组内容。
+
+    用 ``st.button`` 标题行 + 手动控制展开（而非 ``st.expander``），因为
+    ``st.expander`` 的 ``expanded`` 参数每次 rerun 都重置，无法持久化用户
+    手动折叠的状态。
+
+    Args:
+        icon: 分组图标（emoji）。
+        label: 分组标签。
+        section_key: 分组 key（用于 session_state 持久化展开状态）。
+        render_content: 展开时调用的渲染函数。
+    """
+
+    session_state = cast("MutableMapping[str, object]", st.session_state)
+    expanded = _is_nav_section_expanded(section_key, session_state)
+    arrow = "▼" if expanded else "▶"
+    if st.button(
+        f"{icon} {label} {arrow}",
+        key=f"nav-section-{section_key}",
+        use_container_width=True,
+    ):
+        st.session_state[f"nav-{section_key}-expanded"] = not expanded
+        st.rerun()
+    if expanded:
+        render_content()
 
 
 def _get_client() -> ApiClient:
@@ -135,19 +216,22 @@ def _ensure_conversations_loaded(client: ApiClient) -> None:
 
 
 def _render_sidebar(client: ApiClient) -> None:
-    """渲染左侧栏：文档范围选择 + 新建会话 + 会话列表 + 文档管理（折叠）。
+    """渲染左侧栏：上组（新聊天/搜索/会话列表/文档列表）+ 下组（设置/帮助）。
+
+    Issue #109 左侧导航重构：图标分组 + 可折叠会话/文档列表，贴近 ChatGPT 视觉。
 
     文档范围选择同时用于：
     - 新建会话时锁定 ``document_ids``（解决问题 4 根因）
     - 单轮问答时限定检索范围（未选中会话时）
-    """
 
-    st.subheader("💬 会话")
+    「新聊天」点击后清空对话区，进入空白状态（不自动创建会话，发首条
+    消息时才 ``create_conversation``，沿用 ``_handle_question`` 现有逻辑）。
+    """
 
     _ensure_documents_loaded(client)
     ready_docs = _get_ready_documents()
 
-    # 文档范围选择 + 新建会话
+    # 文档范围选择（用于新建会话锁定范围 + 单轮问答限定范围）
     selected_docs = st.multiselect(
         "选中文档范围",
         options=ready_docs,
@@ -158,40 +242,74 @@ def _render_sidebar(client: ApiClient) -> None:
     # 缓存到 session_state，供右侧单轮问答读取
     st.session_state[_PENDING_DOC_IDS_KEY] = selected_ids
 
-    if st.button("➕ 新建会话", type="primary", use_container_width=True, disabled=not ready_docs):
-        try:
-            conv = client.create_conversation(document_ids=selected_ids)
-            st.session_state["current_conversation_id"] = conv.id
-            st.session_state["current_conversation"] = conv
-            st.session_state["conversation_messages"] = []
-            _refresh_conversations()
-            st.success(f"已新建会话：{conv.title or conv.id[:8]}")
-            st.rerun()
-        except ApiClientError as exc:
-            st.error(f"新建会话失败：{exc.detail}")
+    # --- 上组：新聊天 / 搜索会话 / 历史会话列表 / 文档列表 ---
+    if st.button("✏️ 新聊天", use_container_width=True, key="nav-new-chat"):
+        # 清空对话区，进入空白状态（不自动创建会话，发首条消息时才创建）
+        st.session_state.pop("current_conversation_id", None)
+        st.session_state.pop("current_conversation", None)
+        st.session_state.pop("conversation_messages", None)
+        st.rerun()
+
+    # 搜索会话
+    search_query = st.text_input(
+        "搜索会话",
+        value="",
+        placeholder="🔍 按标题搜索会话",
+        key="nav-search-conversations",
+        label_visibility="collapsed",
+    )
+
+    # 历史会话列表（可折叠，默认展开）
+    _render_nav_section(
+        "💬",
+        "历史会话列表",
+        "history",
+        lambda: _render_conversation_list(client, search_query=search_query),
+    )
 
     st.divider()
 
-    # 会话列表
-    _render_conversation_list(client)
+    # 文档列表（可折叠，默认展开；含上传 + 列表 + 选择 + 删除）
+    # 上传按钮暂保留于此，待 #112 迁移到输入栏「+」
+    _render_nav_section(
+        "📄",
+        "文档列表",
+        "docs",
+        lambda: _render_document_management(client),
+    )
 
     st.divider()
 
-    # 文档管理（折叠，避免占用过多左侧空间）
-    with st.expander("📄 文档管理", expanded=False):
-        _render_document_management(client)
+    # --- 下组：设置 / 帮助 ---
+    if st.button("⚙️ 设置", use_container_width=True, key="nav-settings"):
+        st.info("设置功能开发中")  # 占位
+
+    if st.button("❓ 帮助", use_container_width=True, key="nav-help"):
+        st.info("帮助功能开发中")  # 占位
 
 
-def _render_conversation_list(client: ApiClient) -> None:
-    """渲染会话列表（点击切换 / 删除，阶段 9.2）。
+def _render_conversation_list(client: ApiClient, search_query: str = "") -> None:
+    """渲染会话列表（点击切换 / 删除，阶段 9.2 + Issue #109 搜索过滤）。
 
     每条会话显示标题（当前会话加 ▶ 前缀），点击切换时从 API 拉取完整消息列表。
+    ``search_query`` 非空时按标题过滤（大小写不敏感）。
+
+    Args:
+        client: API 客户端。
+        search_query: 搜索关键词（按标题过滤，空字符串不过滤）。
     """
 
     _ensure_conversations_loaded(client)
     convs: list[ConversationInfo] = st.session_state.get("conversations", [])
+    # 搜索过滤（Issue #109）
+    query = search_query.strip().lower()
+    if query:
+        convs = [c for c in convs if query in (c.title or "").lower()]
     if not convs:
-        st.caption("暂无会话。点击上方「新建会话」开始多轮对话。")
+        if query:
+            st.caption("未找到匹配的会话。")
+        else:
+            st.caption("暂无会话。点击上方「新聊天」开始多轮对话。")
         return
 
     current_conv_id = st.session_state.get("current_conversation_id")
@@ -293,7 +411,7 @@ def _render_chat(client: ApiClient) -> None:
     _ensure_documents_loaded(client)
     ready_docs = _get_ready_documents()
     if not ready_docs:
-        st.info("暂无可用文档（状态为「就绪」），请先在左侧「📄 文档管理」上传 PDF。")
+        st.info("暂无可用文档（状态为「就绪」），请先在左侧「📄 文档列表」上传 PDF。")
         return
 
     current_conv_id: str | None = st.session_state.get("current_conversation_id")
@@ -650,14 +768,28 @@ def main() -> None:
 
     client = _get_client()
 
-    # 左右分栏：左 25% 会话+文档管理，右 75% 聊天区
-    left_col, right_col = st.columns([1, 3], gap="medium")
-
-    with left_col:
-        _render_sidebar(client)
-
-    with right_col:
-        _render_chat(client)
+    # Issue #109：左侧栏可整体折叠。折叠时只渲染展开按钮，右侧聊天区占满。
+    session_state = cast("MutableMapping[str, object]", st.session_state)
+    if _is_sidebar_collapsed(session_state):
+        # 折叠状态：左侧仅展开按钮，右侧占满
+        col_toggle, col_main = st.columns([1, 24], gap="small")
+        with col_toggle:
+            if st.button("☰", help="展开左侧栏"):
+                st.session_state["sidebar-collapsed"] = False
+                st.rerun()
+        with col_main:
+            _render_chat(client)
+    else:
+        # 展开状态：左侧栏 + 右侧聊天区
+        left_col, right_col = st.columns([1, 3], gap="medium")
+        with left_col:
+            # 顶部折叠按钮
+            if st.button("☰", help="收起左侧栏"):
+                st.session_state["sidebar-collapsed"] = True
+                st.rerun()
+            _render_sidebar(client)
+        with right_col:
+            _render_chat(client)
 
 
 if __name__ == "__main__":

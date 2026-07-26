@@ -12,3 +12,4 @@
 - **request_id** — 单次问答的唯一 ID（`uuid.uuid4`），在 `QaService.answer` / `answer_stream` 生成并返回前端（`QueryResponse` / SSE `done` 事件），用于日志追踪与反馈关联；多轮会话中持久化到 `Message.request_id`（仅 assistant 消息，ADR 0003），单轮问答不持久化
 - **Feedback** — 用户对某次问答答案的评价记录，含 `rating`（like/dislike）+ 可空 `comment`，以 `request_id` 为主关联键
 - **Rating** — 反馈类型，二值枚举 `like`（点赞）/ `dislike`（点踩）
+- **Folder** — 用户自建的文献分组容器，用于组织 Document；本次前端优化不实现，作为后续独立 issue 跟进
