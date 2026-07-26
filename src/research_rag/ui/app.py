@@ -506,8 +506,7 @@ def _render_input_toolbar(client: ApiClient) -> None:
                     with st.spinner("正在上传并解析文档…"):
                         doc = client.upload_document(uploaded.getvalue(), uploaded.name)
                     st.success(
-                        f"上传成功：{doc.original_name}"
-                        f"（{doc.page_count} 页，状态：{doc.status}）"
+                        f"上传成功：{doc.original_name}（{doc.page_count} 页，状态：{doc.status}）"
                     )
                     _refresh_documents()
                     st.rerun()
