@@ -128,6 +128,38 @@ def _is_valid_pdf_filename(filename: str) -> bool:
     return filename.lower().endswith(".pdf")
 
 
+def _get_chat_layout_css(max_width_px: int = 800) -> str:
+    """生成对话区居中布局的 CSS（Issue #111）。
+
+    限制对话区消息流与输入栏最大宽度并居中，视觉更聚焦（贴近截图风格）。
+    user/assistant 气泡对齐依赖 Streamlit 原生行为（user 右对齐、assistant
+    左对齐），本 CSS 只负责宽度收窄与居中。
+
+    Args:
+        max_width_px: 对话区最大宽度（像素），默认 800。
+
+    Returns:
+        CSS 字符串（含 ``<style>`` 标签）。
+    """
+
+    return f"""
+<style>
+/* 对话区消息流居中 + 宽度收窄（Issue #111） */
+div[data-testid="stChatMessage"] {{
+    max-width: {max_width_px}px;
+    margin-left: auto;
+    margin-right: auto;
+}}
+/* 输入栏居中 */
+div[data-testid="stChatInput"] {{
+    max-width: {max_width_px}px;
+    margin-left: auto;
+    margin-right: auto;
+}}
+</style>
+"""
+
+
 def _render_nav_section(
     icon: str,
     label: str,
@@ -408,7 +440,11 @@ def _render_chat(client: ApiClient) -> None:
       ``st.chat_message`` 渲染 user/assistant 交替气泡
     - 底部 ``st.chat_input`` 回车发送，自动清空，解决多轮衔接问题（问题 3）
     - 流式输出用 ``st.write_stream`` 渲染到 ``st.chat_message("assistant")`` 内
+    - Issue #111：注入 CSS 限制对话区宽度并居中，视觉更聚焦
     """
+
+    # 注入对话区居中布局 CSS（Issue #111）
+    st.markdown(_get_chat_layout_css(), unsafe_allow_html=True)
 
     _ensure_documents_loaded(client)
     ready_docs = _get_ready_documents()
