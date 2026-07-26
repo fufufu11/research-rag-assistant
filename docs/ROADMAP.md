@@ -168,7 +168,7 @@
 | 11.3 | API 限流 | ✅ 已完成（Issue #78） | 防止滥用 | 11.1 | 中 |
 | 11.4 | Docker Compose 一键部署 | ✅ 已完成（PR #70，Issue #69） | 容器化部署 api/qdrant/postgres 三服务 | 无 | 高 |
 | 11.5 | CI/CD 自动化部署 | ✅ 已完成（Issue #81，PR #82） | push 到 main 自动部署 | 11.4 | 中 |
-| 11.6 | 生产安全加固（非 root 容器 + docker secrets + TLS 反代） | ✅ 已完成（PR #103 #105 #104 #106 #107 #102，切片 A-F 全部完成） | 生产级密钥与传输安全 | 11.4 | 高 |
+| 11.6 | 生产安全加固（非 root 容器 + docker secrets + TLS 反代） | ✅ 已完成（PR #103 #105 #104 #106 #107 #108，切片 A-F 全部完成） | 生产级密钥与传输安全 | 11.4 | 高 |
 
 ### 11.1 认证鉴权
 
@@ -272,7 +272,7 @@
 
 ### 11.6 生产安全加固
 
-- **状态**：✅ 已完成（切片 A-F 全部完成，6 个 PR：#103 #105 #104 #106 #107 #102）
+- **状态**：✅ 已完成（切片 A-F 全部完成，6 个 PR：#103 #105 #104 #106 #107 #108）
 - **目标**：把开发级容器部署升级到生产可用——非 root 用户、密钥通过 docker secrets 文件挂载（不入环境变量）、Nginx TLS 反代终止 HTTPS
 - **三个子方向**：
   1. **密钥管理升级**（切片 A #97 + 切片 C #99 + 切片 D #101）：`src/research_rag/secrets.py` 提供 `get_secret(name)` helper 优先读 `{NAME}_FILE` 文件内容（docker secrets 路径）fallback 到 `{NAME}` 环境变量（开发/CI 路径）；5 个文件 8 个密钥读取点从 `os.environ.get(...)` 替换为 `get_secret(...)`；docker-compose.prod.yml 配置 8 个 docker secrets 顶级块 + api/postgres 服务引用 + 7 个 `_FILE` 环境变量；postgres 用官方镜像原生 `POSTGRES_PASSWORD_FILE` 支持
@@ -312,7 +312,7 @@
     - 33 个新增单元测试（`tests/unit/test_deployment_config.py`）：扩展 `_load_yaml` 支持 compose-spec 的 `!reset`/`!override` 自定义 YAML 标签 + `TestNginxConfig`（8 个 nginx.conf 结构断言）+ `TestProdComposeNginxCertbot`（15 个 compose 服务/卷/端口断言）+ `TestNginxEntrypoint`（5 个 nginx entrypoint 结构断言）+ `TestCertbotEntrypoint`（5 个 certbot entrypoint 结构断言）
     - 设计决策：webroot 模式（不停服签发，standalone 需停 nginx）+ nginx 独立 reload cron（避免跨容器信号通信复杂度，6 小时 reload 足够及时）+ 占位自签证书（解决首次启动无证书 nginx 无法启动的鸡生蛋问题）
     - 不在范围：实际证书签发（部署运维文档说明，需真实域名）/ 泛域名 + dns-01 / HTTP/2 或 HTTP/3 / nginx 容器非 root 化
-  - **切片 F #102（已完成，PR #102）**：文档同步收官——ROADMAP.md 标记阶段 11.6 完成 + 新增三个子方向（密钥管理升级 / 非 root 容器 / Nginx TLS 反代）总结 + 设计取舍（UID 65532 / webroot 模式 / docker secrets 方案 A）汇总 + 验收结果汇总；STATUS.md 标记阶段 11.6 完成 + 版本 v2.9 → v3.0；本切片为纯文档变更，无新增测试，905 测试基线零回归
+  - **切片 F #102（已完成，PR #108）**：文档同步收官——ROADMAP.md 标记阶段 11.6 完成 + 新增三个子方向（密钥管理升级 / 非 root 容器 / Nginx TLS 反代）总结 + 设计取舍（UID 65532 / webroot 模式 / docker secrets 方案 A）汇总 + 验收结果汇总；STATUS.md 标记阶段 11.6 完成 + 版本 v2.9 → v3.0；本切片为纯文档变更，无新增测试，905 测试基线零回归
 - **验收**：
   - #97：CI 三项全绿，837 测试通过（830→837，+7 新增）
   - #99：CI 三项全绿，854 测试通过（837→854，+24 新增），830 基线零回归
@@ -320,7 +320,7 @@
   - #101：CI 三项全绿（Lint 12s / Test 28s / Type Check 47s），871 测试通过（861→871，+10 新增），861 基线零回归；docker-compose.prod.yml 含顶级 `secrets:` 块 + 8 secrets 定义 + api 引用 7 + postgres 引用 password + POSTGRES_PASSWORD_FILE 指向 `/run/secrets/postgres_password` + api environment 7 个 _FILE + `.env.docker.secrets.example` 模板；容器行为测试（`ls /run/secrets/` / `env | grep -i key`）需真实 Docker 构建后验证
   - #100：CI 三项全绿，905 测试通过（871→905，+33 新增），871 基线零回归；nginx.conf 含 HTTP/HTTPS server block + ACME webroot + `proxy_pass http://api:8000`；docker-compose.prod.yml 加 nginx/certbot 服务 + 共享 webroot/证书卷 + api 用 `ports: !reset []` 清空 8000 端口；nginx & certbot entrypoint 含 envsubst + 占位自签证书 + crond reload + certbot certonly --webroot + certbot renew cron；容器行为测试（实际证书签发需真实域名）留待部署运维验证
   - #102：CI 三项全绿（纯文档变更，905 测试基线零回归）；ROADMAP.md 阶段 11.6 标记 ✅ 已完成 + 新增三个子方向总结 + 设计取舍汇总 + 验收结果汇总；STATUS.md v2.9 → v3.0 标记阶段 11.6 完成
-  - **阶段 11.6 总计**：6 个切片全部完成，830 → 905 测试（+75 新增，全部零回归），CI 三项全绿；6 个 PR（#103 #105 #104 #106 #107 #102）依次 squash 合并到 main
+  - **阶段 11.6 总计**：6 个切片全部完成，830 → 905 测试（+75 新增，全部零回归），CI 三项全绿；6 个 PR（#103 #105 #104 #106 #107 #108）依次 squash 合并到 main
 - **不在范围**：Vault / SOPS / Sealed Secrets 等外部密钥管理系统（YAGNI，docker secrets 足够当前规模）、双向 TLS（mTLS）、WAF（Web Application Firewall）
 
 ---
