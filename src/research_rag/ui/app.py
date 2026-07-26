@@ -414,8 +414,12 @@ def _handle_question(
             _render_citations_inline(citations)
 
         elapsed_ms = holder["elapsed_ms"]
-        request_id = holder["request_id"]
+        request_id = str(holder["request_id"])
         st.caption(f"耗时 {elapsed_ms} ms | 请求 ID: `{request_id}`")
+
+        # 渲染点赞/点踩按钮（阶段 10.2 前端补充，对接 feedback API）
+        if request_id:
+            _render_feedback_buttons(client, request_id)
 
         # 更新会话状态（done 事件可能回传新的 conversation_id）
         new_conv_id = holder["conversation_id"]
@@ -444,6 +448,93 @@ def _handle_question(
             st.session_state["conversation_messages"] = msgs
             _refresh_conversations()
             st.rerun()
+
+
+def _render_feedback_buttons(client: ApiClient, request_id: str) -> None:
+    """在 assistant 消息气泡内渲染点赞/点踩按钮，对接 feedback API。
+
+    状态管理（``st.session_state``）：
+    - ``feedback-{request_id}``：当前反馈状态（``None`` / ``"like"`` / ``"dislike"``）
+    - ``comment-input-{request_id}``：点踩时的文字评论（可选，最长 2000 字符）
+
+    交互逻辑：
+    - 点击未选按钮：``POST /feedback`` 提交（Upsert 语义自动覆盖之前的选择）
+    - 再次点击已选按钮：``DELETE /feedback/{request_id}`` 撤销
+    - 点踩后展开 ``st.text_area`` 收集评论，提交时再次 POST 带 comment（Upsert 更新）
+
+    Args:
+        client: API 客户端，用于调 feedback 端点。
+        request_id: 关联的问答 request_id（来自 SSE ``done`` 事件）。
+    """
+
+    state_key = f"feedback-{request_id}"
+    current_rating: str | None = st.session_state.get(state_key)
+
+    # 按钮行：点赞 / 点踩（已选时用 primary 高亮）
+    col_like, col_dislike = st.columns(2)
+
+    with col_like:
+        like_clicked = st.button(
+            "👍 点赞",
+            key=f"like-{request_id}",
+            type="primary" if current_rating == "like" else "secondary",
+            use_container_width=True,
+        )
+
+    with col_dislike:
+        dislike_clicked = st.button(
+            "👎 点踩",
+            key=f"dislike-{request_id}",
+            type="primary" if current_rating == "dislike" else "secondary",
+            use_container_width=True,
+        )
+
+    # 处理点赞点击
+    if like_clicked:
+        try:
+            if current_rating == "like":
+                client.delete_feedback(request_id)
+                st.session_state[state_key] = None
+            else:
+                # Upsert：POST 同 request_id 自动覆盖之前的点踩
+                client.submit_feedback(request_id, rating="like")
+                st.session_state[state_key] = "like"
+            st.rerun()
+        except ApiClientError as exc:
+            st.error(f"反馈提交失败：{exc.detail}")
+
+    # 处理点踩点击
+    if dislike_clicked:
+        try:
+            if current_rating == "dislike":
+                client.delete_feedback(request_id)
+                st.session_state[state_key] = None
+                # 清空评论缓存，避免下次点踩时残留
+                st.session_state.pop(f"comment-input-{request_id}", None)
+            else:
+                client.submit_feedback(request_id, rating="dislike")
+                st.session_state[state_key] = "dislike"
+            st.rerun()
+        except ApiClientError as exc:
+            st.error(f"反馈提交失败：{exc.detail}")
+
+    # 点踩后展开评论输入框（可选，Upsert 更新带 comment）
+    if current_rating == "dislike":
+        comment = st.text_area(
+            "告诉我们哪里不好（可选）",
+            key=f"comment-input-{request_id}",
+            max_chars=2000,
+            height=80,
+        )
+        if st.button("提交评论", key=f"submit-comment-{request_id}"):
+            if comment and comment.strip():
+                try:
+                    client.submit_feedback(request_id, rating="dislike", comment=comment.strip())
+                    st.success("评论已提交，感谢反馈！")
+                except ApiClientError as exc:
+                    st.error(f"评论提交失败：{exc.detail}")
+            else:
+                st.warning("评论不能为空")
 
 
 def _render_citations_inline(citations: list[Citation]) -> None:

@@ -212,6 +212,36 @@ class ConversationInfo:
     messages: list[MessageInfo] | None = None
 
 
+# ---------------------------------------------------------------------------
+# 用户反馈（阶段 10.2 用户反馈闭环）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FeedbackInfo:
+    """反馈信息（对应 API 的 ``FeedbackRead`` schema）。
+
+    Attributes:
+        id: 反馈记录 UUID。
+        request_id: 关联的问答 request_id（来自 ``QueryResult.request_id`` 或
+            SSE ``done`` 事件，原样回传）。
+        message_id: 关联的 assistant 消息 UUID（可空）。多轮场景下传
+            ``Message.id`` 便于按会话筛选；单轮问答为 ``None``。
+        rating: 反馈类型（``"like"`` / ``"dislike"``）。
+        comment: 文字评论（可空）。点踩时收集原因。
+        created_at: 创建时间（ISO 字符串）。
+        updated_at: 更新时间（ISO 字符串），Upsert 更新时由 ORM ``onupdate`` 维护。
+    """
+
+    id: str
+    request_id: str
+    message_id: str | None
+    rating: str
+    comment: str | None
+    created_at: str
+    updated_at: str
+
+
 class ApiClient:
     """FastAPI HTTP 客户端封装。
 
@@ -496,6 +526,59 @@ class ApiClient:
         items = data if isinstance(data, list) else data.get("items", [])
         return [_parse_message(item) for item in items]
 
+    # ------------------------------------------------------------------
+    # 用户反馈（阶段 10.2 前端补充，对接 POST/DELETE /feedback）
+    # ------------------------------------------------------------------
+
+    def submit_feedback(
+        self,
+        request_id: str,
+        rating: str,
+        message_id: str | None = None,
+        comment: str | None = None,
+    ) -> FeedbackInfo:
+        """提交反馈（POST /feedback，Upsert 语义）。
+
+        - ``request_id`` 不存在：创建反馈记录，API 返回 201。
+        - ``request_id`` 已存在：更新 ``rating`` / ``message_id`` / ``comment``，
+          API 返回 200。Upsert 让 like↔dislike 切换无需 PATCH 端点。
+
+        Args:
+            request_id: 关联的问答 request_id（来自 ``QueryResult.request_id``
+                或 SSE ``done`` 事件，原样回传）。
+            rating: 反馈类型（``"like"`` / ``"dislike"``）。后端 ``FeedbackRating``
+                枚举会校验非法值（API 返回 422）。
+            message_id: 关联的 assistant 消息 UUID（可选）。多轮场景下传
+                ``Message.id`` 便于按会话筛选；单轮问答为 ``None``。
+            comment: 文字评论（可选，最长 2000 字符）。点踩时收集原因。
+
+        Returns:
+            反馈信息（含 ``id`` / ``created_at`` / ``updated_at``）。
+
+        Raises:
+            ApiClientError: 422（rating 非法 / comment 超长）/ 0（网络错误）。
+        """
+
+        payload: dict[str, Any] = {"request_id": request_id, "rating": rating}
+        if message_id is not None:
+            payload["message_id"] = message_id
+        if comment is not None:
+            payload["comment"] = comment
+
+        response = self._request("POST", "/feedback", json=payload)
+        return _parse_feedback(response.json())
+
+    def delete_feedback(self, request_id: str) -> None:
+        """撤销反馈（DELETE /feedback/{request_id}）。
+
+        不存在抛 ``ApiClientError``（404），成功无返回（204）。
+
+        Args:
+            request_id: 关联的问答 request_id。
+        """
+
+        self._request("DELETE", f"/feedback/{request_id}")
+
 
 def _parse_document(data: Mapping[str, Any]) -> DocumentInfo:
     """从 API 响应 JSON 解析 ``DocumentInfo``。"""
@@ -541,6 +624,25 @@ def _parse_message(data: Mapping[str, Any]) -> MessageInfo:
         content=str(data["content"]),
         citations=citations,
         created_at=str(data.get("created_at", "")),
+    )
+
+
+def _parse_feedback(data: Mapping[str, Any]) -> FeedbackInfo:
+    """从 API 响应 JSON 解析 ``FeedbackInfo``。
+
+    ``message_id`` / ``comment`` 后端可能返回 ``None`` 或缺省，统一为 ``None``。
+    """
+
+    message_id = data.get("message_id")
+    comment = data.get("comment")
+    return FeedbackInfo(
+        id=str(data["id"]),
+        request_id=str(data["request_id"]),
+        message_id=str(message_id) if message_id is not None else None,
+        rating=str(data["rating"]),
+        comment=str(comment) if isinstance(comment, str) else None,
+        created_at=str(data.get("created_at", "")),
+        updated_at=str(data.get("updated_at", "")),
     )
 
 
