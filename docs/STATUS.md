@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v2.4` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None，822 条测试通过，CI 三项全绿。
+`v2.5` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成，830 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -80,7 +80,8 @@
 - **前端补充**（PR #87 / Issue #86）：`ApiClient.submit_feedback` / `delete_feedback` 封装 POST/DELETE；`_render_feedback_buttons` 在 assistant 气泡内渲染点赞/点踩按钮，状态缓存在 `st.session_state`，Upsert 语义切换赞↔踩，再次点击撤销 DELETE，点踩后展开 `st.text_area` 收集文字评论；9 个新增单元测试（`TestSubmitFeedback` 6 + `TestDeleteFeedback` 3）
 - **历史消息反馈 prefactor**（PR #93 / Issue #89）：`Message` 表新增可空 `request_id` 列（唯一索引）+ Alembic 迁移 `b8f2a3c4d5e6` + ADR 0001 标记 Superseded + ADR 0003 新写 + CONTEXT.md 术语微调；7 个新增单元测试（4 模型层 + 3 迁移层）
 - **历史消息反馈写入读出**（PR #94 / Issue #90）：`_persist_turn` 加 `request_id` 必填参数，`answer` / `answer_stream` 两条路径透传到 assistant `Message`（user 消息不写）；`ConversationRepository.add_message` 签名加可选 `request_id: uuid.UUID | None = None`（保持 ORM 写入唯一入口约定）；`MessageRead` schema 加 `request_id: uuid.UUID | None`，`GET /api/v1/conversations/{id}/messages` 响应自动携带；5 个新增单元测试（写入路径 3 + 读出路径 1 + repository 签名 1）
-- **历史消息反馈前端 model+client**（PR #95 / Issue #91）：`MessageInfo` dataclass 加 `request_id: str | None = None` 字段，`_parse_message` 从 API 响应 dict 解析 `request_id`（缺失时 None，兼容 user 消息与迁移前旧消息）；新增 `ApiClient.get_feedback(request_id) -> FeedbackInfo | None` 封装 `GET /api/v1/feedback/{request_id}`：200 返回 `FeedbackInfo`，404 返回 `None`（不抛异常，前端用 None 表示「未反馈」），其他 HTTP 错误仍抛 `ApiClientError`（仅 404 转 None，避免掩盖 401/500 等真实错误）；同步更新 `make_message_dict` helper 加 `request_id` 键；5 个新增单元测试（`MessageInfo.request_id` 解析 2 + `get_feedback` 三分支 3）；剩余切片 #92（UI 渲染 + 交互）跟踪
+- **历史消息反馈前端 model+client**（PR #95 / Issue #91）：`MessageInfo` dataclass 加 `request_id: str | None = None` 字段，`_parse_message` 从 API 响应 dict 解析 `request_id`（缺失时 None，兼容 user 消息与迁移前旧消息）；新增 `ApiClient.get_feedback(request_id) -> FeedbackInfo | None` 封装 `GET /api/v1/feedback/{request_id}`：200 返回 `FeedbackInfo`，404 返回 `None`（不抛异常，前端用 None 表示「未反馈」），其他 HTTP 错误仍抛 `ApiClientError`（仅 404 转 None，避免掩盖 401/500 等真实错误）；同步更新 `make_message_dict` helper 加 `request_id` 键；5 个新增单元测试（`MessageInfo.request_id` 解析 2 + `get_feedback` 三分支 3）
+- **历史消息反馈前端 UI 渲染**（PR #96 / Issue #92）：`_render_feedback_buttons` 从「仅新消息」扩展到 `conversation_messages` 历史消息循环，历史会话中的 assistant 消息显示反馈按钮并正确初始化状态；旧消息（`request_id=None`）隐藏按钮（点击必然 404，体验差）；新增 `_init_feedback_state_for_history` 纯函数批量初始化反馈状态（进入历史会话时查询每条 assistant 消息的反馈状态写入 `session_state[f"feedback-{request_id}"]`，已有状态不覆盖避免 rerun 时丢失用户本会话刚操作的反馈）；提取 `_should_render_feedback_for_message` 与 `_feedback_state_key` 纯函数消除重复；修复 `_handle_question` 追加 assistant 消息时未传 `request_id` 的遗漏（否则 `st.rerun()` 后这条消息的 `request_id` 是 None，反馈按钮消失）；mypy strict 类型用 `cast("MutableMapping[str, object]", st.session_state)` 桥接 streamlit `SessionStateProxy` 与函数声明的接口类型；8 个新增单元测试（`_init_feedback_state_for_history` 五分支 5 + `_should_render_feedback_for_message` 三分支 3）；历史消息反馈端到端体验闭环完成
 
 ### 性能优化
 
@@ -182,7 +183,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：822 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个）
+- pytest：830 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个、#92 历史消息反馈前端 UI 渲染新增 8 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -196,7 +197,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 后续可选方向
 
-- 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩—— **prefactor 已完成**（PR #93 / Issue #89：`Message.request_id` 列 + ADR 0003）；**写入读出已完成**（PR #94 / Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展）；剩余切片 #91（前端 `MessageInfo` + `ApiClient.get_feedback`）/ #92（`_render_feedback_buttons` 扩展到历史消息）跟踪
+- 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩—— **prefactor 已完成**（PR #93 / Issue #89：`Message.request_id` 列 + ADR 0003）；**写入读出已完成**（PR #94 / Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展）；**前端 model+client 已完成**（PR #95 / Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）；**前端 UI 渲染已完成**（PR #96 / Issue #92：`_render_feedback_buttons` 扩展到历史消息 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮）；历史消息反馈端到端体验闭环完成
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
 - 生产级安全加固：非 root 容器用户、密钥管理（Vault/secrets manager）、TLS 终止（Nginx 反代）
 - 表格感知切分与公式识别（阶段 12）
