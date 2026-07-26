@@ -326,11 +326,19 @@ def _render_chat(client: ApiClient) -> None:
 
     # 渲染历史消息
     msgs: list[MessageInfo] = st.session_state.get("conversation_messages", [])
+    # 批量初始化历史消息反馈状态（Issue #92）：进入历史会话时查询每条
+    # assistant 消息的反馈状态，供 _render_feedback_buttons 读取初始高亮。
+    # 已有状态不覆盖（用户本会话刚操作的反馈保留）。
+    _init_feedback_state_for_history(client, msgs, st.session_state)
     for msg in msgs:
         with st.chat_message(msg.role):
             st.write(msg.content)
             if msg.citations:
                 _render_citations_inline(msg.citations)
+            # 历史消息反馈按钮（Issue #92）：仅 assistant 消息且有 request_id 时渲染。
+            # 旧消息（request_id=None）隐藏按钮——点击必然 404，体验差。
+            if msg.role == "assistant" and msg.request_id:
+                _render_feedback_buttons(client, msg.request_id)
 
     # 底部输入框（回车发送，自动清空）
     question = st.chat_input("输入你的问题，回车发送…")
@@ -442,12 +450,46 @@ def _handle_question(
                     role="assistant",
                     content=answer,
                     citations=citations,
+                    request_id=request_id,
                     created_at="",
                 )
             )
             st.session_state["conversation_messages"] = msgs
             _refresh_conversations()
             st.rerun()
+
+
+def _init_feedback_state_for_history(
+    client: ApiClient,
+    messages: list[MessageInfo],
+    session_state: dict[str, object],
+) -> None:
+    """批量初始化历史会话消息的反馈状态到 ``session_state``。
+
+    进入历史会话时调用：对每条有 ``request_id`` 的 assistant 消息，查询
+    ``get_feedback`` 反馈状态，写入 ``session_state[f"feedback-{request_id}"]``
+    （``None`` / ``"like"`` / ``"dislike"``），供 ``_render_feedback_buttons``
+    读取初始按钮高亮状态。
+
+    旧消息（``request_id=None``）与 user 消息跳过（不写 key，不调
+    ``get_feedback``）。``session_state`` 已有同 key 时不覆盖，避免 rerun
+    时丢失用户刚操作的反馈。
+
+    Args:
+        client: API 客户端，用于调 ``get_feedback``。
+        messages: 历史会话消息列表（user + assistant 交替）。
+        session_state: Streamlit ``st.session_state``（或测试用的普通 dict）。
+    """
+
+    for msg in messages:
+        if msg.request_id is None:
+            continue
+        state_key = f"feedback-{msg.request_id}"
+        if state_key in session_state:
+            # 已有状态（用户本会话刚操作过），不覆盖
+            continue
+        feedback = client.get_feedback(msg.request_id)
+        session_state[state_key] = feedback.rating if feedback is not None else None
 
 
 def _render_feedback_buttons(client: ApiClient, request_id: str) -> None:
