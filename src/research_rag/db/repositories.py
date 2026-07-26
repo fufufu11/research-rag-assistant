@@ -266,6 +266,7 @@ class ConversationRepository:
         role: MessageRole,
         content: str,
         citations: Sequence[dict[str, object]] | None = None,
+        request_id: uuid.UUID | None = None,
     ) -> Message:
         """追加一条 Message 到指定会话并持久化（flush，不 commit）。
 
@@ -275,6 +276,9 @@ class ConversationRepository:
             content: 消息文本。``assistant`` 消息含 ``[C1]`` 等引用标记原文。
             citations: ``assistant`` 消息的引用元数据快照（list[dict]），结构
                 对齐 ``CitationRead`` schema。``user`` 消息传 ``None``。
+            request_id: ``assistant`` 消息关联的问答 ``request_id``（ADR 0003）。
+                ``user`` 消息与旧消息（迁移前）传 ``None``。多条 ``None`` 不冲突
+                （SQL 标准对 NULL 的唯一约束语义）。
         """
 
         msg = Message(
@@ -282,6 +286,7 @@ class ConversationRepository:
             role=role,
             content=content,
             citations=list(citations) if citations is not None else None,
+            request_id=request_id,
         )
         self.session.add(msg)
         self.session.flush()

@@ -237,6 +237,36 @@ def test_add_message_assistant_with_citations(repo: ConversationRepository) -> N
     assert msg.citations == citations_snapshot
 
 
+def test_add_message_with_request_id_persists_and_defaults_to_none(
+    repo: ConversationRepository,
+) -> None:
+    """add_message：``request_id`` 可选参数，传入则持久化，未传默认 None（ADR 0003）。
+
+    验证 repository 层签名扩展：``request_id`` 作为可选参数加到 ``add_message``，
+    避免在 service 层手填 ORM 属性（保持 repository 作为 ORM 写入唯一入口）。
+    """
+
+    conv = repo.create()
+    request_id = uuid.uuid4()
+
+    # assistant 消息传 request_id → 持久化
+    assistant_msg = repo.add_message(
+        conv.id,
+        role=MessageRole.ASSISTANT,
+        content="答案 [C1]。",
+        request_id=request_id,
+    )
+    assert assistant_msg.request_id == request_id
+
+    # user 消息不传 request_id → 默认 None（兼容现有调用点）
+    user_msg = repo.add_message(
+        conv.id,
+        role=MessageRole.USER,
+        content="问题",
+    )
+    assert user_msg.request_id is None
+
+
 # ---------------------------------------------------------------------------
 # list_messages
 # ---------------------------------------------------------------------------
