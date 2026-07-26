@@ -1,0 +1,76 @@
+import type { DocumentList } from "./types";
+
+// ApiClient：封装后端 REST API 调用。
+// 设计取舍（ADR 0005）：
+// - 用 fetch + ReadableStream，不引入 axios，减少依赖
+// - baseUrl 默认空字符串（dev 走 vite proxy，prod 同源托管）
+// - API key 从 localStorage 读，未设置则不发 Authorization header
+// - 非 2xx 抛 ApiClientError，含 status + detail 便于上层处理
+//
+// T1 范围：仅实现 listDocuments 健康检查。CRUD 方法在 T3-T7 各 ticket 引入时
+// 再加，遵循 YAGNI（不提前声明 stub）。
+export class ApiClientError extends Error {
+  readonly status: number;
+  readonly detail: string;
+
+  constructor(status: number, detail: string) {
+    super(`API error ${status}: ${detail}`);
+    this.name = "ApiClientError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+const API_KEY_STORAGE_KEY = "rag_api_key";
+
+export class ApiClient {
+  readonly baseUrl: string;
+  readonly apiKey: string | null;
+
+  constructor(options?: { baseUrl?: string; apiKey?: string | null }) {
+    this.baseUrl = options?.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? "";
+    this.apiKey =
+      options?.apiKey !== undefined
+        ? options.apiKey
+        : window.localStorage.getItem(API_KEY_STORAGE_KEY);
+  }
+
+  private buildHeaders(extra?: HeadersInit): Headers {
+    const headers = new Headers({
+      Accept: "application/json",
+      ...(extra as HeadersInit | undefined),
+    });
+    if (this.apiKey) {
+      headers.set("Authorization", `Bearer ${this.apiKey}`);
+    }
+    return headers;
+  }
+
+  private buildUrl(path: string): string {
+    return `${this.baseUrl}${path}`;
+  }
+
+  private async request<T>(path: string, init: RequestInit): Promise<T> {
+    const response = await fetch(this.buildUrl(path), {
+      ...init,
+      headers: this.buildHeaders(init.headers),
+    });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        const body = (await response.json()) as { detail?: string };
+        if (body.detail) detail = body.detail;
+      } catch {
+        // 响应体非 JSON，用 statusText
+      }
+      throw new ApiClientError(response.status, detail);
+    }
+    return (await response.json()) as T;
+  }
+
+  // 健康检查：列出文档（GET /api/v1/documents）。
+  // T1 阶段仅验证前后端连通性。
+  async listDocuments(): Promise<DocumentList> {
+    return this.request<DocumentList>("/api/v1/documents", { method: "GET" });
+  }
+}

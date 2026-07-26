@@ -74,12 +74,6 @@ dependencies = [
     # ② Nginx limit_req（仅部署层生效，开发/测试环境无 Nginx，且无法按 API Key 限流）。
     # RATE_LIMIT_ENABLED 环境变量开关，默认禁用（开发友好，保护现有 720+ 测试）。
     "slowapi>=0.1.9",
-    # 阶段 6 引入：HTTP 客户端，供 Streamlit UI 层调用 FastAPI API。
-    # 必要性：requests 是同步 HTTP 客户端，与 Streamlit 的同步执行模型匹配，
-    # API 简单直观，便于在单元测试中用 monkeypatch 替换。
-    # 替代方案：① httpx → 已作为 TestClient 传递依赖存在，但同步/异步 API
-    # 混用增加学习成本；② urllib → 标准库但 API 冗长，无自动 JSON 解析。
-    "requests>=2.32",
     # 阶段 8.3 引入：BM25 稀疏检索，与向量检索融合（Hybrid Retrieval）。
     # 必要性：rank_bm25 是纯 Python 实现的 BM25Okapi，无重依赖（不依赖 torch），
     # 体积小（约 50KB），适合生产路径默认启用。对关键词列表、数值、公式类
@@ -98,11 +92,6 @@ dependencies = [
     # ② asyncpg → 仅异步，与当前同步 Session 路径不匹配。
     # 本地开发用 SQLite 不受影响（装了也不加载）。
     "psycopg[binary]>=3.1",
-    # 演示界面框架：Streamlit 适合数据/AI 应用的快速原型，内置文件上传、表格、
-    # 文本输入等组件，无需前端构建工具链即可跑通浏览器交互流程。
-    # 替代方案：① Gradio → 同类但交互模型偏 ML demo；② 纯 HTML+JS →
-    # 需要前端构建；③ FastAPI 模板 → 静态。
-    "streamlit>=1.40",
     # 阶段 5 引入：ASGI 服务器，运行 FastAPI 应用。
     # 必要性：FastAPI 本身只是 ASGI 应用，需要 ASGI 服务器才能启动；
     # `uv run uvicorn research_rag.api.app:create_app --factory --reload` 启动开发服务必需。
@@ -221,15 +210,9 @@ module = "tests.*"
 disallow_untyped_defs = false
 strict = false
 
-# Streamlit 的类型标注不完整（部分 API 缺少类型信息），忽略缺失导入避免 CI 误报。
-# 仅影响 ui/app.py（演示界面入口），不影响业务代码类型安全。
-[[tool.mypy.overrides]]
-module = ["streamlit.*"]
-ignore_missing_imports = true
-
 # sentence_transformers 是可选依赖（embedding extra），CI 只装 dev extra 不装它，
 # 且该库无 type stubs。reranker.py 在运行时惰性导入 CrossEncoder，mypy 静态检查
-# 时找不到该模块会报 import-not-found。与 streamlit 同理，忽略缺失导入。
+# 时找不到该模块会报 import-not-found。与 sentence_transformers 同理，忽略缺失导入。
 [[tool.mypy.overrides]]
 module = ["sentence_transformers.*"]
 ignore_missing_imports = true
@@ -244,7 +227,7 @@ ignore_missing_imports = true
 # langfuse 是阶段 10.1 引入的可观测性 SDK（主依赖）。该库无完整 type stubs，
 # mypy 静态检查时找不到模块部分子模块会报 import-not-found。observability.py
 # 与 services/qa_service.py 运行时惰性导入 langfuse.decorators / langfuse.callback，
-# 忽略缺失导入避免 CI 误报（与 streamlit / sentence_transformers 同策略）。
+# 忽略缺失导入避免 CI 误报（与 sentence_transformers / rank_bm25 同策略）。
 [[tool.mypy.overrides]]
 module = ["langfuse.*"]
 ignore_missing_imports = true
@@ -252,7 +235,7 @@ ignore_missing_imports = true
 # slowapi 是阶段 11.3 引入的限流库（主依赖）。该库无完整 type stubs，
 # mypy 静态检查时找不到模块会报 import-not-found。rate_limit.py 运行时
 # 导入 slowapi.Limiter / slowapi.middleware / slowapi.errors，忽略缺失导入
-# 避免 CI 误报（与 langfuse / streamlit 同策略）。
+# 避免 CI 误报（与 langfuse / sentence_transformers 同策略）。
 [[tool.mypy.overrides]]
 module = ["slowapi.*"]
 ignore_missing_imports = true
