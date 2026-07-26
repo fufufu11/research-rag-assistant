@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）+ 历史消息反馈前端 UI 渲染（Issue #92：`_render_feedback_buttons` 扩展到历史消息 + 旧消息隐藏按钮 + `_init_feedback_state_for_history` 批量初始化反馈状态）+ 阶段 11.6 生产安全加固（切片 A #97：`secrets.py` helper + 切片 B #98：非 root 容器 Dockerfile 改造 + 切片 C #99：8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持 + 切片 D #101：docker-compose.prod.yml 配置 8 个 docker secrets 挂载 + `.env.docker.secrets.example` 示例文件 + 切片 E #100：nginx + certbot 容器化 + TLS 反代 Let's Encrypt webroot 模式 + 切片 F #102：文档同步收官）
-- **测试**：905 个单元测试通过（含 #97 新增 7 个 + #99 新增 24 个 + #98 新增 7 个 + #101 新增 10 个 + #100 新增 33 个：observability/llm_config/answer_evaluation/auth/embedding/embedding_config/deployment_config 七个文件的 `_FILE` 优先与 fallback env 路径覆盖 + Dockerfile/entrypoint.sh 非 root 改造的文件结构验证 + docker-compose.prod.yml docker secrets 配置结构与 .env.docker.secrets.example 模板验证 + nginx.conf / docker-compose.prod.yml nginx+certbot 服务 / nginx & certbot entrypoint 结构断言）
+- **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化阶段一（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）+ 历史消息反馈前端 UI 渲染（Issue #92：`_render_feedback_buttons` 扩展到历史消息 + 旧消息隐藏按钮 + `_init_feedback_state_for_history` 批量初始化反馈状态）+ 阶段 11.6 生产安全加固（切片 A #97：`secrets.py` helper + 切片 B #98：非 root 容器 Dockerfile 改造 + 切片 C #99：8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持 + 切片 D #101：docker-compose.prod.yml 配置 8 个 docker secrets 挂载 + `.env.docker.secrets.example` 示例文件 + 切片 E #100：nginx + certbot 容器化 + TLS 反代 Let's Encrypt webroot 模式 + 切片 F #102：文档同步收官）+ **UI 体验优化阶段二**（基于 ChatGPT 界面截图的二轮迭代：#109 左侧导航重构-图标分组+可折叠会话/文档列表 + #112 输入栏「+」上传按钮+底部免责声明 + #111 对话区居中+宽度收窄布局 + #113 AI 回复复制按钮 + #110 顶部模型选择下拉占位，5 个 ticket 全部 squash 合并到 main，905 → 938 测试零回归）
+- **测试**：938 个单元测试通过（含 #97 新增 7 个 + #99 新增 24 个 + #98 新增 7 个 + #101 新增 10 个 + #100 新增 33 个：observability/llm_config/answer_evaluation/auth/embedding/embedding_config/deployment_config 七个文件的 `_FILE` 优先与 fallback env 路径覆盖 + Dockerfile/entrypoint.sh 非 root 改造的文件结构验证 + docker-compose.prod.yml docker secrets 配置结构与 .env.docker.secrets.example 模板验证 + nginx.conf / docker-compose.prod.yml nginx+certbot 服务 / nginx & certbot entrypoint 结构断言 + UI 体验优化阶段二 5 个 ticket 新增 33 个：#109 nav_state +6 / #112 upload +8 / #111 chat_layout +5 / #113 copy_button +8 / #110 model_dropdown +6）
 - **CI**：ruff format + ruff check + mypy + pytest 三项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -322,6 +322,96 @@
   - #102：CI 三项全绿（纯文档变更，905 测试基线零回归）；ROADMAP.md 阶段 11.6 标记 ✅ 已完成 + 新增三个子方向总结 + 设计取舍汇总 + 验收结果汇总；STATUS.md v2.9 → v3.0 标记阶段 11.6 完成
   - **阶段 11.6 总计**：6 个切片全部完成，830 → 905 测试（+75 新增，全部零回归），CI 三项全绿；6 个 PR（#103 #105 #104 #106 #107 #108）依次 squash 合并到 main
 - **不在范围**：Vault / SOPS / Sealed Secrets 等外部密钥管理系统（YAGNI，docker secrets 足够当前规模）、双向 TLS（mTLS）、WAF（Web Application Firewall）
+
+---
+
+## UI 体验优化阶段二（#109-#113）
+
+基于 ChatGPT 界面截图的二轮 UI 迭代。阶段一（Issue #72）建立了 ChatGPT 风格的左右分栏基础布局；本阶段在此基础上做 5 项体验改进，全部 squash 合并到 main。
+
+| 序号 | 任务 | 状态 | 预期收益 | 依赖 | 优先级 |
+|---|---|---|---|---|---|
+| #109 | 左侧导航重构（图标分组+可折叠会话/文档列表） | ✅ 已完成（commit `5b6cbef`） | 信息密度提升 + 视觉层次清晰 | 无 | 高 |
+| #112 | 输入栏「+」上传按钮+底部免责声明 | ✅ 已完成（commit `e589cc0`） | 上传统一入口 + 风险提示 | #109 | 高 |
+| #111 | 对话区居中+宽度收窄布局 | ✅ 已完成（commit `012624a`） | 宽屏下阅读体验改善 | 无 | 中 |
+| #113 | AI 回复复制按钮 | ✅ 已完成（PR #117，commit `9aba590`） | 一键复制答案 | 无 | 中 |
+| #110 | 顶部模型选择下拉（占位） | ✅ 已完成（PR #118，commit `cc27531`） | 视觉占位 + 真切换预留接口 | 无 | 低 |
+
+### #109 左侧导航重构
+
+- **状态**：✅ 已完成（commit `5b6cbef`）
+- **目标**：左侧导航视觉密度过高、信息层次不清——重构为图标分组 + 可折叠列表
+- **技术方案**：
+  - 新增 `_render_nav_section` / `_is_nav_section_expanded` / `_is_sidebar_collapsed` 纯函数
+  - 上层分组：新建会话 / 搜索会话 / 历史会话列表（可折叠，默认展开）/ 文档列表（可折叠，默认展开，支持选择/删除但不上传）
+  - 下层分组：设置 / 帮助
+  - 折叠状态缓存到 `st.session_state`，rerun 时保留
+- **设计取舍**：
+  - **文档上传移到输入栏**：本 ticket 只做导航重构，上传入口移除留给 #112 输入栏「+」按钮统一接管，避免双入口
+  - **可折叠默认展开**：常用列表（历史会话/文档）默认展开降低首次访问成本，次要列表（设置/帮助）放底部下层分组
+- **验收**：6 个新增单元测试（`tests/unit/test_ui_nav_state.py`）覆盖 `_render_nav_section` / `_is_nav_section_expanded` / `_is_sidebar_collapsed` 行为路径
+
+### #112 输入栏「+」上传按钮+底部免责声明
+
+- **状态**：✅ 已完成（commit `e589cc0`）
+- **目标**：上传入口统一到输入栏 + 底部加风险提示免责声明
+- **技术方案**：
+  - 新增 `_render_input_toolbar` / `_is_valid_pdf_filename` 纯函数 + `_UPLOAD_DISCLAIMER` 常量
+  - 输入栏左侧「+」按钮触发 PDF 上传（与 #109 配合：#109 移除左侧导航上传入口，#112 在输入栏接管）
+  - 底部免责声明：「AI 可能出错，请核查重要信息」
+  - `_is_valid_pdf_filename` 做前端白名单校验（仅 `.pdf`），与后端 `api/security.py` 双重白名单形成纵深防御
+- **设计取舍**：
+  - **免责声明放底部而非每次问答后**：避免对用户造成持续打断，与 ChatGPT 一致
+  - **前端校验只是 UX 改善**：真正安全靠后端 `validate_upload_file`，前端校验绕过不构成安全风险
+- **验收**：8 个新增单元测试（`tests/unit/test_ui_upload.py`）覆盖 `_render_input_toolbar` / `_is_valid_pdf_filename` / `_UPLOAD_DISCLAIMER` 内容
+
+### #111 对话区居中+宽度收窄布局
+
+- **状态**：✅ 已完成（commit `012624a`）
+- **目标**：宽屏下对话气泡横向铺满导致阅读疲劳——居中 + 最大宽度收窄
+- **技术方案**：
+  - 新增 `_get_chat_layout_css` 纯函数返回 CSS 字符串
+  - 用 `st.markdown(..., unsafe_allow_html=True)` 注入 `<style>` 块覆盖 Streamlit 默认布局
+  - 对话区最大宽度收窄到 ~768px（与 ChatGPT 一致），居中显示
+- **设计取舍**：
+  - **CSS 注入而非 Streamlit 原生布局参数**：Streamlit 不暴露 column max-width 控制，CSS 注入是社区惯用法
+  - **只收窄对话区不收窄侧栏**：侧栏信息密度高，保持默认宽度
+- **验收**：5 个新增单元测试（`tests/unit/test_ui_chat_layout.py`）覆盖 `_get_chat_layout_css` 返回内容关键字断言
+
+### #113 AI 回复复制按钮
+
+- **状态**：✅ 已完成（PR #117，commit `9aba590`）
+- **目标**：用户需手动选中文本复制，体验差——加一键复制按钮
+- **技术方案**：
+  - 新增 `_render_copy_button` / `_strip_markdown_to_plain_text` 纯函数
+  - 用 `streamlit.components.v1.html` 注入 `<button>` + `navigator.clipboard.writeText` JS
+  - 复制成功后 Toast 提示（`streamlit.components.v1.html` 注入 `alert()` 简单实现，避免引入 streamlit-toast 等额外依赖）
+  - 复制内容为剥离 Markdown 标记后的纯文本（`_strip_markdown_to_plain_text` 用正则去 `**bold**` / `*italic*` / `[text](url)` / `` `code` `` 等标记）
+- **设计取舍**：
+  - **复制纯文本而非 Markdown 源文本**：用户粘贴到 Word/微信等场景下纯文本更通用，Markdown 源文本对普通用户无意义
+  - **用 `navigator.clipboard.writeText` 而非 `document.execCommand('copy')`**：前者是现代浏览器标准 API，后者已 deprecated
+  - **不用 `st.button` 而用 `components.v1.html`**：`st.button` 点击会触发 rerun，破坏流式输出体验
+- **验收**：8 个新增单元测试（`tests/unit/test_ui_copy_button.py`）覆盖 `_render_copy_button` HTML 结构 + `_strip_markdown_to_plain_text` 5 类标记剥离
+
+### #110 顶部模型选择下拉（占位）
+
+- **状态**：✅ 已完成（PR #118，commit `cc27531`）
+- **目标**：顶部加模型选择下拉占位，让用户知道「未来可切换模型」
+- **技术方案**：
+  - 新增 `_render_model_dropdown` / `_get_current_model_name` / `_get_model_dropdown_options` 纯函数
+  - `st.selectbox` + `disabled=True` 单元素 options 实现「展示但不切换」的占位下拉
+  - `_get_current_model_name` 从 `LLM_MODEL` 环境变量读当前模型名（fallback `"deepseek-chat"`）
+  - `_get_model_dropdown_options` 返回 `[当前模型名]` 单元素列表（占位模式下 options 只有一个）
+- **设计取舍**：
+  - **占位而非真切换**：真切换需后端补 `/api/v1/config` 端点返回可用模型列表 + 用户偏好持久化，独立 issue 处理；本 ticket 只做 UI 占位避免阻塞
+  - **`disabled=True` 而非「假按钮」**：selectbox 视觉与未来真切换一致，避免占位变成「装饰按钮」被误以为是其他功能
+- **验收**：6 个新增单元测试（`tests/unit/test_ui_model_dropdown.py`）覆盖 `_render_model_dropdown` + `_get_current_model_name` 环境变量路径 + `_get_model_dropdown_options` 单元素列表
+
+### 阶段二总计
+
+- **5 个 ticket 全部完成**，905 → 938 测试（+33 新增，零回归），CI 三项全绿
+- **5 个 PR 依次 squash 合并到 main**：#109 → #112 → #111 → #113 (PR #117) → #110 (PR #118)
+- **不在范围**：模型真切换（需后端补 `/api/v1/config` 端点）、用户登录页（需 JWT 用户系统）、移动端响应式适配、暗色模式
 
 ---
 
