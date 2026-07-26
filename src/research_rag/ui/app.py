@@ -42,6 +42,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import TYPE_CHECKING, cast
 
@@ -111,6 +112,63 @@ def _is_sidebar_collapsed(session_state: MutableMapping[str, object]) -> bool:
     """
 
     return bool(session_state.get("sidebar-collapsed", False))
+
+
+# 顶部模型选择下拉占位（Issue #110）
+_DEFAULT_MODEL_NAME = "research-rag"
+
+
+def _get_current_model_name() -> str:
+    """读取当前模型名用于顶部下拉展示（Issue #110 占位）。
+
+    优先从 ``os.environ.get("LLM_MODEL")`` 读，未设置或为空时 fallback
+    到占位字符串 ``"research-rag"``。本次为占位展示，后续后端补端点后
+    再接真切换逻辑。
+
+    Returns:
+        模型展示名。
+    """
+
+    return os.environ.get("LLM_MODEL") or _DEFAULT_MODEL_NAME
+
+
+def _get_model_dropdown_options(model_name: str) -> list[str]:
+    """构造模型选择下拉的选项列表（Issue #110 占位）。
+
+    本次为占位展示，只有一项 ``"当前模型：{model_name}"``，不提供真切换。
+    后续后端补 ``/api/v1/config`` 端点支持运行时切换后，再扩展为多模型列表。
+
+    Args:
+        model_name: 当前模型名（由 ``_get_current_model_name`` 读取）。
+
+    Returns:
+        单元素列表，用于 ``st.selectbox``。
+    """
+
+    return [f"当前模型：{model_name}"]
+
+
+def _render_model_dropdown() -> None:
+    """渲染顶部模型选择下拉（占位，Issue #110）。
+
+    在右侧聊天区顶部渲染 ``st.selectbox``，只展示当前模型名，不提供真
+    切换（``disabled=True``）。后续后端补 ``/api/v1/config`` 端点支持
+    运行时切换后，再扩展为多模型列表 + 移除 ``disabled``。
+
+    模型名从 ``_get_current_model_name`` 读取（环境变量 ``LLM_MODEL``，
+    fallback ``"research-rag"``）。
+    """
+
+    model_name = _get_current_model_name()
+    options = _get_model_dropdown_options(model_name)
+    st.selectbox(
+        "模型",
+        options=options,
+        index=0,
+        disabled=True,
+        label_visibility="collapsed",
+        key="model-dropdown-placeholder",
+    )
 
 
 # 输入栏下方免责声明（Issue #112）
@@ -506,6 +564,9 @@ def _render_chat(client: ApiClient) -> None:
     if not ready_docs:
         st.info("暂无可用文档（状态为「就绪」），请点击下方输入栏「➕」上传 PDF。")
         return
+
+    # 顶部模型选择下拉（占位，Issue #110）
+    _render_model_dropdown()
 
     current_conv_id: str | None = st.session_state.get("current_conversation_id")
     current_conv: ConversationInfo | None = st.session_state.get("current_conversation")
