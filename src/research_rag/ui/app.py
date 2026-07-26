@@ -414,7 +414,7 @@ def _handle_question(
             _render_citations_inline(citations)
 
         elapsed_ms = holder["elapsed_ms"]
-        request_id = holder["request_id"]
+        request_id = str(holder["request_id"])
         st.caption(f"耗时 {elapsed_ms} ms | 请求 ID: `{request_id}`")
 
         # 渲染点赞/点踩按钮（阶段 10.2 前端补充，对接 feedback API）
