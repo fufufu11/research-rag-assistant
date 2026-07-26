@@ -62,6 +62,9 @@ cache/
 .env
 .env.local
 .env.*.local
+# .env.docker.secrets 含 docker secrets 宿主机文件路径（生产环境部署用），
+# 路径可能揭示部署目录结构，禁止提交；.env.docker.secrets.example 是模板可提交。
+.env.docker.secrets
 *.secret
 *.key
 secrets/

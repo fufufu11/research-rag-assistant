@@ -12,9 +12,62 @@
 #
 # 说明：只覆盖 api 服务的 image 字段，postgres / qdrant / volumes 配置
 # 继承自 docker-compose.yml，避免配置漂移。
+#
+# 阶段 11.6 切片 D（#101）：生产环境用 docker secrets 把 8 个密钥以文件形式
+# 挂载到 /run/secrets/<name>，secrets 不进进程环境变量（docker inspect 不可见）。
+# 顶级 secrets: 块声明宿主机文件路径；各服务 secrets: 引用挂载到容器内。
+# 应用层 get_secret helper（src/research_rag/secrets.py）优先读 {NAME}_FILE 文件。
 
 services:
   api:
     # 使用 GHCR 预构建镜像而非本地 build
     # 默认 latest，可通过 IMAGE_TAG 环境变量切换到特定 sha 标签回滚
     image: ghcr.io/fufufu11/research-rag-assistant:${IMAGE_TAG:-latest}
+    # 挂载 7 个 secrets 到 /run/secrets/<name>（postgres_password 由 postgres 服务独占）
+    secrets:
+      - llm_api_key
+      - judge_llm_api_key
+      - api_keys
+      - langfuse_public_key
+      - langfuse_secret_key
+      - dashscope_api_key
+      - jina_api_key
+    # 应用层 get_secret helper 优先读 {NAME}_FILE 文件内容（src/research_rag/secrets.py）
+    # base compose 的 LLM_API_KEY / LANGFUSE_* 等明文变量在生产为空（.env 不配置），
+    # helper fallback 到 _FILE 路径读取 docker secrets 挂载的文件内容
+    environment:
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      JUDGE_LLM_API_KEY_FILE: /run/secrets/judge_llm_api_key
+      API_KEYS_FILE: /run/secrets/api_keys
+      LANGFUSE_PUBLIC_KEY_FILE: /run/secrets/langfuse_public_key
+      LANGFUSE_SECRET_KEY_FILE: /run/secrets/langfuse_secret_key
+      DASHSCOPE_API_KEY_FILE: /run/secrets/dashscope_api_key
+      JINA_API_KEY_FILE: /run/secrets/jina_api_key
+
+  postgres:
+    # 覆盖 base compose 的 POSTGRES_PASSWORD_FILE：生产环境固定指向 docker secrets 挂载路径
+    # （Postgres 官方镜像读取文件内容作为密码，忽略 POSTGRES_PASSWORD 环境变量）
+    secrets:
+      - postgres_password
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+
+# docker secrets 顶级声明：file: 指向宿主机文件路径（由运维创建并 chmod 600）
+# 真实 secrets 文件不入 git，路径占位见 .env.docker.secrets.example
+secrets:
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_FILE:?must point to host file path}
+  llm_api_key:
+    file: ${LLM_API_KEY_FILE:?must point to host file path}
+  judge_llm_api_key:
+    file: ${JUDGE_LLM_API_KEY_FILE:?must point to host file path}
+  api_keys:
+    file: ${API_KEYS_FILE:?must point to host file path}
+  langfuse_public_key:
+    file: ${LANGFUSE_PUBLIC_KEY_FILE:?must point to host file path}
+  langfuse_secret_key:
+    file: ${LANGFUSE_SECRET_KEY_FILE:?must point to host file path}
+  dashscope_api_key:
+    file: ${DASHSCOPE_API_KEY_FILE:?must point to host file path}
+  jina_api_key:
+    file: ${JINA_API_KEY_FILE:?must point to host file path}
