@@ -4,6 +4,8 @@
 - ``.github/workflows/deploy.yml``：deploy workflow 存在，含 build-and-push / deploy job
 - ``docker-compose.prod.yml``：生产覆盖文件存在，api 服务引用 GHCR 镜像
 - ``docker-compose.yml``：postgres 服务支持 ``POSTGRES_PASSWORD_FILE``（阶段 11.6 切片 C）
+- ``nginx/nginx.conf``：nginx 反代 api + Let's Encrypt webroot + HTTP→HTTPS 重定向（切片 E #100）
+- ``docker/nginx/entrypoint.sh`` / ``docker/certbot/entrypoint.sh``：证书首次签发 + 续期 cron（切片 E #100）
 
 这些配置文件无法用 pytest 直接测试行为（GitHub Actions 在云端运行，
 docker compose 需要真实 Docker），但验证 YAML 语法与关键结构能在本地
@@ -15,6 +17,7 @@ PyYAML 在 CI 的 ``uv sync --extra dev`` 中可用（pyproject.toml dev extra �
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -22,10 +25,39 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+class _ComposeLoader(yaml.SafeLoader):
+    """扩展 SafeLoader 支持 docker compose-spec 的 ``!reset`` / ``!override`` 自定义标签。
+
+    compose-spec 用 ``!reset []`` 清空继承自 base compose 的列表（如 ``ports``），
+    ``!override <value>`` 完全替换列表。这些标签 ``yaml.safe_load`` 默认无法解析，
+    需注册 multi-constructor 返回节点值（``!reset []`` 解析为空列表 ``[]``）。
+    阶段 11.6 切片 E（#100）用 ``ports: !reset []`` 清空 api 服务的 8000 端口发布，
+    生产由 nginx 反代，api 仅在 docker network 内可访问。
+    """
+
+
+def _construct_compose_tag(loader: yaml.Loader, suffix: str, node: yaml.Node) -> Any:
+    """``!reset`` / ``!override`` 等自定义标签：返回其下节点的值。"""
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    return None
+
+
+_ComposeLoader.add_multi_constructor("!", _construct_compose_tag)
+
+
 def _load_yaml(path: Path) -> dict:
-    """加载 YAML 文件为 dict，文件不存在时 fail。"""
+    """加载 YAML 文件为 dict，文件不存在时 fail。
+
+    用 ``_ComposeLoader`` 支持 compose-spec 的 ``!reset`` / ``!override`` 标签
+    （标准 YAML 文件不受影响，仍按 SafeLoader 语义解析）。
+    """
     with path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+        data = yaml.load(f, Loader=_ComposeLoader)
     assert isinstance(data, dict), f"{path} 顶层结构应为 dict，实际 {type(data)}"
     return data
 
@@ -437,3 +469,377 @@ class TestDockerSecretsEnvExample:
             # 形如 VAR=/path/to/file（= 后必须紧跟非空路径）
             _, _, value = line.partition("=")
             assert value.strip(), f".env.docker.secrets.example 行 {line!r} 的 _FILE 变量未赋值"
+
+
+# ---------------------------------------------------------------------------
+# nginx/nginx.conf 反代配置（阶段 11.6 切片 E #100）
+# ---------------------------------------------------------------------------
+
+
+class TestNginxConfig:
+    """``nginx/nginx.conf`` 反代配置结构测试（阶段 11.6 切片 E #100）。
+
+    nginx 反代 api 容器（``proxy_pass http://api:8000``）+ Let's Encrypt
+    webroot 路径（``/.well-known/acme-challenge/``）+ HTTP→HTTPS 301 重定向。
+    配置文件用 ``${DOMAIN}`` 占位，由 nginx 容器 entrypoint 用 ``envsubst`` 替换。
+    """
+
+    @pytest.fixture(scope="class")
+    def nginx_conf_text(self) -> str:
+        path = REPO_ROOT / "nginx" / "nginx.conf"
+        assert path.exists(), "nginx/nginx.conf 不存在：阶段 11.6 切片 E 要求新增 nginx 反代配置"
+        return path.read_text(encoding="utf-8")
+
+    def test_nginx_conf_has_http_server_block_port_80(self, nginx_conf_text: str) -> None:
+        """HTTP server block 监听 80 端口（Let's Encrypt challenge + HTTP→HTTPS 重定向）。"""
+        assert "listen 80" in nginx_conf_text, (
+            "nginx.conf 缺少 'listen 80'：HTTP server block 用于 Let's Encrypt "
+            "webroot challenge 与 HTTP→HTTPS 重定向"
+        )
+
+    def test_nginx_conf_has_acme_challenge_webroot(self, nginx_conf_text: str) -> None:
+        """必须配置 ``/.well-known/acme-challenge/`` 路径指向 webroot 卷。"""
+        assert "/.well-known/acme-challenge/" in nginx_conf_text, (
+            "nginx.conf 缺少 /.well-known/acme-challenge/ location："
+            "Let's Encrypt webroot 模式必需此路径"
+        )
+        assert "/var/www/certbot" in nginx_conf_text, (
+            "nginx.conf 缺少 /var/www/certbot：webroot 卷挂载路径"
+        )
+
+    def test_nginx_conf_has_https_redirect_301(self, nginx_conf_text: str) -> None:
+        """HTTP 必须返回 301 重定向到 HTTPS。"""
+        assert "return 301 https://" in nginx_conf_text, (
+            "nginx.conf 缺少 'return 301 https://'：HTTP→HTTPS 重定向"
+        )
+
+    def test_nginx_conf_has_https_server_block_port_443(self, nginx_conf_text: str) -> None:
+        """HTTPS server block 监听 443 端口。"""
+        assert "listen 443" in nginx_conf_text, (
+            "nginx.conf 缺少 'listen 443'：HTTPS server block 监听端口"
+        )
+        assert "ssl" in nginx_conf_text, (
+            "nginx.conf 缺少 'ssl' 关键字：HTTPS server block 应启用 ssl"
+        )
+
+    def test_nginx_conf_has_ssl_cert_paths(self, nginx_conf_text: str) -> None:
+        """SSL 证书路径必须指向 Let's Encrypt 默认目录（``fullchain.pem`` + ``privkey.pem``）。"""
+        assert "/etc/letsencrypt/live/" in nginx_conf_text, (
+            "nginx.conf 缺少 /etc/letsencrypt/live/ 路径：Let's Encrypt 证书默认目录"
+        )
+        assert "fullchain.pem" in nginx_conf_text, (
+            "nginx.conf 缺少 fullchain.pem：SSL 证书链文件路径"
+        )
+        assert "privkey.pem" in nginx_conf_text, "nginx.conf 缺少 privkey.pem：SSL 私钥文件路径"
+
+    def test_nginx_conf_has_proxy_pass_to_api(self, nginx_conf_text: str) -> None:
+        """必须反代到 api 容器（``proxy_pass http://api:8000``）。"""
+        assert "proxy_pass http://api:8000" in nginx_conf_text, (
+            "nginx.conf 缺少 'proxy_pass http://api:8000'：nginx 必须反代 api 容器的 8000 端口"
+        )
+
+    def test_nginx_conf_has_proxy_headers(self, nginx_conf_text: str) -> None:
+        """必须设置标准反代头（Host / X-Real-IP / X-Forwarded-For / X-Forwarded-Proto）。"""
+        required_headers = [
+            "proxy_set_header Host",
+            "proxy_set_header X-Real-IP",
+            "proxy_set_header X-Forwarded-For",
+            "proxy_set_header X-Forwarded-Proto",
+        ]
+        missing = [h for h in required_headers if h not in nginx_conf_text]
+        assert not missing, f"nginx.conf 缺少反代头: {missing}"
+
+    def test_nginx_conf_uses_domain_envsubst_placeholder(self, nginx_conf_text: str) -> None:
+        """配置文件用 ``${DOMAIN}`` 占位，由 entrypoint 用 ``envsubst`` 替换。"""
+        assert "${DOMAIN}" in nginx_conf_text, (
+            "nginx.conf 缺少 ${DOMAIN} 占位：域名应通过 envsubst 在容器启动时替换（不硬编码）"
+        )
+
+
+# ---------------------------------------------------------------------------
+# docker-compose.prod.yml nginx + certbot 服务（阶段 11.6 切片 E #100）
+# ---------------------------------------------------------------------------
+
+
+class TestProdComposeNginxCertbot:
+    """``docker-compose.prod.yml`` nginx + certbot 服务结构测试（阶段 11.6 切片 E #100）。
+
+    生产覆盖文件新增 nginx 服务（反代 api + TLS 终止）+ certbot 服务（证书签发与续期）
+    + 共享 webroot 卷（Let's Encrypt challenge 文件）+ 证书卷（``/etc/letsencrypt``）。
+    nginx 暴露 80/443 端口，api 不再发布 8000 端口（仅 docker network 内可访问）。
+    """
+
+    @pytest.fixture(scope="class")
+    def compose(self) -> dict:
+        return _load_yaml(REPO_ROOT / "docker-compose.prod.yml")
+
+    def test_nginx_service_exists(self, compose: dict) -> None:
+        assert "nginx" in compose["services"], (
+            "docker-compose.prod.yml 缺少 nginx 服务：阶段 11.6 切片 E 要求 nginx 反代 api"
+        )
+
+    def test_nginx_service_uses_nginx_alpine_image(self, compose: dict) -> None:
+        """nginx 服务用官方 ``nginx:alpine`` 镜像（维护成本低，体积小）。"""
+        image = compose["services"]["nginx"].get("image", "")
+        assert "nginx" in image and "alpine" in image, (
+            f"nginx 服务应用 nginx:alpine 镜像，实际 image={image!r}"
+        )
+
+    def test_nginx_service_exposes_80_and_443(self, compose: dict) -> None:
+        """nginx 必须发布 80（HTTP）和 443（HTTPS）端口到宿主机。"""
+        ports = compose["services"]["nginx"].get("ports", [])
+        # ports 可能是字符串列表（短语法）或 dict 列表（长语法），统一转字符串
+        ports_str = " ".join(str(p) for p in ports)
+        assert "80" in ports_str, f"nginx 服务应发布 80 端口，实际 ports={ports!r}"
+        assert "443" in ports_str, f"nginx 服务应发布 443 端口，实际 ports={ports!r}"
+
+    def test_nginx_service_depends_on_api(self, compose: dict) -> None:
+        """nginx 反代 api，应在 api 启动后再启动。"""
+        depends = compose["services"]["nginx"].get("depends_on", {})
+        # depends_on 可为列表（短语法）或 dict（长语法）
+        if isinstance(depends, dict):
+            assert "api" in depends, f"nginx 服务 depends_on 应含 api，实际 {depends!r}"
+        else:
+            assert "api" in list(depends), f"nginx 服务 depends_on 应含 api，实际 {depends!r}"
+
+    def test_nginx_service_mounts_nginx_conf(self, compose: dict) -> None:
+        """nginx 服务必须挂载本地 ``nginx/nginx.conf`` 到容器（只读）。"""
+        volumes = compose["services"]["nginx"].get("volumes", [])
+        volumes_str = " ".join(str(v) for v in volumes)
+        assert "nginx.conf" in volumes_str, (
+            f"nginx 服务 volumes 应挂载 nginx.conf，实际 {volumes!r}"
+        )
+        assert ":ro" in volumes_str, f"nginx 服务挂载 nginx.conf 应只读 (:ro)，实际 {volumes!r}"
+
+    def test_nginx_service_mounts_webroot_volume(self, compose: dict) -> None:
+        """nginx 服务必须挂载 webroot 卷到 ``/var/www/certbot``（与 certbot 共享）。"""
+        volumes = compose["services"]["nginx"].get("volumes", [])
+        volumes_str = " ".join(str(v) for v in volumes)
+        assert "/var/www/certbot" in volumes_str, (
+            "nginx 服务 volumes 应挂载卷到 /var/www/certbot（Let's Encrypt webroot）"
+        )
+
+    def test_nginx_service_mounts_certs_volume(self, compose: dict) -> None:
+        """nginx 服务必须挂载证书卷到 ``/etc/letsencrypt``（读 certbot 签发的证书）。"""
+        volumes = compose["services"]["nginx"].get("volumes", [])
+        volumes_str = " ".join(str(v) for v in volumes)
+        assert "/etc/letsencrypt" in volumes_str, (
+            "nginx 服务 volumes 应挂载卷到 /etc/letsencrypt（读 Let's Encrypt 证书）"
+        )
+
+    def test_nginx_service_runs_custom_entrypoint(self, compose: dict) -> None:
+        """nginx 服务必须用自定义 entrypoint（``envsubst`` + 证书占位 + 启动 nginx）。"""
+        nginx = compose["services"]["nginx"]
+        # entrypoint 可为字符串或列表
+        entrypoint = nginx.get("entrypoint", "")
+        entrypoint_str = " ".join(entrypoint) if isinstance(entrypoint, list) else str(entrypoint)
+        assert "entrypoint.sh" in entrypoint_str, (
+            f"nginx 服务 entrypoint 应指向 docker/nginx/entrypoint.sh，实际 {entrypoint!r}"
+        )
+
+    def test_certbot_service_exists(self, compose: dict) -> None:
+        assert "certbot" in compose["services"], (
+            "docker-compose.prod.yml 缺少 certbot 服务：阶段 11.6 切片 E 要求 certbot 容器"
+        )
+
+    def test_certbot_service_uses_certbot_image(self, compose: dict) -> None:
+        """certbot 服务用官方 ``certbot/certbot`` 镜像。"""
+        image = compose["services"]["certbot"].get("image", "")
+        assert "certbot/certbot" in image, (
+            f"certbot 服务应用 certbot/certbot 镜像，实际 image={image!r}"
+        )
+
+    def test_certbot_service_mounts_webroot_volume(self, compose: dict) -> None:
+        """certbot 服务必须挂载 webroot 卷（与 nginx 共享，写 challenge 响应）。"""
+        volumes = compose["services"]["certbot"].get("volumes", [])
+        volumes_str = " ".join(str(v) for v in volumes)
+        assert "/var/www/certbot" in volumes_str, (
+            "certbot 服务 volumes 应挂载卷到 /var/www/certbot（与 nginx 共享 webroot）"
+        )
+
+    def test_certbot_service_mounts_certs_volume(self, compose: dict) -> None:
+        """certbot 服务必须挂载证书卷（写签发的证书到 ``/etc/letsencrypt``）。"""
+        volumes = compose["services"]["certbot"].get("volumes", [])
+        volumes_str = " ".join(str(v) for v in volumes)
+        assert "/etc/letsencrypt" in volumes_str, (
+            "certbot 服务 volumes 应挂载卷到 /etc/letsencrypt（写 Let's Encrypt 证书）"
+        )
+
+    def test_certbot_service_runs_custom_entrypoint(self, compose: dict) -> None:
+        """certbot 服务必须用自定义 entrypoint（``certbot certonly --webroot`` + 续期 cron）。"""
+        certbot = compose["services"]["certbot"]
+        entrypoint = certbot.get("entrypoint", "")
+        entrypoint_str = " ".join(entrypoint) if isinstance(entrypoint, list) else str(entrypoint)
+        assert "entrypoint.sh" in entrypoint_str, (
+            f"certbot 服务 entrypoint 应指向 docker/certbot/entrypoint.sh，实际 {entrypoint!r}"
+        )
+
+    def test_shared_webroot_volume_defined(self, compose: dict) -> None:
+        """必须有共享 webroot 卷（命名卷，nginx + certbot 共用）。"""
+        volumes = compose.get("volumes", {})
+        # webroot 卷名应包含 'certbot' 或 'webroot' 关键字
+        webroot_volumes = [
+            name for name in volumes if "certbot" in name.lower() or "webroot" in name.lower()
+        ]
+        assert webroot_volumes, (
+            "docker-compose.prod.yml 顶级 volumes 应声明 webroot 共享卷"
+            "（命名卷名含 'certbot' 或 'webroot'）"
+        )
+
+    def test_shared_certs_volume_defined(self, compose: dict) -> None:
+        """必须有共享证书卷（命名卷，nginx + certbot 共用）。"""
+        volumes = compose.get("volumes", {})
+        # 证书卷名应包含 'cert' 或 'letsencrypt' 关键字
+        cert_volumes = [
+            name for name in volumes if "cert" in name.lower() or "letsencrypt" in name.lower()
+        ]
+        assert cert_volumes, (
+            "docker-compose.prod.yml 顶级 volumes 应声明证书共享卷"
+            "（命名卷名含 'cert' 或 'letsencrypt'）"
+        )
+
+    def test_api_service_does_not_publish_8000_port(self, compose: dict) -> None:
+        """api 服务在生产必须用 ``!reset []`` 清空继承的 8000 端口发布。
+
+        base compose 的 api 服务发布 ``8000:8000``（开发用）；生产由 nginx 反代，
+        api 仅在 docker network 内可访问（``http://api:8000``），不发布到宿主机。
+        compose merge 对 ``ports`` 取并集（非 unique 资源策略），需用 ``!reset []``
+        清空，否则宿主机仍可直连 api 绕过 TLS。
+        """
+        api = compose["services"]["api"]
+        ports = api.get("ports")
+        # 用 !reset [] 标签清空时，_ComposeLoader 解析为空列表 []
+        assert ports == [], (
+            "api 服务在生产应清空 published ports（ports: !reset []）："
+            "base compose 的 8000 端口在生产被 nginx 反代覆盖，"
+            f"api 仅在 docker network 内可访问，实际 ports={ports!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# docker/nginx/entrypoint.sh nginx 容器入口脚本（阶段 11.6 切片 E #100）
+# ---------------------------------------------------------------------------
+
+
+class TestNginxEntrypoint:
+    """``docker/nginx/entrypoint.sh`` nginx 容器入口脚本测试（阶段 11.6 切片 E #100）。
+
+    nginx 容器启动时需：(1) ``envsubst`` 把 ``${DOMAIN}`` 占位替换进 nginx.conf；
+    (2) 若真实证书不存在，生成临时自签证书占位（SSL server block 要求 cert 文件存在
+    才能 nginx 启动）；(3) 启动 ``crond`` 周期 reload nginx 以读取 certbot 续期的新证书；
+    (4) 前台运行 nginx（``nginx -g 'daemon off;'``）。
+    """
+
+    @pytest.fixture(scope="class")
+    def entrypoint_text(self) -> str:
+        path = REPO_ROOT / "docker" / "nginx" / "entrypoint.sh"
+        assert path.exists(), (
+            "docker/nginx/entrypoint.sh 不存在：阶段 11.6 切片 E 要求 nginx 容器入口脚本"
+        )
+        return path.read_text(encoding="utf-8")
+
+    def test_entrypoint_runs_envsubst(self, entrypoint_text: str) -> None:
+        """必须用 ``envsubst`` 替换 ``${DOMAIN}`` 占位进 nginx.conf。"""
+        assert "envsubst" in entrypoint_text, "nginx entrypoint 必须用 envsubst 替换 ${DOMAIN} 占位"
+
+    def test_entrypoint_substitutes_domain_var(self, entrypoint_text: str) -> None:
+        """``envsubst`` 必须替换 ``${DOMAIN}`` 变量（指定变量名避免误替换 nginx 内置 ``$host`` 等）。"""
+        assert "${DOMAIN}" in entrypoint_text, (
+            "nginx entrypoint 的 envsubst 必须指定 ${DOMAIN} 变量名"
+            "（避免误替换 nginx 内置 $host / $remote_addr 等变量）"
+        )
+
+    def test_entrypoint_generates_placeholder_cert_if_missing(self, entrypoint_text: str) -> None:
+        """若真实证书不存在，必须生成临时自签证书占位（让 nginx 能启动）。"""
+        # openssl req -x509 生成自签证书
+        assert "openssl" in entrypoint_text, (
+            "nginx entrypoint 必须用 openssl 生成占位自签证书（SSL server block "
+            "要求 cert 文件存在 nginx 才能启动）"
+        )
+        assert "req" in entrypoint_text and "-x509" in entrypoint_text, (
+            "nginx entrypoint 应用 'openssl req -x509' 生成自签证书"
+        )
+        # 必须检查证书文件存在（避免覆盖已签发的真实证书）
+        assert "fullchain.pem" in entrypoint_text, (
+            "nginx entrypoint 必须检查 fullchain.pem 是否存在再决定是否生成占位"
+        )
+
+    def test_entrypoint_starts_nginx_foreground(self, entrypoint_text: str) -> None:
+        """必须以前台模式启动 nginx（``nginx -g 'daemon off;'``）。"""
+        assert "daemon off" in entrypoint_text, (
+            "nginx entrypoint 必须用 'nginx -g \"daemon off;\"' 前台运行"
+            "（docker 容器要求前台进程，否则容器立即退出）"
+        )
+
+    def test_entrypoint_sets_up_reload_cron(self, entrypoint_text: str) -> None:
+        """必须设置 ``crond`` 周期性 reload nginx（读取 certbot 续期的新证书）。"""
+        assert "crond" in entrypoint_text, (
+            "nginx entrypoint 必须启动 crond 周期 reload nginx（certbot 续期后需 reload 才能生效）"
+        )
+        assert "nginx -s reload" in entrypoint_text, (
+            "nginx entrypoint 的 cron 任务必须包含 'nginx -s reload'"
+        )
+
+
+# ---------------------------------------------------------------------------
+# docker/certbot/entrypoint.sh certbot 容器入口脚本（阶段 11.6 切片 E #100）
+# ---------------------------------------------------------------------------
+
+
+class TestCertbotEntrypoint:
+    """``docker/certbot/entrypoint.sh`` certbot 容器入口脚本测试（阶段 11.6 切片 E #100）。
+
+    certbot 容器启动时需：(1) 等待 nginx 启动（webroot challenge 需 nginx 服务 80 端口）；
+    (2) 首次签发：若证书目录不存在，运行 ``certbot certonly --webroot`` 签发证书；
+    (3) 续期 cron：用 ``crond`` 周期性运行 ``certbot renew``（certbot renew 仅在证书
+    临近过期时实际续期，否则 no-op）；(4) 前台运行 ``crond`` 保持容器存活。
+    """
+
+    @pytest.fixture(scope="class")
+    def entrypoint_text(self) -> str:
+        path = REPO_ROOT / "docker" / "certbot" / "entrypoint.sh"
+        assert path.exists(), (
+            "docker/certbot/entrypoint.sh 不存在：阶段 11.6 切片 E 要求 certbot 容器入口脚本"
+        )
+        return path.read_text(encoding="utf-8")
+
+    def test_entrypoint_runs_certbot_certonly_webroot(self, entrypoint_text: str) -> None:
+        """首次签发必须用 ``certbot certonly --webroot``（不停服模式）。"""
+        assert "certbot certonly" in entrypoint_text, (
+            "certbot entrypoint 必须用 'certbot certonly' 进行首次签发"
+        )
+        assert "--webroot" in entrypoint_text, (
+            "certbot entrypoint 必须用 --webroot 模式（不停服，"
+            "standalone 模式需停 nginx 占用 80 端口）"
+        )
+
+    def test_entrypoint_uses_webroot_path_var_www_certbot(self, entrypoint_text: str) -> None:
+        """``--webroot-path`` 必须指向 ``/var/www/certbot``（与 nginx 共享的 webroot 卷）。"""
+        assert "/var/www/certbot" in entrypoint_text, (
+            "certbot entrypoint 的 --webroot-path 必须指向 /var/www/certbot"
+            "（与 nginx 共享的 webroot 卷挂载路径）"
+        )
+
+    def test_entrypoint_runs_renew(self, entrypoint_text: str) -> None:
+        """续期 cron 必须运行 ``certbot renew``（仅在证书临近过期时实际续期）。"""
+        assert "certbot renew" in entrypoint_text, (
+            "certbot entrypoint 必须用 'certbot renew' 进行续期"
+            "（certbot renew 自动检查证书有效期，仅临近过期时实际续期）"
+        )
+
+    def test_entrypoint_sets_up_renewal_cron(self, entrypoint_text: str) -> None:
+        """必须用 ``crond`` 周期性运行 ``certbot renew``。"""
+        assert "crond" in entrypoint_text, (
+            "certbot entrypoint 必须启动 crond 周期运行 certbot renew"
+            "（Let's Encrypt 证书 90 天有效期，需自动续期）"
+        )
+
+    def test_entrypoint_uses_domain_and_email_env_vars(self, entrypoint_text: str) -> None:
+        """必须用 ``${DOMAIN}`` 和 ``${LETSENCRYPT_EMAIL}`` 环境变量。"""
+        assert "${DOMAIN}" in entrypoint_text, (
+            "certbot entrypoint 必须用 ${DOMAIN} 环境变量指定签发证书的域名"
+        )
+        assert "${LETSENCRYPT_EMAIL}" in entrypoint_text, (
+            "certbot entrypoint 必须用 ${LETSENCRYPT_EMAIL} 环境变量"
+            "（Let's Encrypt 注册邮箱，用于证书到期提醒）"
+        )

@@ -17,12 +17,27 @@
 # 挂载到 /run/secrets/<name>，secrets 不进进程环境变量（docker inspect 不可见）。
 # 顶级 secrets: 块声明宿主机文件路径；各服务 secrets: 引用挂载到容器内。
 # 应用层 get_secret helper（src/research_rag/secrets.py）优先读 {NAME}_FILE 文件。
+#
+# 阶段 11.6 切片 E（#100）：新增 nginx + certbot 服务实现 TLS 反代。
+# - nginx 容器：nginx:alpine + 自定义 entrypoint（envsubst 替换 ${DOMAIN} 占位 +
+#   占位自签证书 + crond reload nginx + 前台 nginx）。反代 api 容器（http://api:8000），
+#   终止 TLS，暴露 80/443 端口。
+# - certbot 容器：certbot/certbot + 自定义 entrypoint（首次 certbot certonly --webroot
+#   签发 + crond certbot renew 续期）。与 nginx 共享 webroot 卷（challenge 响应）和
+#   证书卷（/etc/letsencrypt）。
+# - api 服务用 ports: !reset [] 清空 base compose 的 8000 端口发布，仅 docker network
+#   内可访问（http://api:8000），强制外部流量走 nginx TLS 反代。
+# - 必设环境变量：DOMAIN（签发证书域名）/ LETSENCRYPT_EMAIL（Let's Encrypt 注册邮箱）。
 
 services:
   api:
     # 使用 GHCR 预构建镜像而非本地 build
     # 默认 latest，可通过 IMAGE_TAG 环境变量切换到特定 sha 标签回滚
     image: ghcr.io/fufufu11/research-rag-assistant:${IMAGE_TAG:-latest}
+    # 生产环境清空 base compose 的 8000 端口发布（compose merge 对 ports 取并集，
+    # 需 !reset [] 显式清空）。api 仅在 docker network 内可访问（http://api:8000），
+    # 外部流量必须经 nginx TLS 反代。开发环境（base compose）仍发布 8000 供本地调试。
+    ports: !reset []
     # 挂载 7 个 secrets 到 /run/secrets/<name>（postgres_password 由 postgres 服务独占）
     secrets:
       - llm_api_key
@@ -52,6 +67,54 @@ services:
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
 
+  # nginx 容器：TLS 反代 + Let's Encrypt webroot challenge 服务
+  # 监听 80（HTTP→HTTPS 重定向 + ACME challenge）和 443（TLS 终止 + 反代 api:8000）
+  nginx:
+    image: nginx:alpine
+    container_name: rrag-nginx
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # nginx.conf 模板挂载为 /etc/nginx/nginx.conf.template（entrypoint 用 envsubst 替换 ${DOMAIN}）
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
+      # nginx entrypoint 脚本挂载（envsubst + 占位自签证书 + crond reload + 前台 nginx）
+      - ./docker/nginx/entrypoint.sh:/docker/nginx-entrypoint.sh:ro
+      # 共享 webroot 卷：nginx 对外服务 /.well-known/acme-challenge/，certbot 写 challenge 响应
+      - certbot-webroot:/var/www/certbot
+      # 共享证书卷：nginx 读取 certbot 签发的证书（/etc/letsencrypt/live/${DOMAIN}/）
+      - certbot-certs:/etc/letsencrypt
+    environment:
+      # 签发证书的域名（必填，生产 compose 通过 .env 或 -e 注入）
+      DOMAIN: ${DOMAIN:?DOMAIN env var must be set}
+    # 自定义 entrypoint：envsubst + 占位自签证书 + crond reload + 前台 nginx
+    entrypoint: ["/bin/sh", "/docker/nginx-entrypoint.sh"]
+
+  # certbot 容器：首次签发证书（certbot certonly --webroot）+ 续期 cron（certbot renew）
+  certbot:
+    image: certbot/certbot
+    container_name: rrag-certbot
+    restart: unless-stopped
+    depends_on:
+      nginx:
+        condition: service_started
+    volumes:
+      # 共享 webroot 卷：certbot 写 challenge 响应到 /var/www/certbot/.well-known/acme-challenge/
+      - certbot-webroot:/var/www/certbot
+      # 共享证书卷：certbot 签发的证书写到 /etc/letsencrypt/live/${DOMAIN}/
+      - certbot-certs:/etc/letsencrypt
+      # 自定义 entrypoint 挂载
+      - ./docker/certbot/entrypoint.sh:/docker/certbot-entrypoint.sh:ro
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN env var must be set}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:?LETSENCRYPT_EMAIL env var must be set}
+    # 自定义 entrypoint：等待 nginx + certbot certonly --webroot + crond certbot renew
+    entrypoint: ["/bin/sh", "/docker/certbot-entrypoint.sh"]
+
 # docker secrets 顶级声明：file: 指向宿主机文件路径（由运维创建并 chmod 600）
 # 真实 secrets 文件不入 git，路径占位见 .env.docker.secrets.example
 secrets:
@@ -71,3 +134,12 @@ secrets:
     file: ${DASHSCOPE_API_KEY_FILE:?must point to host file path}
   jina_api_key:
     file: ${JINA_API_KEY_FILE:?must point to host file path}
+
+# 共享卷（阶段 11.6 切片 E #100）
+# - certbot-webroot：Let's Encrypt challenge 响应文件（nginx + certbot 共享）
+# - certbot-certs：Let's Encrypt 证书目录（certbot 写，nginx 读）
+volumes:
+  certbot-webroot:
+    name: rrag-certbot-webroot
+  certbot-certs:
+    name: rrag-certbot-certs
