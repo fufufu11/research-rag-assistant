@@ -187,3 +187,52 @@ def test_downgrade_base_drops_tables(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert "chunks" not in table_names
     finally:
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# messages.request_id 列（Issue #89 / ADR 0003）
+# ---------------------------------------------------------------------------
+
+
+def test_messages_has_request_id_column(migrated_engine: Engine) -> None:
+    """messages 表包含 request_id 列（ADR 0003：持久化 assistant 消息的 request_id）。"""
+
+    inspector = inspect(migrated_engine)
+    columns = {col["name"]: col for col in inspector.get_columns("messages")}
+    assert "request_id" in columns
+    # 可空：旧消息（迁移前）与 user 消息保持 NULL
+    assert bool(columns["request_id"]["nullable"]) is True
+
+
+def test_messages_request_id_unique_index(migrated_engine: Engine) -> None:
+    """messages.request_id 有唯一索引（一个 request_id 唯一映射一条 assistant 消息）。"""
+
+    inspector = inspect(migrated_engine)
+    indexes = inspector.get_indexes("messages")
+    request_id_idx = [i for i in indexes if "request_id" in i["column_names"]]
+    assert len(request_id_idx) == 1
+    # SQLite 返回 0/1 整数而非 Python bool，用 bool() 归一化
+    assert bool(request_id_idx[0]["unique"]) is True
+
+
+def test_downgrade_drops_request_id_column(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """downgrade -1 后 messages.request_id 列与索引被删除（迁移可正反向跑通）。"""
+
+    db_file = tmp_path / "downgrade_request_id_test.db"
+    db_url = f"sqlite:///{db_file}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+
+    config = _make_config(db_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "-1")
+
+    engine = create_engine(db_url)
+    try:
+        inspector = inspect(engine)
+        columns = {col["name"] for col in inspector.get_columns("messages")}
+        assert "request_id" not in columns
+        indexes = inspector.get_indexes("messages")
+        request_id_idx = [i for i in indexes if "request_id" in i["column_names"]]
+        assert len(request_id_idx) == 0
+    finally:
+        engine.dispose()

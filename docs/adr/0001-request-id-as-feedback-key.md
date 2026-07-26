@@ -1,8 +1,13 @@
-# ADR 0001: 用 request_id 作为 feedback 主关联键（不持久化校验）
+# ADR 0001: 用 request_id 作为 feedback 主关联键（不持久化校验）（Superseded by 0003）
 
 ## 状态
 
-Accepted（2026-07-24）
+Superseded（2026-07-26，由 ADR 0003 取代）
+
+> 本 ADR 的核心决策「以 `request_id` 作为 `feedback` 表主关联键」仍然有效；
+> 被 0003 取代的部分是「不在 `messages` 表新增 `request_id` 列」——历史
+> 消息反馈需求要求通过 `request_id` 反查 feedback 状态，需将 `request_id`
+> 持久化到 `messages` 表。详见 ADR 0003。
 
 ## 背景
 

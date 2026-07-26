@@ -285,6 +285,12 @@ class Message(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     citations: Mapped[list[dict[str, object]] | None] = mapped_column(JSON, nullable=True)
+    # request_id 持久化到 Message（ADR 0003）：仅 assistant 消息写入，
+    # user 消息与旧消息（迁移前）保持 None。加唯一约束供历史消息反馈反查。
+    # 多条 NULL 不冲突（SQL 标准对 NULL 的唯一约束语义）。
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, nullable=True, unique=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=_utcnow)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
