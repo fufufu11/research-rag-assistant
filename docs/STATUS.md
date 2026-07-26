@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v2.5` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成，830 条测试通过，CI 三项全绿。
+`v2.6` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11.6 生产安全加固进行中（切片 A #97 + 切片 C #99 已完成）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A（PR #103 / Issue #97）完成 `secrets.py` helper 支持 `{NAME}_FILE` 优先 + fallback env；阶段 11.6 切片 C（PR #104 / Issue #99）完成 5 个文件 8 个密钥读取点替换为 `get_secret` + docker-compose.yml postgres `POSTGRES_PASSWORD_FILE` 支持，854 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -147,6 +147,31 @@
 - `pyproject.toml`：添加 `pyyaml>=6.0` dev 依赖；`README.md`：新增「CI/CD 自动化部署」章节（流水线 / 镜像拉取 / Secrets 与 Variables 配置 / 手动触发）
 - 不在范围：蓝绿部署 / 金丝雀发布、Kubernetes 部署、回滚自动化（手动 `IMAGE_TAG=sha-xxx` 即可）、多环境（staging/prod）分离
 
+### 生产安全加固（阶段 11.6 进行中）
+
+- 阶段 11.6 生产安全加固：把开发级容器部署升级到生产可用——非 root 用户 + docker secrets 文件挂载 + Nginx TLS 反代终止 HTTPS
+- **切片 A #97（已完成，PR #103）**：`src/research_rag/secrets.py` 提供 `get_secret(name) -> str | None` helper
+  - 优先读 `{NAME}_FILE` 环境变量指向的文件内容（docker secrets 路径，如 `LLM_API_KEY_FILE=/run/secrets/llm_api_key`）
+  - 无 `_FILE` 或文件不存在时回退到 `{NAME}` 环境变量（开发/CI 路径）
+  - 两者均无返回 `None`；调用方用 `get_secret(NAME) or ""` 模式取值
+  - 7 个单元测试覆盖五条行为路径（fallback env / file 优先 / file 缺失回退 / 空文件 / 仅空白文件）
+- **切片 C #99（已完成，PR #104）**：5 个文件 8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持
+  - **替换的密钥读取点**（5 个文件 8 处）：
+    - `observability.py`：`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`
+    - `api/dependencies.py`：`LLM_API_KEY` / `DASHSCOPE_API_KEY` / `JINA_API_KEY`（`get_llm_config` + `get_embedding_config`）
+    - `answer_evaluation.py`：`JUDGE_LLM_API_KEY` + fallback `LLM_API_KEY`（双层 fallback：judge 优先 → 主 LLM → 空）
+    - `api/auth.py`：`API_KEYS`（多 key 逗号分隔，`_get_valid_api_keys` 用 `get_secret` 读取）
+    - `embedding.py`：`DASHSCOPE_API_KEY` / `JINA_API_KEY`（`_create_api_embeddings` 在 `config.api_key` 为空时 fallback 读取）
+  - **docker-compose.yml postgres 服务**：`environment` 新增 `POSTGRES_PASSWORD_FILE: ${POSTGRES_PASSWORD_FILE:-}`，Postgres 官方镜像原生支持 `_FILE` 后缀（设置后优先读文件内容作为密码，忽略 `POSTGRES_PASSWORD`）；未设置时为空字符串，镜像忽略 `_FILE` 后缀回退到 `POSTGRES_PASSWORD`（开发/CI 默认路径）；生产环境设置 `POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password` 即可启用 docker secrets（切片 D #101 配置）
+  - **测试覆盖**（7 个文件 +24 测试，837→854）：每个密钥读取点都有 `_FILE` 优先 / fallback env / 缺失返回 None 三条路径的单元测试；`test_deployment_config.py` 新增 `TestPostgresPasswordFile` 3 测试验证 compose 字段声明
+  - **向后兼容**：所有调用点保留 fallback env 行为，开发/CI 不挂载 secrets 时行为不变；830 基线零回归
+- **切片 B #98（待实施）**：`Dockerfile` 加 `USER 65532` + `chown -R 65532 /app`；`docker/entrypoint.sh` 从 `uv run uvicorn` 改为 `/app/.venv/bin/uvicorn` 直接调用
+- **切片 D #101（待实施，阻塞于 #98 + #99）**：`docker-compose.prod.yml` 加 `secrets:` 块声明 docker secrets + 各服务 `secrets:` 挂载到 `/run/secrets/<name>`；`api` 服务的 `DATABASE_URL` 通过 entrypoint 脚本动态拼装
+- **切片 E #100（待实施，阻塞于 #98）**：新增 `nginx` 服务 + certbot 容器，TLS 证书自动签发与续期，反代到 api:8000
+- **切片 F #102（待实施，阻塞于 #98-#101 全部完成）**：同步 ROADMAP / STATUS / README / ADR 0004 状态
+- 决策与设计取舍见 [ADR 0004](./adr/0004-docker-secrets-helper.md)：方案 A（代码层 helper）而非方案 B（pydantic-settings BaseSettings），YAGNI；postgres 用原生 `POSTGRES_PASSWORD_FILE` 而非自定义 entrypoint
+- 不在范围：Vault / SOPS / Sealed Secrets 等外部密钥管理系统（YAGNI）、双向 TLS（mTLS）、WAF
+
 ## 技术栈
 
 Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions · Langfuse · Docker Compose
@@ -183,7 +208,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：830 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个、#92 历史消息反馈前端 UI 渲染新增 8 个）
+- pytest：854 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个、#92 历史消息反馈前端 UI 渲染新增 8 个、#97 secrets.py helper 新增 7 个、#99 密钥读取点替换 + postgres 密码文件支持新增 24 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -199,5 +224,5 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 - 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩—— **prefactor 已完成**（PR #93 / Issue #89：`Message.request_id` 列 + ADR 0003）；**写入读出已完成**（PR #94 / Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展）；**前端 model+client 已完成**（PR #95 / Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）；**前端 UI 渲染已完成**（PR #96 / Issue #92：`_render_feedback_buttons` 扩展到历史消息 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮）；历史消息反馈端到端体验闭环完成
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
-- 生产级安全加固：非 root 容器用户、密钥管理（Vault/secrets manager）、TLS 终止（Nginx 反代）
+- 生产级安全加固（阶段 11.6 进行中）：非 root 容器用户 + docker secrets 文件挂载 + Nginx TLS 反代——**切片 A #97 + 切片 C #99 已完成**（密钥 helper + 8 个读取点替换 + postgres 密码文件支持），**切片 B/D/E/F 待实施**（非 root 容器 / docker secrets 配置 / Nginx TLS / 文档同步）
 - 表格感知切分与公式识别（阶段 12）
