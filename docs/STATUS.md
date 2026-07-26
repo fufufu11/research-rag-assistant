@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`v2.2` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进，812 条测试通过，CI 三项全绿。
+`v2.3` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 全部完成，阶段 11 安全与部署收官；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展，817 条测试通过，CI 三项全绿。
 
 ## 已完成功能
 
@@ -78,7 +78,8 @@
 - `request_id` 作为主关联键的决策与已知局限见 [ADR 0001](./adr/0001-request-id-as-feedback-key.md)（已被 [ADR 0003](./adr/0003-message-request-id.md) 部分取代：`request_id` 现持久化到 `Message` 表）
 - 后端 30 个单元测试（Repository 12 + API 18，端到端验证）
 - **前端补充**（PR #87 / Issue #86）：`ApiClient.submit_feedback` / `delete_feedback` 封装 POST/DELETE；`_render_feedback_buttons` 在 assistant 气泡内渲染点赞/点踩按钮，状态缓存在 `st.session_state`，Upsert 语义切换赞↔踩，再次点击撤销 DELETE，点踩后展开 `st.text_area` 收集文字评论；9 个新增单元测试（`TestSubmitFeedback` 6 + `TestDeleteFeedback` 3）
-- **历史消息反馈 prefactor**（PR #93 / Issue #89）：`Message` 表新增可空 `request_id` 列（唯一索引）+ Alembic 迁移 `b8f2a3c4d5e6` + ADR 0001 标记 Superseded + ADR 0003 新写 + CONTEXT.md 术语微调；7 个新增单元测试（4 模型层 + 3 迁移层）；剩余切片 #90（后端写入 + API 读出）/ #91（前端 model + client）/ #92（UI 渲染 + 交互）跟踪
+- **历史消息反馈 prefactor**（PR #93 / Issue #89）：`Message` 表新增可空 `request_id` 列（唯一索引）+ Alembic 迁移 `b8f2a3c4d5e6` + ADR 0001 标记 Superseded + ADR 0003 新写 + CONTEXT.md 术语微调；7 个新增单元测试（4 模型层 + 3 迁移层）
+- **历史消息反馈写入读出**（PR #94 / Issue #90）：`_persist_turn` 加 `request_id` 必填参数，`answer` / `answer_stream` 两条路径透传到 assistant `Message`（user 消息不写）；`ConversationRepository.add_message` 签名加可选 `request_id: uuid.UUID | None = None`（保持 ORM 写入唯一入口约定）；`MessageRead` schema 加 `request_id: uuid.UUID | None`，`GET /api/v1/conversations/{id}/messages` 响应自动携带；5 个新增单元测试（写入路径 3 + 读出路径 1 + repository 签名 1）；剩余切片 #91（前端 model + client）/ #92（UI 渲染 + 交互）跟踪
 
 ### 性能优化
 
@@ -180,7 +181,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：812 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个）
+- pytest：817 passed（含阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个）
 - ruff format --check：通过
 - ruff check：通过
 - mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
@@ -194,7 +195,7 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 后续可选方向
 
-- 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩—— **prefactor 已完成**（PR #93 / Issue #89：`Message.request_id` 列 + ADR 0003）；剩余切片 #90（后端 `_persist_turn` 写入 + `MessageRead` schema）/ #91（前端 `MessageInfo` + `ApiClient.get_feedback`）/ #92（`_render_feedback_buttons` 扩展到历史消息）跟踪
+- 历史消息反馈（阶段 10.2 已识别局限）：后端 `Message` 模型新增 `request_id` 字段 + 前端 `MessageInfo` 同步，让历史消息也能点赞/点踩—— **prefactor 已完成**（PR #93 / Issue #89：`Message.request_id` 列 + ADR 0003）；**写入读出已完成**（PR #94 / Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展）；剩余切片 #91（前端 `MessageInfo` + `ApiClient.get_feedback`）/ #92（`_render_feedback_buttons` 扩展到历史消息）跟踪
 - 用户注册登录系统 + JWT（11.1 已预留 HTTPBearer 格式兼容，切换成本低）
 - 生产级安全加固：非 root 容器用户、密钥管理（Vault/secrets manager）、TLS 终止（Nginx 反代）
 - 表格感知切分与公式识别（阶段 12）
