@@ -37,8 +37,9 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Body, Depends, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
-from research_rag.api.dependencies import get_qa_service
+from research_rag.api.dependencies import get_db, get_qa_service
 from research_rag.api.schemas import QueryRequest, QueryResponse
 from research_rag.api.security import validate_question
 from research_rag.services.qa_service import (
@@ -60,6 +61,7 @@ router = APIRouter(prefix="/api/v1/queries", tags=["queries"])
 def create_query(
     query_request: QueryRequest = Body(...),
     service: QaService = Depends(get_qa_service),
+    session: Session = Depends(get_db),
 ) -> QueryResponse | StreamingResponse:
     """提交问答请求。
 
@@ -98,6 +100,7 @@ def create_query(
                 document_ids=query_request.document_ids,
                 top_k=query_request.top_k,
                 conversation_id=query_request.conversation_id,
+                session=session,
             ),
             media_type="text/event-stream",
             headers={
@@ -106,12 +109,14 @@ def create_query(
             },
         )
 
-    return service.answer(
+    response = service.answer(
         question=query_request.question,
         document_ids=query_request.document_ids,
         top_k=query_request.top_k,
         conversation_id=query_request.conversation_id,
     )
+    session.commit()
+    return response
 
 
 async def _stream_answer(
@@ -121,6 +126,7 @@ async def _stream_answer(
     document_ids: list[uuid.UUID],
     top_k: int,
     conversation_id: uuid.UUID | None,
+    session: Session,
 ) -> AsyncIterator[str]:
     """把 ``QaService.answer_stream`` 的 ``StreamEvent`` 序列化为 SSE 文本。
 
@@ -138,6 +144,15 @@ async def _stream_answer(
         top_k=top_k,
         conversation_id=conversation_id,
     ):
+        if isinstance(event, StreamDoneEvent):
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
+                yield _sse("error", {"detail": "回答已生成，但会话保存失败。"})
+                return
+        elif isinstance(event, StreamErrorEvent):
+            session.rollback()
         yield _format_sse(event)
 
 

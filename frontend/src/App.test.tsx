@@ -1,23 +1,35 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
+import { AppProvider } from "./store/AppContext";
+
+// App 测试：需要包裹 QueryClientProvider + AppProvider
+function renderWithProviders() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <AppProvider>
+        <App />
+      </AppProvider>
+    </QueryClientProvider>,
+  );
+}
 
 describe("App", () => {
   it("渲染根布局容器（class=app）", () => {
-    const { container } = render(<App />);
+    const { container } = renderWithProviders();
     const root = container.querySelector(".app");
     expect(root).not.toBeNull();
     expect(screen.getByTestId("app-root")).toBeInTheDocument();
   });
 
-  it("同时渲染左侧栏与右侧主聊天区", () => {
-    render(<App />);
+  it("默认渲染 chat 视图（含欢迎占位与左侧栏）", () => {
+    renderWithProviders();
     expect(screen.getByTestId("sidebar")).toBeInTheDocument();
     expect(screen.getByTestId("chat-area")).toBeInTheDocument();
-  });
-
-  it("渲染品牌标题（科研文献智能问答）于内容占位区", () => {
-    render(<App />);
     expect(screen.getByText("科研文献智能问答")).toBeInTheDocument();
   });
 });

@@ -23,9 +23,10 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from research_rag.api.app import create_app
-from research_rag.api.dependencies import get_qa_service
+from research_rag.api.dependencies import get_db, get_qa_service
 from research_rag.api.schemas import CitationRead, QueryResponse
 from research_rag.db.models import DocumentNotFoundError
 from research_rag.db.session import create_session_factory
@@ -89,11 +90,19 @@ def mock_service() -> MagicMock:
 
 
 @pytest.fixture
-def app(mock_service: MagicMock) -> FastAPI:
+def mock_session() -> MagicMock:
+    """路由事务边界使用的 Session mock。"""
+
+    return MagicMock(spec=Session)
+
+
+@pytest.fixture
+def app(mock_service: MagicMock, mock_session: MagicMock) -> FastAPI:
     """创建应用实例：注入内存 SQLite factory，override service 依赖。"""
 
     app = create_app(session_factory=create_session_factory("sqlite:///:memory:"))
     app.dependency_overrides[get_qa_service] = lambda: mock_service
+    app.dependency_overrides[get_db] = lambda: mock_session
     return app
 
 
@@ -110,7 +119,11 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 # ---------------------------------------------------------------------------
 
 
-def test_create_query_success(client: TestClient, mock_service: MagicMock) -> None:
+def test_create_query_success(
+    client: TestClient,
+    mock_service: MagicMock,
+    mock_session: MagicMock,
+) -> None:
     """问答成功：返回 200 + QueryResponse，service 收到正确参数。"""
 
     response_data = make_query_response()
@@ -130,6 +143,7 @@ def test_create_query_success(client: TestClient, mock_service: MagicMock) -> No
     assert body["citations"][0]["score"] == pytest.approx(0.92)
     assert body["request_id"] == str(response_data.request_id)
     assert body["elapsed_ms"] == 150
+    mock_session.commit.assert_called_once_with()
     # 验证 service 被正确调用（top_k 默认从环境变量读，测试环境未设置时为 DEFAULT_TOP_K）
     mock_service.answer.assert_called_once_with(
         question="深度学习是什么？",
@@ -313,7 +327,11 @@ async def _stream_token_then_done() -> AsyncIterator[StreamEvent]:
     )
 
 
-def test_create_query_stream_returns_sse(client: TestClient, mock_service: MagicMock) -> None:
+def test_create_query_stream_returns_sse(
+    client: TestClient,
+    mock_service: MagicMock,
+    mock_session: MagicMock,
+) -> None:
     """stream=true：返回 text/event-stream，含 token + done 事件。"""
 
     mock_service.answer_stream.return_value = _stream_token_then_done()
@@ -331,6 +349,7 @@ def test_create_query_stream_returns_sse(client: TestClient, mock_service: Magic
     assert "Hello " in body
     assert "world [C1]" in body
     assert "paper.pdf" in body  # done 事件中的引用元数据
+    mock_session.commit.assert_called_once_with()
 
     # 验证 answer_stream 被正确调用
     mock_service.answer_stream.assert_called_once_with(
@@ -348,7 +367,11 @@ async def _stream_error_only() -> AsyncIterator[StreamEvent]:
     yield StreamErrorEvent(detail="上下文证据不足以回答该问题。")
 
 
-def test_create_query_stream_error_event(client: TestClient, mock_service: MagicMock) -> None:
+def test_create_query_stream_error_event(
+    client: TestClient,
+    mock_service: MagicMock,
+    mock_session: MagicMock,
+) -> None:
     """stream=true + 检索异常：SSE 中含 error 事件，HTTP 仍为 200。"""
 
     mock_service.answer_stream.return_value = _stream_error_only()
@@ -360,6 +383,7 @@ def test_create_query_stream_error_event(client: TestClient, mock_service: Magic
     body = response.text
     assert "event: error" in body
     assert "证据不足" in body
+    mock_session.rollback.assert_called_once_with()
 
 
 def test_create_query_stream_passes_document_ids_and_top_k(

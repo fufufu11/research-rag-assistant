@@ -316,4 +316,69 @@ def create_app(
     app.include_router(conversations_router, dependencies=auth_dependency)
     app.include_router(feedback_router, dependencies=auth_dependency)
 
+    # 阶段 T8：生产环境托管 frontend/dist 静态文件 + SPA fallback
+    # 设计取舍（ADR 0005）：
+    # - StaticFiles 挂载到 /web 路径，提供 JS/CSS/图片等静态资源
+    # - 单独注册 GET / 与 /web（catch-all）路由，返回 index.html
+    #   支持 React Router 的 client-side routing（SPA fallback）
+    # - 仅在 frontend/dist 存在时挂载；开发环境走 vite dev server 5173
+    #   不存在时跳过，避免测试环境或纯 API 部署报错
+    _mount_frontend_static(app)
+
     return app
+
+
+def _mount_frontend_static(app: FastAPI) -> None:
+    """挂载 frontend/dist 静态文件 + SPA fallback（生产环境）。
+
+    若 ``frontend/dist`` 目录不存在（开发环境或纯 API 部署），跳过挂载。
+    """
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    # 仓库根目录：src/research_rag/api/app.py → 上溯 4 级
+    repo_root = Path(__file__).resolve().parents[4]
+    dist_dir = repo_root / "frontend" / "dist"
+    index_html = dist_dir / "index.html"
+
+    if not index_html.exists():
+        # 开发环境或纯 API 部署：不挂载静态文件
+        return
+
+    # 挂载 /web 路径下的静态资源（js/css/图片）
+    # html=False：单独用 catch-all 路由处理 SPA fallback，避免 StaticFiles
+    # 默认 404 fallback 拦截掉我们的 / 路由
+    app.mount(
+        "/web",
+        StaticFiles(directory=str(dist_dir), html=False),
+        name="frontend-static",
+    )
+
+    # SPA fallback：根路径 / 与 /web 下的非文件路径都返回 index.html
+    # 用 catch-all 路由实现 React Router 的 client-side routing
+    @app.get("/", include_in_schema=False)
+    async def _spa_root() -> FileResponse:
+        return FileResponse(str(index_html))
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_catch_all(full_path: str) -> FileResponse:
+        """SPA fallback：非 /api/v1/* 与非静态资源的路径都返回 index.html。
+
+        顺序很重要：此路由在 include_router 之后注册，但 FastAPI 路由匹配
+        优先匹配具体路径，/api/v1/* 会先被 router 匹配。
+        """
+        # /api/v1/* 由各自的 router 处理，不在此拦截
+        if full_path.startswith("api/v1/"):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        # 尝试在 dist_dir 下找具体文件（如 favicon.ico）
+        candidate = dist_dir / full_path
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+
+        # 其他路径返回 index.html（React Router 接管）
+        return FileResponse(str(index_html))

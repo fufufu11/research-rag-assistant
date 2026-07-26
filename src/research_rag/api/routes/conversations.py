@@ -31,8 +31,9 @@ import uuid
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Body, Depends, status
+from sqlalchemy.orm import Session
 
-from research_rag.api.dependencies import get_qa_service
+from research_rag.api.dependencies import get_db, get_qa_service
 from research_rag.api.schemas import (
     ConversationCreate,
     ConversationList,
@@ -51,6 +52,7 @@ router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
 def create_conversation(
     payload: ConversationCreate = Body(...),
     service: QaService = Depends(get_qa_service),
+    session: Session = Depends(get_db),
 ) -> Conversation:
     """创建会话。
 
@@ -62,6 +64,9 @@ def create_conversation(
         title=payload.title,
         document_ids=payload.document_ids,
     )
+    # 显式 commit：service 层只 flush 不 commit，事务边界由路由控制
+    # （与 feedback / document 路由风格一致，否则下个请求 GET 详情会 404）
+    session.commit()
     # 新建会话无消息，messages 字段为 None（列表场景）
     return conv
 
@@ -114,10 +119,12 @@ def get_conversation(
 def delete_conversation(
     conversation_id: uuid.UUID,
     service: QaService = Depends(get_qa_service),
+    session: Session = Depends(get_db),
 ) -> None:
     """删除会话（级联删除其消息）。不存在抛 ``ConversationNotFoundError``（→ 404）。"""
 
     service.delete_conversation(conversation_id)
+    session.commit()
 
 
 @router.get("/{conversation_id}/messages", response_model=list[MessageRead])

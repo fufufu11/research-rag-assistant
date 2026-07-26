@@ -1,0 +1,9 @@
+# 防止 docker 构建上下文包含 node_modules 与其他不必要的文件
+node_modules
+dist
+.git
+.gitignore
+*.log
+.vscode
+.idea
+.DS_Store
