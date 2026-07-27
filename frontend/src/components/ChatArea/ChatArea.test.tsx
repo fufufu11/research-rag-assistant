@@ -21,6 +21,7 @@ const uploadedDocument: DocumentRead = {
 function renderWithProviders(options?: {
   includeSidebar?: boolean;
   currentConversation?: ConversationRead | null;
+  canChat?: boolean;
 }) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -35,6 +36,7 @@ function renderWithProviders(options?: {
       <ChatArea
         client={client}
         currentConversation={options?.currentConversation}
+        canChat={options?.canChat}
       />
     </QueryClientProvider>,
   );
@@ -87,6 +89,28 @@ describe("ChatArea", () => {
     expect(input).toHaveAttribute("accept", "application/pdf,.pdf");
     expect(input).not.toHaveAttribute("multiple");
     expect(screen.getByRole("button", { name: "上传 PDF" })).toBeInTheDocument();
+  });
+
+  it("显示免责声明且 Shift+Enter 不发送问题", () => {
+    const ask = vi.spyOn(ApiClient.prototype, "askQuestionStream");
+    renderWithProviders({
+      canChat: true,
+      currentConversation: {
+        id: "conversation-new",
+        title: null,
+        document_ids: null,
+        created_at: "2026-07-27T00:00:00Z",
+        updated_at: "2026-07-27T00:00:00Z",
+        messages: null,
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "问题输入" });
+    fireEvent.change(input, { target: { value: "第一行\n第二行" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+
+    expect(screen.getByText("AI 可能出错，请核查重要信息")).toBeInTheDocument();
+    expect(input).toHaveValue("第一行\n第二行");
+    expect(ask).not.toHaveBeenCalled();
   });
 
   it("上传成功后刷新共享文档列表", async () => {
@@ -177,5 +201,215 @@ describe("ChatArea", () => {
       "content-placeholder",
     );
     expect(screen.getByTestId("input-bar")).toBeInTheDocument();
+  });
+
+  it("在本页新会话中发送问题并流式呈现完成的 Turn", async () => {
+    vi.spyOn(ApiClient.prototype, "askQuestionStream").mockImplementation(
+      async (_payload, handlers) => {
+        handlers.onToken("基于证据");
+        handlers.onToken("得出的回答");
+        handlers.onDone({
+          citations: [],
+          request_id: "req-1",
+          elapsed_ms: 18,
+          conversation_id: "conversation-new",
+        });
+      },
+    );
+    renderWithProviders({
+      canChat: true,
+      currentConversation: {
+        id: "conversation-new",
+        title: null,
+        document_ids: ["doc-1"],
+        created_at: "2026-07-27T00:00:00Z",
+        updated_at: "2026-07-27T00:00:00Z",
+        messages: null,
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "问题输入" });
+
+    fireEvent.change(input, { target: { value: "论文结论是什么？" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(await screen.findByText("论文结论是什么？")).toBeInTheDocument();
+    expect(await screen.findByText("基于证据得出的回答")).toBeInTheDocument();
+    expect(ApiClient.prototype.askQuestionStream).toHaveBeenCalledWith(
+      {
+        question: "论文结论是什么？",
+        conversation_id: "conversation-new",
+      },
+      expect.any(Object),
+      expect.any(AbortSignal),
+    );
+    expect(input).toHaveValue("");
+  });
+
+  it("停止生成会中止请求、移除未完成 Turn 并还原问题", async () => {
+    vi.spyOn(ApiClient.prototype, "askQuestionStream").mockImplementation(
+      async (_payload, _handlers, signal) =>
+        new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        }),
+    );
+    renderWithProviders({
+      canChat: true,
+      currentConversation: {
+        id: "conversation-new",
+        title: null,
+        document_ids: null,
+        created_at: "2026-07-27T00:00:00Z",
+        updated_at: "2026-07-27T00:00:00Z",
+        messages: null,
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "问题输入" });
+    fireEvent.change(input, { target: { value: "请详细解释方法" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(await screen.findByText("请详细解释方法")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+
+    expect(await screen.findByDisplayValue("请详细解释方法")).toBeEnabled();
+    expect(document.querySelector(".msg.user")).toBeNull();
+  });
+
+  it("流式失败会回滚 Turn、还原问题并显示可关闭的友好错误", async () => {
+    vi.spyOn(ApiClient.prototype, "askQuestionStream").mockRejectedValue(
+      new TypeError("socket leaked provider details"),
+    );
+    renderWithProviders({
+      canChat: true,
+      currentConversation: {
+        id: "conversation-new",
+        title: null,
+        document_ids: null,
+        created_at: "2026-07-27T00:00:00Z",
+        updated_at: "2026-07-27T00:00:00Z",
+        messages: null,
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "问题输入" });
+    fireEvent.change(input, { target: { value: "比较两种方法" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "生成回答失败：无法连接服务，请检查网络后重试。",
+    );
+    expect(screen.queryByText(/socket leaked/)).not.toBeInTheDocument();
+    expect(input).toHaveValue("比较两种方法");
+    expect(document.querySelector(".msg.user")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭错误" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("完成回答后呈现真实引用编号并在复制成功时提示", async () => {
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    vi.spyOn(ApiClient.prototype, "askQuestionStream").mockImplementation(
+      async (_payload, handlers) => {
+        handlers.onToken("结论由实验支持 [C3]。");
+        handlers.onDone({
+          citations: [
+            {
+              document_id: "doc-1",
+              document_name: "paper.pdf",
+              start_page: 3,
+              end_page: 3,
+              chunk_index: 8,
+              snippet: "实验结果显示准确率提升。",
+              score: 0.91,
+            },
+          ],
+          request_id: "req-3",
+          elapsed_ms: 20,
+          conversation_id: "conversation-new",
+          message_id: "message-3",
+        });
+      },
+    );
+    renderWithProviders({
+      canChat: true,
+      currentConversation: {
+        id: "conversation-new",
+        title: null,
+        document_ids: ["doc-1"],
+        created_at: "2026-07-27T00:00:00Z",
+        updated_at: "2026-07-27T00:00:00Z",
+        messages: null,
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "问题输入" });
+    fireEvent.change(input, { target: { value: "结论？" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const copyButton = await screen.findByRole("button", {
+      name: "复制回答",
+    });
+    expect(
+      screen.getByRole("button", { name: "查看引用 C3" }),
+    ).toBeInTheDocument();
+    fireEvent.click(copyButton);
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "回答与来源已复制",
+    );
+  });
+
+  it("切换会话会中止请求并丢弃未完成 Turn", async () => {
+    let requestSignal: AbortSignal | undefined;
+    vi.spyOn(ApiClient.prototype, "askQuestionStream").mockImplementation(
+      async (_payload, _handlers, signal) => {
+        requestSignal = signal;
+        return new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        });
+      },
+    );
+    const client = new ApiClient({ apiKey: null });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const conversation = (id: string): ConversationRead => ({
+      id,
+      title: null,
+      document_ids: null,
+      created_at: "2026-07-27T00:00:00Z",
+      updated_at: "2026-07-27T00:00:00Z",
+      messages: null,
+    });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <ChatArea
+          client={client}
+          currentConversation={conversation("conversation-1")}
+          canChat
+        />
+      </QueryClientProvider>,
+    );
+    const input = screen.getByRole("textbox", { name: "问题输入" });
+    fireEvent.change(input, { target: { value: "未完成的问题" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByText("未完成的问题");
+
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <ChatArea
+          client={client}
+          currentConversation={conversation("conversation-2")}
+          canChat
+        />
+      </QueryClientProvider>,
+    );
+
+    await vi.waitFor(() => expect(requestSignal?.aborted).toBe(true));
+    expect(document.querySelector(".msg.user")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "问题输入" })).toHaveValue("");
   });
 });

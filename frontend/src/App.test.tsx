@@ -67,6 +67,29 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "新建对话" }));
 
     expect(await screen.findByText("新会话 · 1 篇文档")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "问题输入" })).toBeEnabled();
+  });
+
+  it("选择已有会话时保持问题输入禁用", async () => {
+    vi.spyOn(ApiClient.prototype, "listConversations").mockResolvedValue({
+      items: [
+        {
+          id: "conversation-existing",
+          title: "已有讨论",
+          document_ids: null,
+          created_at: "2026-07-27T00:00:00Z",
+          updated_at: "2026-07-27T00:00:00Z",
+          messages: null,
+        },
+      ],
+    });
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "已有讨论" }),
+    );
+
+    expect(screen.getByRole("textbox", { name: "问题输入" })).toBeDisabled();
   });
 
   it("删除当前会话后主区恢复未选择状态", async () => {

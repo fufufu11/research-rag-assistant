@@ -18,6 +18,9 @@ export function App({ client: providedClient }: AppProps) {
   const [currentConversation, setCurrentConversation] =
     useState<ConversationRead | null>(null);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
+  const [sessionConversationIds, setSessionConversationIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -37,13 +40,32 @@ export function App({ client: providedClient }: AppProps) {
           selectedDocumentIds={selectedDocumentIds}
           onSelectedDocumentIdsChange={setSelectedDocumentIds}
           onSelectConversation={setCurrentConversation}
+          onConversationCreated={(conversation) => {
+            setSessionConversationIds((ids) => {
+              const next = new Set(ids);
+              next.add(conversation.id);
+              return next;
+            });
+          }}
           onConversationDeleted={(id) => {
+            setSessionConversationIds((ids) => {
+              const next = new Set(ids);
+              next.delete(id);
+              return next;
+            });
             setCurrentConversation((conversation) =>
               conversation?.id === id ? null : conversation,
             );
           }}
         />
-        <ChatArea client={client} currentConversation={currentConversation} />
+        <ChatArea
+          client={client}
+          currentConversation={currentConversation}
+          canChat={
+            currentConversation !== null &&
+            sessionConversationIds.has(currentConversation.id)
+          }
+        />
       </div>
     </QueryClientProvider>
   );
