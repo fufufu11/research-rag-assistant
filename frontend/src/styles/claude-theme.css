@@ -10,6 +10,10 @@
   --bg-sidebar-soft: #28221e;
   --bg-input: #ffffff;
   --bg-code: #f4efe8;
+  --bg-top-bar: rgba(250, 249, 247, 0.85);
+  --bg-selected-on-dark: rgba(201, 100, 66, 0.12);
+  --bg-error-on-dark: rgba(241, 160, 142, 0.12);
+  --bg-error-on-dark-soft: rgba(241, 160, 142, 0.08);
 
   /* 文字 */
   --fg-primary: #2d2a26;
@@ -17,6 +21,11 @@
   --fg-muted: #9b948a;
   --fg-on-dark: #f5efe6;
   --fg-on-dark-muted: #a8a094;
+  --fg-error-on-dark: #f1a08e;
+  --fg-success-on-dark: #9cc6a7;
+  --fg-warning-on-dark: #e5c486;
+  --fg-success: #3f744e;
+  --fg-error: #a5412f;
 
   /* 强调色（赤陶土，学术温暖感） */
   --accent: #c96442;
@@ -28,6 +37,10 @@
   --border: #ebe5dc;
   --border-strong: #d9d2c5;
   --border-on-dark: #3a322a;
+  --border-error-on-dark: rgba(241, 160, 142, 0.28);
+
+  /* 交互状态 */
+  --focus-ring: 0 0 0 2px rgba(201, 100, 66, 0.15);
 
   /* 引用卡片彩色边框（区分来源文档，T5 引用卡片复用） */
   --cite-1: #c96442;

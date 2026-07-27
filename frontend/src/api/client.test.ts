@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { MockInstance } from "vitest";
 import { ApiClient, ApiClientError } from "./client";
-import type { DocumentList } from "./types";
+import type { ConversationList, DocumentList } from "./types";
 
 // T1 阶段：ApiClient 健康检查测试。
 // 验证：基础 GET 请求、Authorization header 注入、错误处理。
@@ -98,6 +98,25 @@ describe("ApiClient", () => {
     expect(ApiClientError).toBeDefined();
   });
 
+  it("HTTP 422 保留结构化 detail", async () => {
+    const client = new ApiClient();
+    const detail = [
+      { loc: ["body", "document_ids"], msg: "invalid value" },
+    ];
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail }), {
+        status: 422,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(client.listConversations()).rejects.toMatchObject({
+      name: "ApiClientError",
+      status: 422,
+      detail,
+    });
+  });
+
   it("VITE_API_BASE_URL 设置时拼到请求 URL 前面", async () => {
     vi.stubEnv("VITE_API_BASE_URL", "http://localhost:8000");
     const client = new ApiClient();
@@ -148,6 +167,58 @@ describe("ApiClient", () => {
 
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe("/api/v1/documents/doc-1");
+    expect(init?.method).toBe("DELETE");
+  });
+
+  it("listConversations 调用 GET /api/v1/conversations", async () => {
+    const fakeResponse: ConversationList = { items: [] };
+    const fetchSpy = mockFetchOk(fakeResponse);
+    const client = new ApiClient();
+
+    await expect(client.listConversations()).resolves.toEqual(fakeResponse);
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/conversations");
+    expect(init?.method).toBe("GET");
+  });
+
+  it("createConversation 用 JSON POST 锁定选中的文档范围", async () => {
+    const conversation = {
+      id: "conversation-1",
+      title: null,
+      document_ids: ["doc-ready"],
+      created_at: "2026-07-27T00:00:00Z",
+      updated_at: "2026-07-27T00:00:00Z",
+      messages: null,
+    };
+    const fetchSpy = mockFetchOk(conversation, 201);
+    const client = new ApiClient();
+
+    await expect(
+      client.createConversation({ document_ids: ["doc-ready"] }),
+    ).resolves.toEqual(conversation);
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/conversations");
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Content-Type")).toBe(
+      "application/json",
+    );
+    expect(init?.body).toBe(JSON.stringify({ document_ids: ["doc-ready"] }));
+  });
+
+  it("deleteConversation 调用会话删除接口并接受 204 空响应", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const client = new ApiClient();
+
+    await expect(
+      client.deleteConversation("conversation/1"),
+    ).resolves.toBeUndefined();
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/conversations/conversation%2F1");
     expect(init?.method).toBe("DELETE");
   });
 

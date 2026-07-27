@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiClientError } from "../../api/client";
-import type { DocumentRead } from "../../api/types";
+import type { ConversationRead, DocumentRead } from "../../api/types";
 import { Sidebar } from "../Sidebar/Sidebar";
 import { ChatArea } from "./ChatArea";
 
@@ -18,7 +18,10 @@ const uploadedDocument: DocumentRead = {
   updated_at: "2026-07-27T00:00:00Z",
 };
 
-function renderWithProviders(options?: { includeSidebar?: boolean }) {
+function renderWithProviders(options?: {
+  includeSidebar?: boolean;
+  currentConversation?: ConversationRead | null;
+}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -29,7 +32,10 @@ function renderWithProviders(options?: { includeSidebar?: boolean }) {
   return render(
     <QueryClientProvider client={queryClient}>
       {options?.includeSidebar && <Sidebar client={client} />}
-      <ChatArea client={client} />
+      <ChatArea
+        client={client}
+        currentConversation={options?.currentConversation}
+      />
     </QueryClientProvider>,
   );
 }
@@ -49,6 +55,22 @@ describe("ChatArea", () => {
     expect(screen.getByTestId("top-bar")).toBeInTheDocument();
     expect(screen.getByTestId("model-dropdown")).toBeInTheDocument();
     expect(screen.getByText("未选择会话")).toBeInTheDocument();
+  });
+
+  it("长会话摘要保留完整悬浮提示", () => {
+    const title = "一篇标题非常长且需要在窄屏顶部栏中安全截断的科研论文讨论";
+    renderWithProviders({
+      currentConversation: {
+        id: "conversation-long-title",
+        title,
+        document_ids: ["doc-1", "doc-2"],
+        created_at: "2026-07-27T00:00:00Z",
+        updated_at: "2026-07-27T00:00:00Z",
+        messages: null,
+      },
+    });
+
+    expect(screen.getByTitle(`${title} · 2 篇文档`)).toBeInTheDocument();
   });
 
   it("渲染居中内容占位", () => {
@@ -129,7 +151,7 @@ describe("ChatArea", () => {
     expect(uploadDocument).not.toHaveBeenCalled();
   });
 
-  it("上传 400 错误显示友好提示", async () => {
+  it("上传 400 错误显示友好提示且不暴露后端详情", async () => {
     vi.spyOn(ApiClient.prototype, "uploadDocument").mockRejectedValue(
       new ApiClientError(400, "PDF 文件为空"),
     );
@@ -143,8 +165,9 @@ describe("ChatArea", () => {
     });
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "上传文档失败：请求内容有误。PDF 文件为空",
+      "上传文档失败：请求内容有误，请检查后重试。",
     );
+    expect(screen.queryByText(/PDF 文件为空/)).not.toBeInTheDocument();
     expect(screen.queryByText(/API error/)).not.toBeInTheDocument();
   });
 
