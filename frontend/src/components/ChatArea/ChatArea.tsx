@@ -1,11 +1,17 @@
 import { useRef, useState, type ChangeEvent } from "react";
 import type { ApiClient } from "../../api/client";
 import { friendlyApiError } from "../../api/errors";
+import type { ConversationRead } from "../../api/types";
 import { useUploadDocument } from "../../hooks/useDocuments";
+import {
+  conversationScopeLabel,
+  conversationTitle,
+} from "../../utils/conversation";
 import { ModelDropdown } from "../ModelDropdown/ModelDropdown";
 
 interface ChatAreaProps {
   client: ApiClient;
+  currentConversation?: ConversationRead | null;
 }
 
 interface UploadNotice {
@@ -20,10 +26,15 @@ function isPdf(file: File): boolean {
   );
 }
 
-export function ChatArea({ client }: ChatAreaProps) {
+export function ChatArea({ client, currentConversation = null }: ChatAreaProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<UploadNotice | null>(null);
   const uploadDocument = useUploadDocument(client);
+  const conversationSummary = currentConversation
+    ? `${conversationTitle(currentConversation)} · ${conversationScopeLabel(
+        currentConversation,
+      )}`
+    : "未选择会话";
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -58,8 +69,11 @@ export function ChatArea({ client }: ChatAreaProps) {
     <main className="chat-area" data-testid="chat-area">
       <div className="top-bar" data-testid="top-bar">
         <ModelDropdown />
-        <div className="conversation-meta">
-          <span>未选择会话</span>
+        <div
+          className="conversation-meta"
+          title={currentConversation ? conversationSummary : undefined}
+        >
+          <span>{conversationSummary}</span>
         </div>
       </div>
 

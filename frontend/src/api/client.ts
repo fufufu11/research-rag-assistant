@@ -1,4 +1,10 @@
-import type { DocumentList, DocumentRead } from "./types";
+import type {
+  ConversationCreate,
+  ConversationList,
+  ConversationRead,
+  DocumentList,
+  DocumentRead,
+} from "./types";
 
 // ApiClient：封装后端 REST API 调用。
 // 设计取舍（ADR 0005）：
@@ -11,10 +17,10 @@ import type { DocumentList, DocumentRead } from "./types";
 // 再加，遵循 YAGNI（不提前声明 stub）。
 export class ApiClientError extends Error {
   readonly status: number;
-  readonly detail: string;
+  readonly detail: unknown;
 
-  constructor(status: number, detail: string) {
-    super(`API error ${status}: ${detail}`);
+  constructor(status: number, detail: unknown) {
+    super(`API error ${status}`);
     this.name = "ApiClientError";
     this.status = status;
     this.detail = detail;
@@ -22,10 +28,12 @@ export class ApiClientError extends Error {
 }
 
 async function throwApiClientError(response: Response): Promise<never> {
-  let detail = response.statusText;
+  let detail: unknown = response.statusText;
   try {
-    const body = (await response.json()) as { detail?: string };
-    if (body.detail) detail = body.detail;
+    const body: unknown = await response.json();
+    if (typeof body === "object" && body !== null && "detail" in body) {
+      detail = body.detail ?? response.statusText;
+    }
   } catch {
     // Non-JSON error responses use the HTTP status text.
   }
@@ -99,5 +107,28 @@ export class ApiClient {
     await this.fetchResponse(`/api/v1/documents/${id}`, {
       method: "DELETE",
     });
+  }
+
+  async listConversations(): Promise<ConversationList> {
+    return this.request<ConversationList>("/api/v1/conversations", {
+      method: "GET",
+    });
+  }
+
+  async createConversation(
+    payload: ConversationCreate,
+  ): Promise<ConversationRead> {
+    return this.request<ConversationRead>("/api/v1/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteConversation(id: string): Promise<void> {
+    await this.fetchResponse(
+      `/api/v1/conversations/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 }

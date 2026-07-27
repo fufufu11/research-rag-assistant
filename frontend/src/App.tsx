@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiClient } from "./api/client";
+import type { ConversationRead } from "./api/types";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { ChatArea } from "./components/ChatArea/ChatArea";
 
@@ -14,6 +15,9 @@ interface AppProps {
 
 export function App({ client: providedClient }: AppProps) {
   const [client] = useState(() => providedClient ?? new ApiClient());
+  const [currentConversation, setCurrentConversation] =
+    useState<ConversationRead | null>(null);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -27,8 +31,19 @@ export function App({ client: providedClient }: AppProps) {
   return (
     <QueryClientProvider client={queryClient}>
       <div className="app" data-testid="app-root">
-        <Sidebar client={client} />
-        <ChatArea client={client} />
+        <Sidebar
+          client={client}
+          currentConversationId={currentConversation?.id ?? null}
+          selectedDocumentIds={selectedDocumentIds}
+          onSelectedDocumentIdsChange={setSelectedDocumentIds}
+          onSelectConversation={setCurrentConversation}
+          onConversationDeleted={(id) => {
+            setCurrentConversation((conversation) =>
+              conversation?.id === id ? null : conversation,
+            );
+          }}
+        />
+        <ChatArea client={client} currentConversation={currentConversation} />
       </div>
     </QueryClientProvider>
   );

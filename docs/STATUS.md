@@ -42,15 +42,16 @@
 
 ### 演示界面（React SPA）
 
-- **React SPA**（ADR 0005，Issue #124/#125/#135）：`frontend/` Vite + React 18 + TypeScript，落地 Claude 静谧极简风格（设计稿 `.trae/handoffs/ui_claude_v1.html`）
+- **React SPA**（ADR 0005，Issue #124/#125/#135/#137）：`frontend/` Vite + React 18 + TypeScript，落地 Claude 静谧极简风格（设计稿 `.trae/handoffs/ui_claude_v1.html`）
   - **T2 已完成**：260px 左侧栏（深棕 `#1c1815`）+ 右侧主聊天区（暖米色 `#faf9f7`）+ 顶部模型下拉占位 + 居中收窄 720px 内容区
   - **T3 已完成**：TanStack Query 文档列表 + 单 PDF 上传 + 无确认删除 + 四种处理状态与失败原因 + 结构化错误友好提示
-  - 左侧栏：文档区默认展开且可折叠，展示名称、页数、状态和失败原因；上传或删除成功后自动刷新列表
-  - 右侧主区：顶部栏 ModelDropdown（`<select disabled>` 占位）+ 未选择会话提示 + 内容占位「科研文献智能问答」+ 底部单 PDF 上传入口
+  - **T4 已完成**：会话列表 + 创建 + 无确认删除 + 切换高亮 + 就绪文档勾选与会话级范围锁定 + 结构化错误友好提示
+  - 左侧栏：会话与文档区默认展开且可折叠；会话展示标题、日期和锁定文档数，文档展示名称、页数、状态和失败原因
+  - 右侧主区：顶部栏 ModelDropdown（`<select disabled>` 占位）+ 当前会话与文档范围摘要 + 内容占位「科研文献智能问答」+ 底部单 PDF 上传入口
   - Google Fonts：Newsreader（衬线消息正文）+ IBM Plex Sans（UI）+ IBM Plex Mono（代码/ID）
   - CSS 变量主题：`claude-theme.css` 定义完整设计 token（背景/表面色、文字色、赤陶土强调色 `#c96442`、边框、引用卡片彩色边框 `--cite-1` ~ `--cite-4`、阴影、布局尺寸）
 - **历史**：Streamlit UI 层已在 T1 删除（`src/research_rag/ui/` 移除 + streamlit/requests 依赖清理），UI 体验优化阶段一/二/三过渡切片（#72 / #109-#113 / #121）已随 Streamlit 退役归档
-- 会话管理、文档范围锁定、引用卡片、流式输出等业务功能将在 T4-T8 逐步接入 React SPA
+- 引用卡片、流式输出、历史消息与反馈等业务功能将在 T5-T8 逐步接入 React SPA
 
 ### UI 体验优化阶段二（#109-#113）
 

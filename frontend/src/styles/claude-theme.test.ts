@@ -81,6 +81,25 @@ describe("claude-theme.css 设计 token 完整性", () => {
     }
   });
 
+  it("包含交互与状态语义变量", () => {
+    const expectedVars = [
+      "--focus-ring:",
+      "--bg-top-bar:",
+      "--bg-selected-on-dark:",
+      "--bg-error-on-dark:",
+      "--bg-error-on-dark-soft:",
+      "--border-error-on-dark:",
+      "--fg-error-on-dark:",
+      "--fg-success-on-dark:",
+      "--fg-warning-on-dark:",
+      "--fg-success:",
+      "--fg-error:",
+    ];
+    for (const v of expectedVars) {
+      expect(claudeTheme).toContain(v);
+    }
+  });
+
   it("globals.css 导入 claude-theme.css 并定义根布局 .app 网格", () => {
     expect(globals).toContain('@import "./claude-theme.css";');
     expect(globals).toContain(
