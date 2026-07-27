@@ -174,12 +174,16 @@ describe("ApiClient", () => {
     const fakeResponse: ConversationList = { items: [] };
     const fetchSpy = mockFetchOk(fakeResponse);
     const client = new ApiClient();
+    const controller = new AbortController();
 
-    await expect(client.listConversations()).resolves.toEqual(fakeResponse);
+    await expect(client.listConversations(controller.signal)).resolves.toEqual(
+      fakeResponse,
+    );
 
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe("/api/v1/conversations");
     expect(init?.method).toBe("GET");
+    expect(init?.signal).toBe(controller.signal);
   });
 
   it("createConversation 用 JSON POST 锁定选中的文档范围", async () => {
@@ -205,6 +209,29 @@ describe("ApiClient", () => {
       "application/json",
     );
     expect(init?.body).toBe(JSON.stringify({ document_ids: ["doc-ready"] }));
+  });
+
+  it("getConversation 获取包含历史消息的会话详情", async () => {
+    const conversation = {
+      id: "conversation/1",
+      title: "已有讨论",
+      document_ids: null,
+      created_at: "2026-07-27T00:00:00Z",
+      updated_at: "2026-07-27T00:01:00Z",
+      messages: [],
+    };
+    const fetchSpy = mockFetchOk(conversation);
+    const client = new ApiClient();
+    const controller = new AbortController();
+
+    await expect(
+      client.getConversation("conversation/1", controller.signal),
+    ).resolves.toEqual(conversation);
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/conversations/conversation%2F1");
+    expect(init?.method).toBe("GET");
+    expect(init?.signal).toBe(controller.signal);
   });
 
   it("deleteConversation 调用会话删除接口并接受 204 空响应", async () => {

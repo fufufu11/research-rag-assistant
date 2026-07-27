@@ -3,7 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiClient } from "./api/client";
 import type { ConversationRead } from "./api/types";
 import { Sidebar } from "./components/Sidebar/Sidebar";
-import { ChatArea } from "./components/ChatArea/ChatArea";
+import { ChatAreaView } from "./components/ChatArea/ChatArea";
+import { useChat } from "./hooks/useChat";
 
 // App：React SPA 根组件
 // T2 阶段：渲染 Claude 风格基础布局骨架——260px 左侧栏 + 右侧主聊天区。
@@ -15,12 +16,6 @@ interface AppProps {
 
 export function App({ client: providedClient }: AppProps) {
   const [client] = useState(() => providedClient ?? new ApiClient());
-  const [currentConversation, setCurrentConversation] =
-    useState<ConversationRead | null>(null);
-  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
-  const [sessionConversationIds, setSessionConversationIds] = useState<Set<string>>(
-    () => new Set(),
-  );
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -33,40 +28,44 @@ export function App({ client: providedClient }: AppProps) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="app" data-testid="app-root">
-        <Sidebar
-          client={client}
-          currentConversationId={currentConversation?.id ?? null}
-          selectedDocumentIds={selectedDocumentIds}
-          onSelectedDocumentIdsChange={setSelectedDocumentIds}
-          onSelectConversation={setCurrentConversation}
-          onConversationCreated={(conversation) => {
-            setSessionConversationIds((ids) => {
-              const next = new Set(ids);
-              next.add(conversation.id);
-              return next;
-            });
-          }}
-          onConversationDeleted={(id) => {
-            setSessionConversationIds((ids) => {
-              const next = new Set(ids);
-              next.delete(id);
-              return next;
-            });
-            setCurrentConversation((conversation) =>
-              conversation?.id === id ? null : conversation,
-            );
-          }}
-        />
-        <ChatArea
-          client={client}
-          currentConversation={currentConversation}
-          canChat={
-            currentConversation !== null &&
-            sessionConversationIds.has(currentConversation.id)
-          }
-        />
-      </div>
+      <AppContent client={client} />
     </QueryClientProvider>
+  );
+}
+
+function AppContent({ client }: { client: ApiClient }) {
+  const [currentConversation, setCurrentConversation] =
+    useState<ConversationRead | null>(null);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
+  const chat = useChat({
+    client,
+    conversationId: currentConversation?.id ?? null,
+  });
+
+  return (
+    <div className="app" data-testid="app-root">
+      <Sidebar
+        client={client}
+        currentConversationId={currentConversation?.id ?? null}
+        streamingConversationIds={chat.streamingConversationIds}
+        failedConversationIds={chat.failedConversationIds}
+        generationFailedConversationIds={chat.generationFailedConversationIds}
+        selectedDocumentIds={selectedDocumentIds}
+        onSelectedDocumentIdsChange={setSelectedDocumentIds}
+        onSelectConversation={setCurrentConversation}
+        onConversationDeleteStart={chat.discardConversation}
+        onConversationDeleted={(id) => {
+          setCurrentConversation((conversation) =>
+            conversation?.id === id ? null : conversation,
+          );
+        }}
+      />
+      <ChatAreaView
+        client={client}
+        currentConversation={currentConversation}
+        canChat={currentConversation !== null}
+        chat={chat}
+      />
+    </div>
   );
 }
