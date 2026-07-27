@@ -24,6 +24,12 @@ interface ChatAreaProps {
   canChat?: boolean;
 }
 
+type ChatCoordinator = ReturnType<typeof useChat>;
+
+interface ChatAreaViewProps extends ChatAreaProps {
+  chat: ChatCoordinator;
+}
+
 interface UploadNotice {
   kind: "success" | "error";
   message: string;
@@ -41,30 +47,49 @@ export function ChatArea({
   currentConversation = null,
   canChat = false,
 }: ChatAreaProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const previousConversationId = useRef(currentConversation?.id ?? null);
-  const [notice, setNotice] = useState<UploadNotice | null>(null);
-  const [chatError, setChatError] = useState<string | null>(null);
-  const [copyNotice, setCopyNotice] = useState<string | null>(null);
-  const [question, setQuestion] = useState("");
-  const uploadDocument = useUploadDocument(client);
   const chat = useChat({
     client,
     conversationId: currentConversation?.id ?? null,
   });
-  const conversationSummary = currentConversation
-    ? `${conversationTitle(currentConversation)} · ${conversationScopeLabel(
-        currentConversation,
+
+  return (
+    <ChatAreaView
+      client={client}
+      currentConversation={currentConversation}
+      canChat={canChat}
+      chat={chat}
+    />
+  );
+}
+
+export function ChatAreaView({
+  client,
+  currentConversation = null,
+  canChat = false,
+  chat,
+}: ChatAreaViewProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const previousConversationId = useRef(currentConversation?.id ?? null);
+  const activeConversationId = useRef(currentConversation?.id ?? null);
+  const drafts = useRef(new Map<string, string>());
+  const [notice, setNotice] = useState<UploadNotice | null>(null);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const [question, setQuestion] = useState("");
+  const uploadDocument = useUploadDocument(client);
+  const displayConversation = chat.conversationDetail ?? currentConversation;
+  const conversationSummary = displayConversation
+    ? `${conversationTitle(displayConversation)} · ${conversationScopeLabel(
+        displayConversation,
       )}`
     : "未选择会话";
+  activeConversationId.current = currentConversation?.id ?? null;
 
   useEffect(() => {
     const nextId = currentConversation?.id ?? null;
     if (previousConversationId.current === nextId) return;
     previousConversationId.current = nextId;
-    setQuestion("");
-    setChatError(null);
+    setQuestion(nextId ? (drafts.current.get(nextId) ?? "") : "");
     setCopyNotice(null);
   }, [currentConversation?.id]);
 
@@ -106,13 +131,15 @@ export function ChatArea({
 
   const sendQuestion = () => {
     const value = question.trim();
-    if (!canChat || !value || chat.isStreaming) return;
+    if (!canChat || !chat.isHistoryReady || !value || chat.hasPendingTurn) return;
+    const targetConversationId = currentConversation?.id ?? null;
     setQuestion("");
-    setChatError(null);
+    if (targetConversationId) drafts.current.delete(targetConversationId);
     void chat.sendMessage(value).then((error) => {
-      if (error !== null) {
+      if (error === null || !targetConversationId) return;
+      drafts.current.set(targetConversationId, value);
+      if (activeConversationId.current === targetConversationId) {
         setQuestion(value);
-        setChatError(friendlyChatError(error));
       }
     });
   };
@@ -126,7 +153,12 @@ export function ChatArea({
 
   const stopQuestion = () => {
     const interruptedQuestion = chat.stopMessage();
-    if (interruptedQuestion !== null) setQuestion(interruptedQuestion);
+    if (interruptedQuestion !== null) {
+      setQuestion(interruptedQuestion);
+      if (currentConversation) {
+        drafts.current.set(currentConversation.id, interruptedQuestion);
+      }
+    }
   };
 
   return (
@@ -135,14 +167,25 @@ export function ChatArea({
         <ModelDropdown />
         <div
           className="conversation-meta"
-          title={currentConversation ? conversationSummary : undefined}
+          title={displayConversation ? conversationSummary : undefined}
         >
           <span>{conversationSummary}</span>
         </div>
       </div>
 
       <div className="messages-wrap">
-        {chat.messages.length === 0 ? (
+        {chat.isHistoryLoading ? (
+          <div className="content-status" role="status">
+            正在加载会话…
+          </div>
+        ) : chat.historyError ? (
+          <div className="content-status history-error">
+            <p role="alert">{friendlyApiError(chat.historyError, "加载会话")}</p>
+            <button type="button" onClick={() => void chat.reloadHistory()}>
+              重试加载
+            </button>
+          </div>
+        ) : chat.messages.length === 0 ? (
           <div className="content-placeholder" data-testid="content-placeholder">
             <h1>科研文献智能问答</h1>
             <p>从左侧选择或新建对话开始</p>
@@ -196,8 +239,12 @@ export function ChatArea({
             placeholder="输入问题…"
             rows={1}
             value={question}
-            disabled={!canChat || chat.isStreaming}
-            onChange={(event) => setQuestion(event.currentTarget.value)}
+            disabled={!canChat || !chat.isHistoryReady || chat.hasPendingTurn}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setQuestion(value);
+              if (currentConversation) drafts.current.set(currentConversation.id, value);
+            }}
             onKeyDown={handleQuestionKeyDown}
           />
           <button
@@ -206,7 +253,12 @@ export function ChatArea({
             aria-label={chat.isStreaming ? "停止生成" : "发送"}
             title={chat.isStreaming ? "停止生成" : "发送"}
             disabled={
-              chat.isStreaming ? false : !canChat || !question.trim()
+              chat.isStreaming
+                ? false
+                : !canChat ||
+                  !chat.isHistoryReady ||
+                  chat.hasPendingTurn ||
+                  !question.trim()
             }
             onClick={chat.isStreaming ? stopQuestion : sendQuestion}
           >
@@ -231,15 +283,25 @@ export function ChatArea({
             {notice.message}
           </p>
         )}
-        {chatError && (
+        {chat.generationError !== null && (
           <div className="chat-error" role="alert">
-            <span>{chatError}</span>
+            <span>{friendlyChatError(chat.generationError)}</span>
             <button
               type="button"
               aria-label="关闭错误"
-              onClick={() => setChatError(null)}
+              onClick={chat.dismissGenerationError}
             >
               <X aria-hidden="true" size={16} />
+            </button>
+          </div>
+        )}
+        {chat.syncError !== null && (
+          <div className="chat-error sync-error">
+            <span role="alert">
+              {friendlyApiError(chat.syncError, "同步会话")}
+            </span>
+            <button type="button" onClick={() => void chat.retrySync()}>
+              重试同步
             </button>
           </div>
         )}

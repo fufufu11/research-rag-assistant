@@ -111,9 +111,10 @@ export class ApiClient {
     });
   }
 
-  async listConversations(): Promise<ConversationList> {
+  async listConversations(signal?: AbortSignal): Promise<ConversationList> {
     return this.request<ConversationList>("/api/v1/conversations", {
       method: "GET",
+      signal,
     });
   }
 
@@ -125,6 +126,16 @@ export class ApiClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+  }
+
+  async getConversation(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationRead> {
+    return this.request<ConversationRead>(
+      `/api/v1/conversations/${encodeURIComponent(id)}`,
+      { method: "GET", signal },
+    );
   }
 
   async deleteConversation(id: string): Promise<void> {

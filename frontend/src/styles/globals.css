@@ -232,11 +232,41 @@ body {
 }
 
 .conversation-title {
-  overflow: hidden;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   color: inherit;
   font-size: 12px;
+}
+
+.conversation-title-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation-activity {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--fg-on-dark-muted);
+}
+
+.conversation-activity:not(.conversation-activity-error) {
+  animation: conversation-activity-spin 900ms linear infinite;
+}
+
+.conversation-activity-error {
+  color: var(--fg-error-on-dark);
+}
+
+@keyframes conversation-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .conversation-details {
@@ -964,6 +994,27 @@ body {
   background: rgba(165, 65, 47, 0.08);
 }
 
+.sync-error {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.sync-error span {
+  min-width: min(220px, 100%);
+  flex: 1 1 220px;
+}
+
+.sync-error button {
+  width: auto;
+  min-width: 72px;
+  height: 28px;
+  margin: 0 0 0 auto;
+  padding: 0 9px;
+  border: 1px solid currentColor;
+  font: inherit;
+  white-space: nowrap;
+}
+
 .copy-notice {
   position: absolute;
   right: 24px;
@@ -1044,7 +1095,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .stream-cursor {
+  .stream-cursor,
+  .conversation-activity {
     animation: none;
   }
 }

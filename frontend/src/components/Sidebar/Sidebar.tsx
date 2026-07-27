@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AlertCircle, LoaderCircle } from "lucide-react";
 import type { ApiClient } from "../../api/client";
 import { friendlyApiError } from "../../api/errors";
 import type { ConversationRead, DocumentStatus } from "../../api/types";
@@ -23,20 +24,28 @@ const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
 interface SidebarProps {
   client: ApiClient;
   currentConversationId?: string | null;
+  streamingConversationIds?: ReadonlySet<string>;
+  failedConversationIds?: ReadonlySet<string>;
+  generationFailedConversationIds?: ReadonlySet<string>;
   selectedDocumentIds?: string[];
   onSelectedDocumentIdsChange?: (ids: string[]) => void;
   onSelectConversation?: (conversation: ConversationRead) => void;
   onConversationCreated?: (conversation: ConversationRead) => void;
+  onConversationDeleteStart?: (id: string) => void;
   onConversationDeleted?: (id: string) => void;
 }
 
 export function Sidebar({
   client,
   currentConversationId = null,
+  streamingConversationIds = new Set(),
+  failedConversationIds = new Set(),
+  generationFailedConversationIds = new Set(),
   selectedDocumentIds = [],
   onSelectedDocumentIdsChange,
   onSelectConversation,
   onConversationCreated,
+  onConversationDeleteStart,
   onConversationDeleted,
 }: SidebarProps) {
   const [conversationsCollapsed, setConversationsCollapsed] = useState(false);
@@ -85,6 +94,7 @@ export function Sidebar({
 
   const handleDeleteConversation = (id: string) => {
     setActionError(null);
+    onConversationDeleteStart?.(id);
     deleteConversation.mutate(id, {
       onSuccess: () => onConversationDeleted?.(id),
       onError: (error) => {
@@ -173,7 +183,30 @@ export function Sidebar({
                       onClick={() => onSelectConversation?.(conversation)}
                     >
                       <span className="conversation-title">
-                        {conversationTitle(conversation)}
+                        <span className="conversation-title-label">
+                          {conversationTitle(conversation)}
+                        </span>
+                        {streamingConversationIds.has(conversation.id) && (
+                          <LoaderCircle
+                            className="conversation-activity"
+                            size={14}
+                            aria-label={`${conversationTitle(conversation)}正在生成`}
+                          />
+                        )}
+                        {failedConversationIds.has(conversation.id) && (
+                          <AlertCircle
+                            className="conversation-activity conversation-activity-error"
+                            size={14}
+                            aria-label={`${conversationTitle(conversation)}同步失败`}
+                          />
+                        )}
+                        {generationFailedConversationIds.has(conversation.id) && (
+                          <AlertCircle
+                            className="conversation-activity conversation-activity-error"
+                            size={14}
+                            aria-label={`${conversationTitle(conversation)}生成失败`}
+                          />
+                        )}
                       </span>
                       <span className="conversation-details">
                         <span>

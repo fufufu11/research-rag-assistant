@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiClientError } from "../../api/client";
 import type { ConversationRead, DocumentRead } from "../../api/types";
 import { Sidebar } from "../Sidebar/Sidebar";
@@ -43,6 +43,19 @@ function renderWithProviders(options?: {
 }
 
 describe("ChatArea", () => {
+  beforeEach(() => {
+    vi.spyOn(ApiClient.prototype, "getConversation").mockImplementation(
+      async (id) => ({
+        id,
+        title: null,
+        document_ids: null,
+        created_at: "2026-07-27T00:00:00Z",
+        updated_at: "2026-07-27T00:00:00Z",
+        messages: [],
+      }),
+    );
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -228,9 +241,10 @@ describe("ChatArea", () => {
       },
     });
     const input = screen.getByRole("textbox", { name: "问题输入" });
+    await vi.waitFor(() => expect(input).toBeEnabled());
 
     fireEvent.change(input, { target: { value: "论文结论是什么？" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
 
     expect(await screen.findByText("论文结论是什么？")).toBeInTheDocument();
     expect(await screen.findByText("基于证据得出的回答")).toBeInTheDocument();
@@ -266,11 +280,14 @@ describe("ChatArea", () => {
       },
     });
     const input = screen.getByRole("textbox", { name: "问题输入" });
+    await vi.waitFor(() => expect(input).toBeEnabled());
     fireEvent.change(input, { target: { value: "请详细解释方法" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
 
     expect(await screen.findByText("请详细解释方法")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "停止生成" })),
+    );
 
     expect(await screen.findByDisplayValue("请详细解释方法")).toBeEnabled();
     expect(document.querySelector(".msg.user")).toBeNull();
@@ -292,8 +309,9 @@ describe("ChatArea", () => {
       },
     });
     const input = screen.getByRole("textbox", { name: "问题输入" });
+    await vi.waitFor(() => expect(input).toBeEnabled());
     fireEvent.change(input, { target: { value: "比较两种方法" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "生成回答失败：无法连接服务，请检查网络后重试。",
@@ -344,8 +362,9 @@ describe("ChatArea", () => {
       },
     });
     const input = screen.getByRole("textbox", { name: "问题输入" });
+    await vi.waitFor(() => expect(input).toBeEnabled());
     fireEvent.change(input, { target: { value: "结论？" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
 
     const copyButton = await screen.findByRole("button", {
       name: "复制回答",
@@ -360,7 +379,7 @@ describe("ChatArea", () => {
     );
   });
 
-  it("切换会话会中止请求并丢弃未完成 Turn", async () => {
+  it("切换会话不终止请求且切回后继续显示未完成 Turn", async () => {
     let requestSignal: AbortSignal | undefined;
     vi.spyOn(ApiClient.prototype, "askQuestionStream").mockImplementation(
       async (_payload, _handlers, signal) => {
@@ -394,8 +413,9 @@ describe("ChatArea", () => {
       </QueryClientProvider>,
     );
     const input = screen.getByRole("textbox", { name: "问题输入" });
+    await vi.waitFor(() => expect(input).toBeEnabled());
     fireEvent.change(input, { target: { value: "未完成的问题" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
     await screen.findByText("未完成的问题");
 
     view.rerender(
@@ -408,8 +428,22 @@ describe("ChatArea", () => {
       </QueryClientProvider>,
     );
 
-    await vi.waitFor(() => expect(requestSignal?.aborted).toBe(true));
+    expect(requestSignal?.aborted).toBe(false);
     expect(document.querySelector(".msg.user")).toBeNull();
     expect(screen.getByRole("textbox", { name: "问题输入" })).toHaveValue("");
+
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <ChatArea
+          client={client}
+          currentConversation={conversation("conversation-1")}
+          canChat
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("未完成的问题")).toBeInTheDocument();
+    expect(requestSignal?.aborted).toBe(false);
+    await act(async () => view.unmount());
   });
 });
