@@ -4,7 +4,9 @@ import type {
   ConversationRead,
   DocumentList,
   DocumentRead,
+  QueryRequest,
 } from "./types";
+import { parseSseStream, SseProtocolError, type SseHandlers } from "./sse";
 
 // ApiClient：封装后端 REST API 调用。
 // 设计取舍（ADR 0005）：
@@ -130,5 +132,22 @@ export class ApiClient {
       `/api/v1/conversations/${encodeURIComponent(id)}`,
       { method: "DELETE" },
     );
+  }
+
+  async askQuestionStream(
+    payload: QueryRequest,
+    handlers: SseHandlers,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const response = await this.fetchResponse("/api/v1/queries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, stream: true }),
+      signal,
+    });
+    if (!response.body) {
+      throw new SseProtocolError("SSE response body is not readable");
+    }
+    await parseSseStream(response.body, handlers);
   }
 }

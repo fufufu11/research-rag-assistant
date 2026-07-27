@@ -26,6 +26,7 @@ interface SidebarProps {
   selectedDocumentIds?: string[];
   onSelectedDocumentIdsChange?: (ids: string[]) => void;
   onSelectConversation?: (conversation: ConversationRead) => void;
+  onConversationCreated?: (conversation: ConversationRead) => void;
   onConversationDeleted?: (id: string) => void;
 }
 
@@ -35,6 +36,7 @@ export function Sidebar({
   selectedDocumentIds = [],
   onSelectedDocumentIdsChange,
   onSelectConversation,
+  onConversationCreated,
   onConversationDeleted,
 }: SidebarProps) {
   const [conversationsCollapsed, setConversationsCollapsed] = useState(false);
@@ -70,7 +72,10 @@ export function Sidebar({
     createConversation.mutate(
       { document_ids: selectedDocumentIds },
       {
-        onSuccess: (conversation) => onSelectConversation?.(conversation),
+        onSuccess: (conversation) => {
+          onConversationCreated?.(conversation);
+          onSelectConversation?.(conversation);
+        },
         onError: (error) => {
           setActionError(friendlyApiError(error, "创建会话"));
         },

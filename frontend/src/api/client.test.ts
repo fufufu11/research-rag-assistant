@@ -222,6 +222,56 @@ describe("ApiClient", () => {
     expect(init?.method).toBe("DELETE");
   });
 
+  it("askQuestionStream posts an authenticated conversation request and delivers events", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'event: token\ndata: {"text":"answer"}\n\n' +
+              'event: done\ndata: {"citations":[],"request_id":"req-1","elapsed_ms":5,"conversation_id":"conv-1","message_id":"msg-1"}\n\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+    const client = new ApiClient({ apiKey: "test-key" });
+    const controller = new AbortController();
+    const onToken = vi.fn();
+    const onDone = vi.fn();
+
+    await client.askQuestionStream(
+      { question: "What changed?", conversation_id: "conv-1" },
+      { onToken, onDone },
+      controller.signal,
+    );
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/queries");
+    expect(init?.method).toBe("POST");
+    expect(init?.signal).toBe(controller.signal);
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      "Bearer test-key",
+    );
+    expect(new Headers(init?.headers).get("Content-Type")).toBe(
+      "application/json",
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
+      question: "What changed?",
+      conversation_id: "conv-1",
+      stream: true,
+    });
+    expect(onToken).toHaveBeenCalledWith("answer");
+    expect(onDone).toHaveBeenCalledWith(
+      expect.objectContaining({ request_id: "req-1", message_id: "msg-1" }),
+    );
+  });
+
   it.each([
     [400, "只支持 PDF", "upload"],
     [404, "文档不存在", "delete"],
