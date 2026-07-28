@@ -21,8 +21,6 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
-      frontend-builder:
-        condition: service_completed_successfully
     ports:
       - "8000:8000"
     environment:
@@ -59,26 +57,12 @@ services:
       LANGFUSE_HOST: ${LANGFUSE_HOST:-}
     volumes:
       - api-uploads:/app/data/uploads
-      # 共享 frontend-builder 产出的 dist 到后端容器（生产同源托管，ADR 0005）
-      - frontend-dist:/app/frontend/dist:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/documents"]
       interval: 30s
       timeout: 5s
       start_period: 60s
       retries: 3
-
-  # Frontend 构建器：一次性服务，构建 React SPA 静态文件到共享 volume
-  # 设计取舍（ADR 0005）：不在运行时跑前端容器，dist 由后端 FastAPI StaticFiles 托管
-  frontend-builder:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: rrag-frontend-builder
-    # 一次性任务：构建完成后将 dist 复制到共享 volume
-    command: ["sh", "-c", "cp -r /dist/* /output/"]
-    volumes:
-      - frontend-dist:/output
 
   postgres:
     image: postgres:15-alpine
@@ -120,5 +104,3 @@ volumes:
     name: rrag-qdrant-data
   api-uploads:
     name: rrag-api-uploads
-  frontend-dist:
-    name: rrag-frontend-dist

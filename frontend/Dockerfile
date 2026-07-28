@@ -1,6 +1,6 @@
-# Frontend Dockerfile：多阶段构建 React SPA 静态文件
-# 用法：在 docker-compose.yml 中作为后端镜像的 build context 引用，
-#       或单独构建后通过 named volume 把 dist 共享给后端容器。
+# Frontend Dockerfile：独立构建 React SPA 静态文件。
+# 生产应用镜像由仓库根 Dockerfile 直接构建并内置 dist；本文件保留用于
+# 单独验证或导出前端产物。
 #
 # 设计取舍（ADR 0005）：
 # - 用 node:20-alpine 构建，输出 dist 到 /app/dist

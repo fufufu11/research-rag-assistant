@@ -20,6 +20,8 @@ coverage.xml
 *.cover
 .tox/
 .nox/
+node_modules/
+frontend/dist/
 
 # 本地数据与模型（容器内不复制，避免体积膨胀）
 data/

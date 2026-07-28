@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { MessageRead, CitationRead, FeedbackRating } from "../../api/types";
@@ -14,7 +14,7 @@ interface MessageItemProps {
   isStreaming?: boolean;
   // 反馈相关（T7）
   feedbackRating?: FeedbackRating | null;
-  onFeedback?: (rating: FeedbackRating) => void;
+  onFeedback?: (rating: FeedbackRating, comment?: string) => void;
   onCopy?: (text: string) => void;
 }
 
@@ -26,13 +26,18 @@ export function MessageItem({
   onCopy,
 }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
+  const [showDislikeForm, setShowDislikeForm] = useState(false);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const messageBodyRef = useRef<HTMLDivElement>(null);
   const isUser = message.role === "user";
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(message.content);
+      const body = messageBodyRef.current;
+      const plainText = (body?.innerText ?? body?.textContent ?? "").trim();
+      await navigator.clipboard.writeText(plainText);
       setCopied(true);
-      onCopy?.(message.content);
+      onCopy?.(plainText);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       // clipboard API 在非 https / 非localhost 不可用，静默失败
@@ -40,12 +45,23 @@ export function MessageItem({
   };
 
   const handleFeedback = (rating: FeedbackRating) => {
-    // 切换：再次点击当前激活的 rating 视为取消
     if (feedbackRating === rating) {
-      onFeedback?.(rating); // 由上层决定是否调 deleteFeedback
-    } else {
-      onFeedback?.(rating);
+      setShowDislikeForm(false);
+      onFeedback?.(rating, undefined);
+      return;
     }
+    if (rating === "dislike") {
+      setShowDislikeForm(true);
+      return;
+    }
+    setShowDislikeForm(false);
+    onFeedback?.(rating, undefined);
+  };
+
+  const submitDislike = () => {
+    onFeedback?.("dislike", feedbackComment.trim() || undefined);
+    setFeedbackComment("");
+    setShowDislikeForm(false);
   };
 
   const citations: CitationRead[] = message.citations ?? [];
@@ -60,7 +76,11 @@ export function MessageItem({
         {isUser ? (
           <div className="msg-body">{message.content}</div>
         ) : (
-          <div className="msg-body" data-testid="assistant-body">
+          <div
+            ref={messageBodyRef}
+            className="msg-body"
+            data-testid="assistant-body"
+          >
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
               {message.content || (isStreaming ? "" : "")}
             </ReactMarkdown>
@@ -128,6 +148,34 @@ export function MessageItem({
                 req {(message.request_id ?? "").slice(0, 8)}
               </div>
             )}
+          </div>
+        )}
+        {showDislikeForm && (
+          <div className="feedback-comment-form">
+            <label htmlFor={`feedback-comment-${message.id}`}>点踩原因</label>
+            <textarea
+              id={`feedback-comment-${message.id}`}
+              value={feedbackComment}
+              onChange={(event) => setFeedbackComment(event.target.value)}
+              maxLength={2000}
+              rows={3}
+              placeholder="可选：说明哪里需要改进"
+            />
+            <div className="feedback-comment-actions">
+              <button type="button" onClick={submitDislike}>
+                提交反馈
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setFeedbackComment("");
+                  setShowDislikeForm(false);
+                }}
+              >
+                取消
+              </button>
+            </div>
           </div>
         )}
       </div>

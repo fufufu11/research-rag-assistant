@@ -22,6 +22,7 @@ describe("Settings", () => {
     renderWithProviders();
     expect(screen.getByTestId("settings-page")).toBeInTheDocument();
     expect(screen.getByText("设置")).toBeInTheDocument();
+    expect(screen.getByText(/支持 PDF 文档上传/)).toBeInTheDocument();
   });
 
   it("渲染 API Key 输入框 + 保存 + 清除按钮", () => {
@@ -32,7 +33,7 @@ describe("Settings", () => {
   });
 
   it("localStorage 已有 API key 时初始化到输入框", () => {
-    window.localStorage.setItem("rag_api_key", "existing-key");
+    window.localStorage.setItem("apiKey", "existing-key");
     renderWithProviders();
     const input = screen.getByTestId("api-key-input") as HTMLInputElement;
     expect(input.value).toBe("existing-key");
@@ -44,15 +45,15 @@ describe("Settings", () => {
     const input = screen.getByTestId("api-key-input") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "new-key-123" } });
     fireEvent.click(screen.getByTestId("save-api-key-btn"));
-    expect(window.localStorage.getItem("rag_api_key")).toBe("new-key-123");
+    expect(window.localStorage.getItem("apiKey")).toBe("new-key-123");
     window.localStorage.clear();
   });
 
   it("点击清除按钮清空 input 与 localStorage", () => {
-    window.localStorage.setItem("rag_api_key", "old-key");
+    window.localStorage.setItem("apiKey", "old-key");
     renderWithProviders();
     fireEvent.click(screen.getByTestId("clear-api-key-btn"));
-    expect(window.localStorage.getItem("rag_api_key")).toBeNull();
+    expect(window.localStorage.getItem("apiKey")).toBeNull();
     const input = screen.getByTestId("api-key-input") as HTMLInputElement;
     expect(input.value).toBe("");
   });

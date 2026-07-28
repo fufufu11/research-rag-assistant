@@ -12,6 +12,8 @@ describe("Help", () => {
   it("渲染项目简介章节", () => {
     render(<Help />);
     expect(screen.getByText("项目简介")).toBeInTheDocument();
+    expect(screen.getByText(/上传 PDF 文档后/)).toBeInTheDocument();
+    expect(screen.queryByText(/PDF\/TXT\/MD/)).not.toBeInTheDocument();
   });
 
   it("渲染快速上手章节含快捷键说明", () => {

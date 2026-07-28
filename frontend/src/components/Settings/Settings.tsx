@@ -8,9 +8,7 @@ import { useApp } from "../../store/AppContext";
 // 设计稿：基于 Claude 风格 .settings-page
 export function Settings() {
   const { client } = useApp();
-  const [apiKey, setApiKey] = useState(
-    () => window.localStorage.getItem("rag_api_key") ?? "",
-  );
+  const [apiKey, setApiKey] = useState(() => client.apiKey ?? "");
   const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
@@ -76,7 +74,7 @@ export function Settings() {
           <h2>关于</h2>
           <p className="hint">
             research·rag — 科研文献智能问答系统。基于 RAG（检索增强生成）
-            架构，支持 PDF/TXT/MD 文档上传与流式问答。
+            架构，支持 PDF 文档上传与流式问答。
           </p>
         </div>
       </div>

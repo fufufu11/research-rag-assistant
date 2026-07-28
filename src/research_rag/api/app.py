@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -60,10 +61,13 @@ from research_rag.services.qa_service import ConversationNotFoundError, NoAvaila
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     from langchain_qdrant import QdrantVectorStore
     from sqlalchemy import Engine
     from sqlalchemy.orm import Session
+    from starlette.responses import Response
+    from starlette.types import Scope
 
 # 开发环境允许的前端来源（Vite 5173 / 常见 dev server）。
 # 生产环境后端托管 frontend/dist 静态文件，同源无需 CORS（ADR 0005）。
@@ -170,6 +174,7 @@ def _create_vector_store() -> QdrantVectorStore | None:
 def create_app(
     session_factory: sessionmaker[Session] | None = None,
     cors_origins: list[str] | None = None,
+    frontend_dist_dir: Path | None = None,
 ) -> FastAPI:
     """创建 FastAPI 应用实例。
 
@@ -178,7 +183,10 @@ def create_app(
             隔离数据库；``None``（默认）时由 ``lifespan`` 在启动时用
             ``get_database_url()`` 创建真实 engine + factory。
         cors_origins: 可选的 CORS 允许来源列表。``None`` 时用
-            ``DEFAULT_CORS_ORIGINS``（开发环境 localhost）。
+            ``DEFAULT_CORS_ORIGINS``（开发环境 localhost）；``APP_ENV`` 为
+            ``production`` 时默认禁用 CORS。
+        frontend_dist_dir: 可选的 React 构建产物目录。``None`` 时使用仓库内
+            ``frontend/dist``；测试可注入临时目录。
 
     Returns:
         配置好的 ``FastAPI`` 实例，未启动（由 ``uvicorn`` 或 ``TestClient``
@@ -202,14 +210,20 @@ def create_app(
     # bm25_cache 初始为 None，lifespan 中按需创建（仅 bm25_enabled 时）
     app.state.bm25_cache = None
 
-    # CORS 中间件（开发环境允许 localhost）
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins or DEFAULT_CORS_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+    # Explicit origins always win. Otherwise production is same-origin while
+    # local development keeps the Vite defaults.
+    is_production = os.environ.get("APP_ENV", "").strip().lower() == "production"
+    allowed_origins = (
+        ([] if is_production else DEFAULT_CORS_ORIGINS) if cors_origins is None else cors_origins
     )
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # 阶段 11.3：限流配置（slowapi）
     # configure_limiter 按当前 RATE_LIMIT_ENABLED 环境变量设置 limiter.enabled。
@@ -323,12 +337,12 @@ def create_app(
     #   支持 React Router 的 client-side routing（SPA fallback）
     # - 仅在 frontend/dist 存在时挂载；开发环境走 vite dev server 5173
     #   不存在时跳过，避免测试环境或纯 API 部署报错
-    _mount_frontend_static(app)
+    _mount_frontend_static(app, frontend_dist_dir)
 
     return app
 
 
-def _mount_frontend_static(app: FastAPI) -> None:
+def _mount_frontend_static(app: FastAPI, dist_dir: Path | None = None) -> None:
     """挂载 frontend/dist 静态文件 + SPA fallback（生产环境）。
 
     若 ``frontend/dist`` 目录不存在（开发环境或纯 API 部署），跳过挂载。
@@ -337,10 +351,13 @@ def _mount_frontend_static(app: FastAPI) -> None:
 
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
+    from starlette.exceptions import HTTPException as StarletteHTTPException
 
-    # 仓库根目录：src/research_rag/api/app.py → 上溯 4 级
-    repo_root = Path(__file__).resolve().parents[4]
-    dist_dir = repo_root / "frontend" / "dist"
+    # 仓库根目录：src/research_rag/api/app.py → 上溯 3 级
+    if dist_dir is None:
+        repo_root = Path(__file__).resolve().parents[3]
+        dist_dir = repo_root / "frontend" / "dist"
+    dist_dir = dist_dir.resolve()
     index_html = dist_dir / "index.html"
 
     if not index_html.exists():
@@ -350,9 +367,20 @@ def _mount_frontend_static(app: FastAPI) -> None:
     # 挂载 /web 路径下的静态资源（js/css/图片）
     # html=False：单独用 catch-all 路由处理 SPA fallback，避免 StaticFiles
     # 默认 404 fallback 拦截掉我们的 / 路由
+    class SpaStaticFiles(StaticFiles):
+        """静态文件不存在时返回 SPA 入口，由客户端路由接管。"""
+
+        async def get_response(self, path: str, scope: Scope) -> Response:
+            try:
+                return await super().get_response(path, scope)
+            except StarletteHTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                return FileResponse(str(index_html))
+
     app.mount(
         "/web",
-        StaticFiles(directory=str(dist_dir), html=False),
+        SpaStaticFiles(directory=str(dist_dir), html=False),
         name="frontend-static",
     )
 
@@ -376,8 +404,8 @@ def _mount_frontend_static(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="Not Found")
 
         # 尝试在 dist_dir 下找具体文件（如 favicon.ico）
-        candidate = dist_dir / full_path
-        if candidate.is_file():
+        candidate = (dist_dir / full_path).resolve()
+        if candidate.is_relative_to(dist_dir) and candidate.is_file():
             return FileResponse(str(candidate))
 
         # 其他路径返回 index.html（React Router 接管）

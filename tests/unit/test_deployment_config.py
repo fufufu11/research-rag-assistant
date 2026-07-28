@@ -62,6 +62,38 @@ def _load_yaml(path: Path) -> dict:
     return data
 
 
+class TestApplicationImageFrontend:
+    """The deployable application image includes the compiled React SPA."""
+
+    @pytest.fixture(scope="class")
+    def dockerfile_text(self) -> str:
+        return (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    def test_root_dockerfile_builds_and_copies_frontend_dist(self, dockerfile_text: str) -> None:
+        assert "FROM node:20-alpine AS frontend-builder" in dockerfile_text
+        assert "COPY frontend/package.json frontend/package-lock.json" in dockerfile_text
+        assert "RUN npm ci" in dockerfile_text
+        assert "RUN npm run build" in dockerfile_text
+        assert "COPY --from=frontend-builder /frontend/dist /app/frontend/dist" in dockerfile_text
+
+
+class TestBaseComposeEmbeddedFrontend:
+    """Compose runs the self-contained application image."""
+
+    @pytest.fixture(scope="class")
+    def compose(self) -> dict:
+        return _load_yaml(REPO_ROOT / "docker-compose.yml")
+
+    def test_compose_has_no_frontend_builder_or_dist_volume(self, compose: dict) -> None:
+        services = compose["services"]
+        api = services["api"]
+
+        assert "frontend-builder" not in services
+        assert "frontend-builder" not in api.get("depends_on", {})
+        assert all("/app/frontend/dist" not in volume for volume in api.get("volumes", []))
+        assert "frontend-dist" not in compose.get("volumes", {})
+
+
 # ---------------------------------------------------------------------------
 # GitHub Actions deploy.yml workflow
 # ---------------------------------------------------------------------------
@@ -188,6 +220,12 @@ class TestProdCompose:
         # ${IMAGE_TAG:-latest} 模式：支持环境变量覆盖，默认 latest
         assert "IMAGE_TAG" in image
         assert "latest" in image
+
+    def test_api_runs_with_production_environment(self, compose: dict) -> None:
+        """Production disables development-only behavior such as Vite CORS."""
+        environment = compose["services"]["api"].get("environment", {})
+
+        assert environment.get("APP_ENV") == "production"
 
 
 # ---------------------------------------------------------------------------

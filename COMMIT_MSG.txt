@@ -1,12 +1,7 @@
-docs: 更新 ROADMAP/STATUS 标记 9.1/9.2 完成 + 新增 4 个 mattpocock 适配 skill
+docs: 同步 React SPA T2 至 ROADMAP/STATUS (v4.0 -> v4.1)
 
-- ROADMAP.md：阶段 9.1（SSE 流式）和 9.2（多轮对话）标记为已完成，
-  补充技术方案、交付物、测试数量等详情
-- STATUS.md：版本升至 v1.2，测试数从 269 更新到 500+，
-  补充 8.3 BM25/9.1 SSE/9.2 多轮对话功能描述，
-  更新已知问题和后续方向
-- .trae/skills/：新增 4 个从 mattpocock/skills 适配的 skill
-  - grill-with-docs（合并 grilling + domain-modeling）
-  - tdd（红绿重构循环）
-  - code-review（双轴并行审查）
-  - to-tickets（tracer-bullet ticket 拆解到 GitHub Issues）
+- ROADMAP.md：T2 状态更新为 ✅ 已完成，新增 T2 详细技术方案与设计取舍章节
+- STATUS.md：版本 v4.0 -> v4.1，更新演示界面章节为 React SPA 描述，
+  更新技术栈一行加入 React 18 + TypeScript + Vite + Vitest，
+  更新本地运行命令为 npm run dev/test/lint/build，更新测试状态
+  （pytest 829 + vitest 33），归档 Streamlit UI 历史

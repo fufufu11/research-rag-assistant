@@ -324,6 +324,7 @@ async def _stream_token_then_done() -> AsyncIterator[StreamEvent]:
         ],
         request_id=uuid.uuid4(),
         elapsed_ms=120,
+        message_id=uuid.UUID("00000000-0000-0000-0000-000000000123"),
     )
 
 
@@ -349,6 +350,7 @@ def test_create_query_stream_returns_sse(
     assert "Hello " in body
     assert "world [C1]" in body
     assert "paper.pdf" in body  # done 事件中的引用元数据
+    assert '"message_id": "00000000-0000-0000-0000-000000000123"' in body
     mock_session.commit.assert_called_once_with()
 
     # 验证 answer_stream 被正确调用

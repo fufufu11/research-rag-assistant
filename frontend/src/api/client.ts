@@ -10,6 +10,8 @@ import type {
   QueryRequest,
   QueryResponse,
 } from "./types";
+import { parseSseStream } from "./sse";
+import type { SseHandlers } from "./sse";
 
 // ApiClient：封装后端 REST API 调用。
 // 设计取舍（ADR 0005）：
@@ -29,11 +31,22 @@ export class ApiClientError extends Error {
   }
 }
 
-const API_KEY_STORAGE_KEY = "rag_api_key";
+async function throwApiClientError(response: Response): Promise<never> {
+  let detail = response.statusText;
+  try {
+    const body = (await response.json()) as { detail?: string };
+    if (body.detail) detail = body.detail;
+  } catch {
+    // Non-JSON error responses use the HTTP status text.
+  }
+  throw new ApiClientError(response.status, detail);
+}
+
+const API_KEY_STORAGE_KEY = "apiKey";
 
 export class ApiClient {
   readonly baseUrl: string;
-  readonly apiKey: string | null;
+  apiKey: string | null;
 
   constructor(options?: { baseUrl?: string; apiKey?: string | null }) {
     this.baseUrl = options?.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? "";
@@ -45,6 +58,7 @@ export class ApiClient {
 
   /** 设置 API key（持久化到 localStorage） */
   setApiKey(key: string | null): void {
+    this.apiKey = key;
     if (key) {
       window.localStorage.setItem(API_KEY_STORAGE_KEY, key);
     } else {
@@ -73,14 +87,7 @@ export class ApiClient {
       headers: this.buildHeaders(init.headers),
     });
     if (!response.ok) {
-      let detail = response.statusText;
-      try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch {
-        // 响应体非 JSON，用 statusText
-      }
-      throw new ApiClientError(response.status, detail);
+      await throwApiClientError(response);
     }
     return (await response.json()) as T;
   }
@@ -109,14 +116,7 @@ export class ApiClient {
       body: form,
     });
     if (!response.ok) {
-      let detail = response.statusText;
-      try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch {
-        // ignore
-      }
-      throw new ApiClientError(response.status, detail);
+      await throwApiClientError(response);
     }
     return (await response.json()) as DocumentRead;
   }
@@ -126,15 +126,8 @@ export class ApiClient {
       method: "DELETE",
       headers: this.buildHeaders(),
     });
-    if (!response.ok && response.status !== 404) {
-      let detail = response.statusText;
-      try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch {
-        // ignore
-      }
-      throw new ApiClientError(response.status, detail);
+    if (!response.ok) {
+      await throwApiClientError(response);
     }
   }
 
@@ -165,15 +158,8 @@ export class ApiClient {
       method: "DELETE",
       headers: this.buildHeaders(),
     });
-    if (!response.ok && response.status !== 404) {
-      let detail = response.statusText;
-      try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch {
-        // ignore
-      }
-      throw new ApiClientError(response.status, detail);
+    if (!response.ok) {
+      await throwApiClientError(response);
     }
   }
 
@@ -197,16 +183,7 @@ export class ApiClient {
    */
   async askQuestionStream(
     payload: QueryRequest,
-    handlers: {
-      onToken: (token: string) => void;
-      onDone: (data: {
-        citations: import("./types").CitationRead[];
-        request_id: string;
-        elapsed_ms: number;
-        conversation_id: string | null;
-      }) => void;
-      onError: (message: string) => void;
-    },
+    handlers: SseHandlers,
     signal?: AbortSignal,
   ): Promise<void> {
     const response = await fetch(this.buildUrl("/api/v1/queries"), {
@@ -217,65 +194,13 @@ export class ApiClient {
     });
 
     if (!response.ok) {
-      let detail = response.statusText;
-      try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch {
-        // ignore
-      }
-      throw new ApiClientError(response.status, detail);
+      await throwApiClientError(response);
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) {
+    if (!response.body) {
       throw new Error("Response body is not readable");
     }
-
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      // SSE 事件以空行分隔，按事件块解析
-      const events = buffer.split("\n\n");
-      buffer = events.pop() ?? "";
-
-      for (const eventBlock of events) {
-        const lines = eventBlock.split("\n");
-        let eventType = "message";
-        let dataStr = "";
-        for (const line of lines) {
-          if (line.startsWith("event:")) {
-            eventType = line.slice(6).trim();
-          } else if (line.startsWith("data:")) {
-            dataStr += line.slice(5).trim();
-          }
-        }
-        if (!dataStr) continue;
-
-        try {
-          const data = JSON.parse(dataStr);
-          if (eventType === "token") {
-            handlers.onToken(
-              typeof data === "string" ? data : (data.text ?? data.token ?? ""),
-            );
-          } else if (eventType === "done") {
-            handlers.onDone(data);
-          } else if (eventType === "error") {
-            handlers.onError(data.detail ?? data.message ?? "未知错误");
-          }
-        } catch {
-          // 非 JSON data（可能是纯 token 字符串）
-          if (eventType === "token") {
-            handlers.onToken(dataStr);
-          }
-        }
-      }
-    }
+    await parseSseStream(response.body, handlers);
   }
 
   // === 反馈 ===
@@ -298,14 +223,7 @@ export class ApiClient {
     );
     if (response.status === 404) return null;
     if (!response.ok) {
-      let detail = response.statusText;
-      try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch {
-        // ignore
-      }
-      throw new ApiClientError(response.status, detail);
+      await throwApiClientError(response);
     }
     return (await response.json()) as FeedbackRead;
   }
@@ -333,14 +251,7 @@ export class ApiClient {
       },
     );
     if (!response.ok && response.status !== 404) {
-      let detail = response.statusText;
-      try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch {
-        // ignore
-      }
-      throw new ApiClientError(response.status, detail);
+      await throwApiClientError(response);
     }
   }
 }

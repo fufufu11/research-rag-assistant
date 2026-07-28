@@ -10,21 +10,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _build_app_with_dist(tmp_path: Path) -> FastAPI:
-    """构造一个 FastAPI app，模拟 frontend/dist 存在的场景。
-
-    直接复制 _mount_frontend_static 的挂载逻辑，避免 patch Path 解析的复杂性。
-    """
-    from fastapi.responses import FileResponse
-    from fastapi.staticfiles import StaticFiles
-
+def _build_dist(tmp_path: Path) -> Path:
+    """创建最小可用的前端构建产物。"""
     dist_dir = tmp_path / "frontend" / "dist"
     dist_dir.mkdir(parents=True)
     index_html = dist_dir / "index.html"
@@ -37,34 +30,14 @@ def _build_app_with_dist(tmp_path: Path) -> FastAPI:
     assets_dir.mkdir()
     (assets_dir / "main.js").write_text("console.log('test');", encoding="utf-8")
 
-    app = FastAPI()
-    app.mount(
-        "/web",
-        StaticFiles(directory=str(dist_dir), html=False),
-        name="frontend-static",
-    )
-
-    @app.get("/", include_in_schema=False)
-    async def _spa_root() -> FileResponse:
-        return FileResponse(str(index_html))
-
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def _spa_catch_all(full_path: str) -> FileResponse:
-        if full_path.startswith("api/v1/"):
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=404, detail="Not Found")
-        candidate = dist_dir / full_path
-        if candidate.is_file():
-            return FileResponse(str(candidate))
-        return FileResponse(str(index_html))
-
-    return app
+    return dist_dir
 
 
 def test_dist_exists_mounts_spa_routes(tmp_path: Path) -> None:
-    """frontend/dist 存在时挂载 SPA 路由。"""
-    app = _build_app_with_dist(tmp_path)
+    """create_app 通过真实生产挂载逻辑提供 SPA 与静态资源。"""
+    from research_rag.api.app import create_app
+
+    app = create_app(frontend_dist_dir=_build_dist(tmp_path))
     client = TestClient(app)
 
     # GET / 返回 index.html
@@ -82,25 +55,22 @@ def test_dist_exists_mounts_spa_routes(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "Test" in response.text
 
+    # GET /web 下的 client-side route 也必须 fallback 到 index.html
+    response = client.get("/web/some-spa-route")
+    assert response.status_code == 200
+    assert "Test" in response.text
+
     # GET /api/v1/xxx 不被 SPA fallback 拦截，返回 404
     response = client.get("/api/v1/nonexistent")
     assert response.status_code == 404
 
 
-def test_dist_missing_skips_mounting() -> None:
-    """frontend/dist 不存在时 _mount_frontend_static 应跳过挂载。
+def test_dist_missing_skips_mounting(tmp_path: Path) -> None:
+    """frontend/dist 不存在时 create_app 保持纯 API 模式。"""
+    from research_rag.api.app import create_app
 
-    测试环境默认无 frontend/dist，create_app 不应抛异常且 app 正常返回。
-    """
-    from research_rag.api.app import _mount_frontend_static, create_app
+    app = create_app(frontend_dist_dir=tmp_path / "missing")
+    client = TestClient(app)
 
-    # 调用 _mount_frontend_static 传入空 app，dist 不存在时应直接返回
-    app = FastAPI()
-    _mount_frontend_static(app)
-    # 没有挂载 / 路由
-    spa_routes = [r for r in app.routes if getattr(r, "path", "") in ("/", "/{full_path:path}")]
-    assert len(spa_routes) == 0, "dist 不存在时应跳过 SPA 挂载"
-
-    # create_app 也应正常返回
-    app2 = create_app()
-    assert app2.title == "Research RAG Assistant"
+    assert client.get("/").status_code == 404
+    assert app.title == "Research RAG Assistant"

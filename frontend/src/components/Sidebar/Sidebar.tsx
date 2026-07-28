@@ -1,12 +1,27 @@
 import { useState } from "react";
+import { friendlyApiError } from "../../api/errors";
 import { useApp } from "../../store/AppContext";
 import {
   useConversations,
+  useCreateConversation,
   useDeleteConversation,
-  useDocuments,
+} from "../../hooks/useConversations";
+import {
   useDeleteDocument,
-} from "../../api/queries";
+  useDocuments,
+} from "../../hooks/useDocuments";
 import type { ActiveView } from "../../store/AppContext";
+
+const DOCUMENT_STATUS_LABELS = {
+  pending: "等待处理",
+  processing: "处理中",
+  ready: "就绪",
+  failed: "失败",
+} as const;
+
+function formatConversationDate(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN").format(new Date(value));
+}
 
 // Sidebar：左侧栏组件（260px 深棕背景）
 // T3-T4：接入真实文档与会话列表（TanStack Query 缓存 + 失效）
@@ -16,6 +31,8 @@ export function Sidebar() {
     client,
     activeView,
     setActiveView,
+    isMobileNavOpen,
+    setIsMobileNavOpen,
     currentConversationId,
     setCurrentConversationId,
     currentDocumentIds,
@@ -24,14 +41,16 @@ export function Sidebar() {
   const [searchKeyword, setSearchKeyword] = useState("");
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [documentsCollapsed, setDocumentsCollapsed] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const { data: conversationsData } = useConversations(client);
-  const { data: documentsData } = useDocuments(client);
+  const conversationsQuery = useConversations(client);
+  const documentsQuery = useDocuments(client);
   const deleteConversation = useDeleteConversation(client);
   const deleteDocument = useDeleteDocument(client);
+  const createConversation = useCreateConversation(client);
 
-  const conversations = conversationsData?.items ?? [];
-  const documents = documentsData?.items ?? [];
+  const conversations = conversationsQuery.data?.items ?? [];
+  const documents = documentsQuery.data?.items ?? [];
 
   const filteredConversations = searchKeyword
     ? conversations.filter((c) =>
@@ -40,20 +59,34 @@ export function Sidebar() {
     : conversations;
 
   const handleNewChat = () => {
-    // 立即清空当前会话，回到欢迎页；用户发送首条消息时再按需创建
-    setCurrentConversationId(null);
-    setCurrentDocumentIds([]);
+    setActionError(null);
     setActiveView("chat");
+    setIsMobileNavOpen(false);
+    createConversation.mutate(
+      {
+        document_ids: currentDocumentIds.length ? currentDocumentIds : null,
+      },
+      {
+        onSuccess: (conversation) => {
+          setCurrentConversationId(conversation.id);
+          setCurrentDocumentIds(conversation.document_ids ?? []);
+        },
+        onError: (error) => {
+          setActionError(friendlyApiError(error, "创建会话"));
+        },
+      },
+    );
   };
 
   const handleSelectConversation = (id: string, docIds: string[] | null) => {
     setCurrentConversationId(id);
     setCurrentDocumentIds(docIds ?? []);
     setActiveView("chat");
+    setIsMobileNavOpen(false);
   };
 
   const handleDeleteConversation = (id: string) => {
-    if (!window.confirm("确认删除该会话？此操作不可撤销。")) return;
+    setActionError(null);
     deleteConversation.mutate(id, {
       onSuccess: () => {
         if (currentConversationId === id) {
@@ -61,11 +94,14 @@ export function Sidebar() {
           setCurrentDocumentIds([]);
         }
       },
+      onError: (error) => {
+        setActionError(friendlyApiError(error, "删除会话"));
+      },
     });
   };
 
-  const handleDeleteDocument = (id: string, name: string) => {
-    if (!window.confirm(`确认删除文档「${name}」？此操作不可撤销。`)) return;
+  const handleDeleteDocument = (id: string) => {
+    setActionError(null);
     deleteDocument.mutate(id, {
       onSuccess: () => {
         if (currentDocumentIds.includes(id)) {
@@ -74,6 +110,9 @@ export function Sidebar() {
             currentDocumentIds.filter((documentId) => documentId !== id),
           );
         }
+      },
+      onError: (error) => {
+        setActionError(friendlyApiError(error, "删除文档"));
       },
     });
   };
@@ -87,19 +126,34 @@ export function Sidebar() {
     setCurrentConversationId(null);
     setCurrentDocumentIds(nextDocumentIds);
     setActiveView("chat");
+    setIsMobileNavOpen(false);
   };
 
   const handleFooterClick = (view: ActiveView) => {
     setActiveView(view);
+    setIsMobileNavOpen(false);
   };
 
   return (
-    <aside className="sidebar" data-testid="sidebar">
+    <aside
+      id="app-sidebar"
+      className={`sidebar ${isMobileNavOpen ? "mobile-open" : ""}`}
+      data-testid="sidebar"
+    >
       <div className="sidebar-header">
         <span className="logo-dot" aria-hidden="true" />
         <span>
           research<span className="accent">·</span>rag
         </span>
+        <button
+          type="button"
+          className="sidebar-close-button"
+          aria-label="关闭导航"
+          title="关闭导航"
+          onClick={() => setIsMobileNavOpen(false)}
+        >
+          <span aria-hidden="true">×</span>
+        </button>
       </div>
 
       <button
@@ -107,6 +161,7 @@ export function Sidebar() {
         className="new-chat-btn"
         data-testid="new-chat-btn"
         onClick={handleNewChat}
+        disabled={createConversation.isPending}
       >
         <span className="star" aria-hidden="true">
           ✦
@@ -124,6 +179,12 @@ export function Sidebar() {
         data-testid="search-input"
       />
 
+      {actionError && (
+        <div className="nav-error" role="alert">
+          {actionError}
+        </div>
+      )}
+
       {/* 历史会话 */}
       <nav className="nav-section" data-testid="nav-history">
         <button
@@ -138,7 +199,11 @@ export function Sidebar() {
         </button>
         {!historyCollapsed && (
           <>
-            {filteredConversations.length === 0 ? (
+            {conversationsQuery.isError ? (
+              <div className="nav-error" role="alert">
+                {friendlyApiError(conversationsQuery.error, "加载会话")}
+              </div>
+            ) : filteredConversations.length === 0 ? (
               <div className="nav-empty">
                 {searchKeyword ? "无匹配会话" : "暂无会话"}
               </div>
@@ -154,7 +219,13 @@ export function Sidebar() {
                     handleSelectConversation(conv.id, conv.document_ids)
                   }
                 >
-                  <span className="title">{conv.title ?? "未命名会话"}</span>
+                  <span className="item-text">
+                    <span className="title">{conv.title ?? "未命名会话"}</span>
+                    <span className="item-meta">
+                      {formatConversationDate(conv.created_at)} · {conv.document_ids?.length ?? 0}{" "}
+                      篇文档
+                    </span>
+                  </span>
                   <span
                     role="button"
                     tabIndex={0}
@@ -195,7 +266,11 @@ export function Sidebar() {
         </button>
         {!documentsCollapsed && (
           <>
-            {documents.length === 0 ? (
+            {documentsQuery.isError ? (
+              <div className="nav-error" role="alert">
+                {friendlyApiError(documentsQuery.error, "加载文档")}
+              </div>
+            ) : documents.length === 0 ? (
               <div className="nav-empty">暂无文档</div>
             ) : (
               documents.map((doc) => (
@@ -214,8 +289,21 @@ export function Sidebar() {
                     onChange={() => handleToggleDocument(doc.id)}
                     aria-label={`选择文档 ${doc.original_name}`}
                   />
-                  <span className="title">{doc.original_name}</span>
-                  <span className={`doc-status ${doc.status}`}>
+                  <span className="item-text">
+                    <span className="title">{doc.original_name}</span>
+                    <span className="item-meta">
+                      {doc.page_count} 页 · {DOCUMENT_STATUS_LABELS[doc.status]}
+                    </span>
+                    {doc.status === "failed" && doc.error_message && (
+                      <span className="doc-error" title={doc.error_message}>
+                        {doc.error_message}
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    className={`doc-status ${doc.status}`}
+                    aria-label={DOCUMENT_STATUS_LABELS[doc.status]}
+                  >
                     {doc.status === "ready"
                       ? "✓"
                       : doc.status === "processing"
@@ -228,9 +316,7 @@ export function Sidebar() {
                     type="button"
                     className="delete-btn"
                     aria-label="删除文档"
-                    onClick={() =>
-                      handleDeleteDocument(doc.id, doc.original_name)
-                    }
+                    onClick={() => handleDeleteDocument(doc.id)}
                   >
                     ×
                   </button>

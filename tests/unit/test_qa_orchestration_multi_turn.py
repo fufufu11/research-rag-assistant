@@ -699,6 +699,7 @@ async def test_answer_stream_persists_request_id_on_assistant_message(
     assert assistant_msg.role == MessageRole.ASSISTANT
     # assistant 消息的 request_id 与 done 事件返回的 request_id 一致
     assert assistant_msg.request_id == done.request_id
+    assert assistant_msg.id == done.message_id
 
 
 async def test_answer_stream_with_nonexistent_conversation_emits_error(

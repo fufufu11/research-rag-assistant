@@ -33,7 +33,7 @@ describe("ApiClient", () => {
   });
 
   it("构造时从 localStorage 读取 API key", () => {
-    window.localStorage.setItem("rag_api_key", "test-key-123");
+    window.localStorage.setItem("apiKey", "test-key-123");
     const client = new ApiClient();
     expect(client.apiKey).toBe("test-key-123");
   });
@@ -41,9 +41,20 @@ describe("ApiClient", () => {
   it("setApiKey 持久化到 localStorage，传 null 则清除", () => {
     const client = new ApiClient();
     client.setApiKey("abc");
-    expect(window.localStorage.getItem("rag_api_key")).toBe("abc");
+    expect(window.localStorage.getItem("apiKey")).toBe("abc");
     client.setApiKey(null);
-    expect(window.localStorage.getItem("rag_api_key")).toBeNull();
+    expect(window.localStorage.getItem("apiKey")).toBeNull();
+  });
+
+  it("setApiKey 后当前客户端的下一次请求立即使用新 key", async () => {
+    const client = new ApiClient();
+    const fetchSpy = mockFetchOk({ items: [] });
+
+    client.setApiKey("runtime-key");
+    await client.listDocuments();
+
+    const headers = new Headers(fetchSpy.mock.calls[0][1]?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer runtime-key");
   });
 
   it("listDocuments 调用 GET /api/v1/documents 并返回 DocumentList", async () => {
@@ -63,7 +74,7 @@ describe("ApiClient", () => {
   });
 
   it("有 API key 时请求头注入 Authorization Bearer", async () => {
-    window.localStorage.setItem("rag_api_key", "secret-key");
+    window.localStorage.setItem("apiKey", "secret-key");
     const client = new ApiClient();
     const fetchSpy = mockFetchOk({ items: [] });
 
@@ -140,13 +151,20 @@ describe("ApiClient", () => {
     expect(headers.get("Content-Type")).toBeNull();
   });
 
-  it("deleteDocument 调 DELETE /api/v1/documents/:id（404 视为成功）", async () => {
+  it("deleteDocument surfaces a 404 response", async () => {
     const client = new ApiClient();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(null, { status: 404 }),
+      new Response(JSON.stringify({ detail: "document not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }),
     );
 
-    await client.deleteDocument("doc-1");
+    await expect(client.deleteDocument("doc-1")).rejects.toMatchObject({
+      name: "ApiClientError",
+      status: 404,
+      detail: "document not found",
+    });
 
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe("/api/v1/documents/doc-1");
@@ -183,6 +201,22 @@ describe("ApiClient", () => {
     await client.deleteConversation("conv-1");
     expect(fetchSpy.mock.calls[0][0]).toBe("/api/v1/conversations/conv-1");
     expect(fetchSpy.mock.calls[0][1]?.method).toBe("DELETE");
+  });
+
+  it("deleteConversation surfaces a 404 response", async () => {
+    const client = new ApiClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "conversation not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(client.deleteConversation("conv-missing")).rejects.toMatchObject({
+      name: "ApiClientError",
+      status: 404,
+      detail: "conversation not found",
+    });
   });
 
   // === T5：SSE 流式问答 ===

@@ -8,13 +8,13 @@
 - 文本清洗、分段、Embedding 与向量检索
 - 调用大模型生成仅基于上下文的答案，证据不足时拒绝猜测
 - 返回文档名、页码、原文片段作为引用，引用由服务端映射，避免模型编造
-- 提供 FastAPI 接口与 Streamlit 演示界面
+- 提供 FastAPI 接口与 React SPA 工作区
 - sha256 去重、文档状态机、删除时同步清理数据库与向量库
 - 检索评测集与可复现报告（Hit@1 / Hit@5 / MRR / 平均检索耗时）
 
 ## 技术栈
 
-Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · Streamlit · pytest · Ruff + mypy · GitHub Actions
+Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQLAlchemy 2 + Alembic · React 18 · TypeScript · Vite · pytest · Vitest · Ruff + mypy · GitHub Actions
 
 ## 快速开始
 
@@ -22,6 +22,7 @@ Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQ
 
 - [uv](https://docs.astral.sh/uv/) 0.11+
 - Python 3.11（uv 会自动安装）
+- Node.js 20+
 - 可选：[Docker](https://www.docker.com/)（用于运行 Qdrant 向量数据库）
 
 ### 安装
@@ -30,6 +31,9 @@ Python 3.11 · uv · FastAPI · Pydantic · PyMuPDF · LangChain · Qdrant · SQ
 git clone https://github.com/fufufu11/research-rag-assistant.git
 cd research-rag-assistant
 uv sync --extra dev
+cd frontend
+npm ci
+cd ..
 ```
 
 ### 配置环境变量
@@ -62,15 +66,16 @@ uv run alembic upgrade head
 # 启动 FastAPI API 服务（端口 8000）
 uv run uvicorn research_rag.api.app:create_app --factory --reload --port 8000
 
-# 另开终端，启动 Streamlit 演示界面（端口 8501）
-uv run streamlit run src/research_rag/ui/app.py
+# 另开终端，启动 React SPA 开发服务器（端口 5173）
+cd frontend
+npm run dev
 ```
 
-打开 http://localhost:8501 即可使用演示界面：上传 PDF → 提问 → 查看带引用的答案。
+打开 http://localhost:5173 即可使用工作区：上传 PDF → 新建会话 → 提问 → 查看带引用的答案。
 
 ## Docker 部署
 
-通过 Docker Compose 一键启动 API + Qdrant + PostgreSQL 三服务（阶段 11.4）。
+通过 Docker Compose 构建 React SPA，并由 FastAPI 同源托管；运行时同时启动 API、Qdrant 与 PostgreSQL。
 
 ### 前置要求
 
@@ -90,7 +95,7 @@ cp .env.docker.example .env
 ### 启动服务
 
 ```powershell
-# 构建镜像并后台启动三服务（首次构建约 5-10 分钟，含 Embedding 模型下载）
+# 构建前后端并后台启动（首次构建约 5-10 分钟，含 Embedding 模型下载）
 docker compose up -d --build
 
 # 查看 API 日志
@@ -102,7 +107,8 @@ docker compose ps
 
 启动完成后：
 
-- API 服务：http://localhost:8000（API 文档 http://localhost:8000/docs）
+- React SPA：http://localhost:8000/
+- API 文档：http://localhost:8000/docs
 - Qdrant 向量库：http://localhost:6333
 - PostgreSQL：localhost:5432
 
@@ -126,15 +132,11 @@ docker compose down -v
 | rrag-qdrant-data | /qdrant/storage | Qdrant 向量数据 |
 | rrag-api-uploads | /app/data/uploads | 上传的 PDF 文件 |
 
-### 与 Streamlit UI 配合
+### 前后端同源
 
-Docker Compose 只容器化 API 服务。Streamlit UI 在本地运行，指向容器化 API：
-
-```powershell
-uv sync --extra dev
-$env:API_BASE_URL="http://localhost:8000/api/v1"
-uv run streamlit run src/research_rag/ui/app.py
-```
+生产构建把 `frontend/dist` 放入后端镜像，FastAPI 在 `/` 与 `/web` 托管 SPA。
+浏览器和 API 使用同一来源，生产环境无需 CORS；开发环境的 Vite 5173 由后端
+开发 CORS 配置支持。
 
 ## CI/CD 自动化部署
 
@@ -241,14 +243,14 @@ research-rag-assistant/
 │  ├─ api/            # FastAPI 路由、schema、依赖注入、异常处理
 │  ├─ db/             # SQLAlchemy 模型、Repository、session
 │  ├─ services/       # 业务编排层（DocumentService / QaService）
-│  ├─ ui/             # Streamlit 演示界面与 API 客户端
 │  ├─ pdf_parser.py   # 按页 PDF 解析
 │  ├─ chunker.py      # 页内文本清洗与切分
 │  ├─ embedding.py    # Embedding 适配器与向量检索
 │  ├─ vector_store.py # Qdrant 适配器
 │  ├─ qa_service.py   # LLM 调用与引用映射
 │  └─ evaluation.py   # 检索评测指标
-├─ tests/unit/        # 单元测试（269 条）
+├─ frontend/          # React 18 + TypeScript + Vite SPA
+├─ tests/unit/        # 后端单元与部署配置测试
 ├─ scripts/           # CLI 脚本（parse_pdf / evaluate / run_server）
 ├─ eval/              # 评测数据集
 ├─ alembic/           # 数据库迁移

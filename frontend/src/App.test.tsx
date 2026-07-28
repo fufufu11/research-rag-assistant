@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
 import { AppProvider } from "./store/AppContext";
@@ -31,5 +31,21 @@ describe("App", () => {
     expect(screen.getByTestId("sidebar")).toBeInTheDocument();
     expect(screen.getByTestId("chat-area")).toBeInTheDocument();
     expect(screen.getByText("科研文献智能问答")).toBeInTheDocument();
+  });
+
+  it("mobile navigation opens and closes after selecting a view", () => {
+    renderWithProviders();
+    const menuButton = screen.getByRole("button", { name: "打开导航" });
+    const sidebar = screen.getByTestId("sidebar");
+
+    expect(menuButton).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(menuButton);
+    expect(menuButton).toHaveAttribute("aria-expanded", "true");
+    expect(sidebar).toHaveClass("mobile-open");
+
+    fireEvent.click(screen.getByTestId("footer-settings"));
+    expect(screen.getByTestId("settings-page")).toBeInTheDocument();
+    expect(menuButton).toHaveAttribute("aria-expanded", "false");
+    expect(sidebar).not.toHaveClass("mobile-open");
   });
 });

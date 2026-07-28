@@ -133,8 +133,8 @@ async def _stream_answer(
     SSE 事件格式（``event: <type>\\ndata: <json>\\n\\n``）：
     - ``token``：``{"text": "..."}``，逐字 LLM 生成内容。
     - ``done``：``{"citations": [...], "request_id": "...", "elapsed_ms": N,
-      "conversation_id": "..."}``，流结束元数据，``citations`` 为服务端映射
-      后的真实引用，``conversation_id`` 为本次问答所属会话（阶段 9.2，可空）。
+      "conversation_id": "...", "message_id": "..."}``，流结束元数据；
+      ``conversation_id`` 与 ``message_id`` 在单轮问答中可空。
     - ``error``：``{"detail": "..."}``，检索/LLM/证据不足等异常。
     """
 
@@ -171,6 +171,7 @@ def _format_sse(event: StreamEvent) -> str:
                 "conversation_id": (
                     str(event.conversation_id) if event.conversation_id is not None else None
                 ),
+                "message_id": str(event.message_id) if event.message_id is not None else None,
             },
         )
     if isinstance(event, StreamErrorEvent):

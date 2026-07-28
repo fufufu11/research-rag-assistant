@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MessageItem } from "./MessageItem";
 import type { MessageRead } from "../../api/types";
 
@@ -77,12 +77,48 @@ describe("MessageItem", () => {
     const copyBtn = screen.getByLabelText("复制回答");
     expect(copyBtn).toBeInTheDocument();
     fireEvent.click(copyBtn);
-    // useState 异步更新 copied，需 await
-    await new Promise((r) => setTimeout(r, 0));
-    expect(onCopy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledOnce();
+    });
+    const copiedText = vi.mocked(navigator.clipboard.writeText).mock.calls[0][0];
+    expect(copiedText).toContain("测试标题");
+    expect(copiedText).toContain("这是 加粗 文本。");
+    expect(copiedText).not.toMatch(/##|\*\*/);
+    expect(onCopy).toHaveBeenCalledWith(copiedText);
   });
 
-  it("assistant 消息底部渲染赞/踩按钮（点击触发 onFeedback）", () => {
+  it("copies rendered GFM content without markdown syntax", async () => {
+    const message: MessageRead = {
+      ...baseAssistantMessage,
+      content: [
+        "~~Removed~~",
+        "",
+        "| Name | Value |",
+        "| --- | --- |",
+        "| Alpha | 1 |",
+        "",
+        "- [x] Done",
+        "- [ ] Todo",
+      ].join("\n"),
+    };
+    render(<MessageItem message={message} />);
+
+    fireEvent.click(screen.getByLabelText("复制回答"));
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledOnce();
+    });
+    const copiedText = vi.mocked(navigator.clipboard.writeText).mock.calls[0][0];
+    expect(copiedText).toContain("Removed");
+    expect(copiedText).toContain("Name");
+    expect(copiedText).toContain("Value");
+    expect(copiedText).toContain("Alpha");
+    expect(copiedText).toContain("Done");
+    expect(copiedText).toContain("Todo");
+    expect(copiedText).not.toMatch(/~~|\||\[x\]|\[ \]/);
+  });
+
+  it("assistant 消息底部点赞按钮点击后立即触发 onFeedback", () => {
     const onFeedback = vi.fn();
     render(
       <MessageItem
@@ -92,11 +128,27 @@ describe("MessageItem", () => {
       />,
     );
     const likeBtn = screen.getByLabelText("点赞");
-    const dislikeBtn = screen.getByLabelText("点踩");
     fireEvent.click(likeBtn);
-    expect(onFeedback).toHaveBeenCalledWith("like");
-    fireEvent.click(dislikeBtn);
-    expect(onFeedback).toHaveBeenCalledWith("dislike");
+    expect(onFeedback).toHaveBeenCalledWith("like", undefined);
+  });
+
+  it("点踩时填写可选评论并在提交时一并反馈", () => {
+    const onFeedback = vi.fn();
+    render(
+      <MessageItem
+        message={baseAssistantMessage}
+        onFeedback={onFeedback}
+        feedbackRating={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("点踩"));
+    const comment = screen.getByLabelText("点踩原因");
+    expect(comment).toHaveAttribute("maxlength", "2000");
+    fireEvent.change(comment, { target: { value: "引用不够准确" } });
+    fireEvent.click(screen.getByRole("button", { name: "提交反馈" }));
+
+    expect(onFeedback).toHaveBeenCalledWith("dislike", "引用不够准确");
   });
 
   it("已激活的赞按钮再次点击视为取消（仍调 onFeedback）", () => {
@@ -111,7 +163,7 @@ describe("MessageItem", () => {
     const likeBtn = screen.getByLabelText("点赞");
     expect(likeBtn).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(likeBtn);
-    expect(onFeedback).toHaveBeenCalledWith("like");
+    expect(onFeedback).toHaveBeenCalledWith("like", undefined);
   });
 
   it("流式输出时显示 stream-cursor 且不显示操作按钮", () => {

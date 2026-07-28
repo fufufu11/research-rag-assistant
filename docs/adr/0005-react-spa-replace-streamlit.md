@@ -33,6 +33,13 @@ Accepted（2026-07-26）
 | 测试 | Vitest + React Testing Library + jsdom | 与项目 TDD 约定一致，不引入 E2E |
 | 部署 | FastAPI 新增 `/web` 路由托管 `frontend/dist` | 生产单服务部署，与现有 docker-compose 集成容易 |
 
+### API 契约补充
+
+T7 反馈提交需要真实 assistant `message_id`，因此 T3-T8 实施时对既有后端
+SSE 契约做最小扩展：`done` 事件增加已持久化 assistant 消息 ID。API 路由同时
+显式提交写事务，保证文档、会话、问答和反馈写入在请求成功后持久化。除此之外
+沿用既有 REST/SSE 端点，不新增业务路由。
+
 ### 认证策略
 
 - `API_KEY_ENABLED` 默认 false（开发不需要）
@@ -51,7 +58,8 @@ Accepted（2026-07-26）
 
 - **正面**：
   - UI 自由度 100%，设计稿可原样落地
-  - 复用现有后端 API，无后端改动（仅新增 `/web` 路由 + CORS 配置）
+  - 复用现有后端 API，仅扩展 SSE `done.message_id` 与事务边界，并新增
+    `/web` 静态托管和 CORS 环境配置
   - 专业前端栈，TypeScript 类型安全
   - 删除 Streamlit 后减少 Python 依赖与维护负担
 - **负面 / 已知局限**：
@@ -71,6 +79,6 @@ Accepted（2026-07-26）
 
 - 设计稿：[.trae/handoffs/ui_claude_v1.html](file:///d:/CODE/research-rag-assistant/.trae/handoffs/ui_claude_v1.html)
 - 现有后端 API：[src/research_rag/api/routes/](file:///d:/CODE/research-rag-assistant/src/research_rag/api/routes)
-- 现有 Streamlit UI（待删除）：[src/research_rag/ui/](file:///d:/CODE/research-rag-assistant/src/research_rag/ui)
+- 已删除的 Streamlit UI：`src/research_rag/ui/`
 - 阶段三过渡切片 PR：#122
-- 当前状态：v3.2，938 测试
+- 当前状态：React SPA T1-T8 已完成（Issues #124-#131）

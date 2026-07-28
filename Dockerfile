@@ -1,10 +1,20 @@
 # 阶段 11.4 Docker Compose 一键部署
 #
-# Python 3.11-slim + uv + 应用代码。
+# Node 构建 React SPA；Python 3.11-slim + uv 运行 API 并同源托管 dist。
 # 默认装 embedding + chinese extra（生产需本地 Embedding 推理 + 中文分词）。
 #
 # 构建：docker compose build  或  docker build -t rrag-api .
 # 运行：见 docker-compose.yml
+
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/ ./
+RUN npm run build
 
 FROM python:3.11-slim-bookworm
 
@@ -33,6 +43,7 @@ RUN uv sync --frozen --no-install-project --extra embedding --extra chinese
 COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
+COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
 # 创建数据目录（SQLite fallback + 上传文件落盘）
 RUN mkdir -p /app/data/uploads

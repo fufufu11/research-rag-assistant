@@ -14,6 +14,8 @@ interface AppContextValue {
   // 当前激活视图
   activeView: ActiveView;
   setActiveView: (view: ActiveView) => void;
+  isMobileNavOpen: boolean;
+  setIsMobileNavOpen: (isOpen: boolean) => void;
   // 当前会话
   currentConversationId: string | null;
   setCurrentConversationId: (id: string | null) => void;
@@ -27,6 +29,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 export function AppProvider({ children }: { children: ReactNode }) {
   const client = new ApiClient();
   const [activeView, setActiveView] = useState<ActiveView>("chat");
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
   >(null);
@@ -36,6 +39,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     client,
     activeView,
     setActiveView,
+    isMobileNavOpen,
+    setIsMobileNavOpen,
     currentConversationId,
     setCurrentConversationId,
     currentDocumentIds,

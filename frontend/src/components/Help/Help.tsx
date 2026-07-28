@@ -11,7 +11,7 @@ export function Help() {
           <h2>项目简介</h2>
           <p>
             research·rag 是一个基于 RAG（检索增强生成）架构的科研文献智能问答系统。
-            上传 PDF / TXT / Markdown 文档后，即可针对文档内容进行问答，
+            上传 PDF 文档后，即可针对文档内容进行问答，
             支持流式输出与引用溯源。
           </p>
         </div>
@@ -19,7 +19,7 @@ export function Help() {
         <div className="help-section">
           <h2>快速上手</h2>
           <ul>
-            <li>点击输入栏左侧 <code>+</code> 按钮上传文档（PDF/TXT/MD）</li>
+            <li>点击输入栏左侧 <code>+</code> 按钮上传 PDF 文档</li>
             <li>在输入框中输入问题，按 <code>Enter</code> 发送</li>
             <li>AI 回答下方会显示引用卡片，含来源文档名与页码</li>
             <li>点击 <code>复制</code> 按钮复制回答全文</li>

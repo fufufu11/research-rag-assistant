@@ -6,7 +6,8 @@
 ## 当前状态
 
 - **已覆盖阶段**：阶段 0-7（基础功能）+ 阶段 8.1（Reranker 重排序）+ 阶段 8.2（跨页切分）+ 阶段 8.3（BM25 混合检索）+ 阶段 8.4（EMBEDDING_MODEL 环境变量修复 + bge-m3 可选集成 + 中文论文评测）+ 阶段 9.1（流式输出 SSE）+ 阶段 9.2（多轮对话）+ 阶段 9.3（答案质量评测）+ 阶段 10.1（可观测性 Langfuse）+ 阶段 10.2（用户反馈闭环）+ 阶段 10.3（性能优化）+ 阶段 11.1（API Key 认证鉴权）+ 阶段 11.2（输入过滤与文件校验）+ 阶段 11.3（API 限流）+ 阶段 11.4（Docker Compose 一键部署）+ 阶段 11.5（CI/CD 自动化部署）+ UI 体验优化阶段一（Issue #72：ChatGPT 风格布局 + 多文档会话范围锁定 Bug 修复）+ 历史消息反馈 prefactor（Issue #89：`Message.request_id` 列 + ADR 0003）+ 历史消息反馈写入读出（Issue #90：`_persist_turn` 透传 `request_id` + `MessageRead` 暴露 `request_id`）+ 历史消息反馈前端 model+client（Issue #91：`MessageInfo.request_id` + `ApiClient.get_feedback` 404 转 None）+ 历史消息反馈前端 UI 渲染（Issue #92：`_render_feedback_buttons` 扩展到历史消息 + 旧消息隐藏按钮 + `_init_feedback_state_for_history` 批量初始化反馈状态）+ 阶段 11.6 生产安全加固（切片 A #97：`secrets.py` helper + 切片 B #98：非 root 容器 Dockerfile 改造 + 切片 C #99：8 个密钥读取点替换为 `get_secret` + postgres `POSTGRES_PASSWORD_FILE` 支持 + 切片 D #101：docker-compose.prod.yml 配置 8 个 docker secrets 挂载 + `.env.docker.secrets.example` 示例文件 + 切片 E #100：nginx + certbot 容器化 + TLS 反代 Let's Encrypt webroot 模式 + 切片 F #102：文档同步收官）+ **UI 体验优化阶段二**（基于 ChatGPT 界面截图的二轮迭代：#109 左侧导航重构-图标分组+可折叠会话/文档列表 + #112 输入栏「+」上传按钮+底部免责声明 + #111 对话区居中+宽度收窄布局 + #113 AI 回复复制按钮 + #110 顶部模型选择下拉占位，5 个 ticket 全部 squash 合并到 main，905 → 938 测试零回归）+ **UI 体验优化阶段三过渡切片**（Issue #121 / PR #122：Claude 静谧极简风格落地到 Streamlit，新增 `_get_claude_style_css()` 注入完整 CSS + 改造 `_render_citations_inline()` 为 HTML 双列卡片网格，作为 React SPA 完成前的过渡方案）+ **React SPA 阶段 T1**（Issue #124：`frontend/` Vite + React 18 + TypeScript 骨架 + ApiClient + 9 前端测试 + CI frontend job + 删除 Streamlit UI 层 + 后端 938→829 零回归）+ **React SPA 阶段 T2**（Issue #125：Claude 风格主题 + 基础布局骨架——新增 `claude-theme.css` 完整 CSS 变量 + `globals.css` 重写为 `@import` + grid 主布局 + `Sidebar`/`ChatArea`/`ModelDropdown` 三组件 + Google Fonts + 24 个新增 Vitest 测试）
-- **测试**：829 个后端单元测试通过 + 33 个前端 Vitest 测试通过（T1 9 + T2 新增 24：App 3 + Sidebar 6 + ChatArea 4 + ModelDropdown 4 + claude-theme 9）
+- **React SPA T3-T8**：✅ 已完成（Issues #126-#131 / PR #134），文档与会话管理、SSE 问答、历史消息、反馈、设置/帮助和生产同源部署全部接通
+- **测试**：837 个后端测试通过 + 102 个前端 Vitest 测试通过
 - **CI**：ruff format + ruff check + mypy + pytest（后端）+ tsc + vitest + vite build（前端）四项全绿
 - **评测**：英文 BM25 混合检索后 Hit@5=76.7%、MRR=0.607（chunk-500-overlap-0 + bge-small-en + BM25 + reranker），详见 [评测报告](./evaluation_report.md)；中文论文评测 bge-small-zh 最优 Hit@5=90.0%、MRR=0.783（chunk-500-overlap-160 + reranker），显著优于 jina-embeddings-v3 API，详见 [中文评测报告](./evaluation_report_zh.md)
 
@@ -424,12 +425,12 @@
 |---|---|---|---|---|
 | T1 | React 项目骨架 + 删除 Streamlit + CI 集成 | ✅ 已完成 | 无 | #124 |
 | T2 | Claude 风格主题 + 基础布局骨架 | ✅ 已完成 | T1 | #125 |
-| T3 | 文档管理 UI（列表 + 上传 + 删除） | 待实施 | T2 | #126 |
-| T4 | 会话管理 UI（列表 + 创建 + 删除 + 切换） | 待实施 | T2 | #127 |
-| T5 | SSE 流式问答 + 消息渲染 + 引用卡片 + 复制按钮 | 待实施 | T3, T4 | #128 |
-| T6 | 历史消息加载 + 多轮对话 | 待实施 | T5 | #129 |
-| T7 | 反馈 UI（点赞/点踩 + 历史消息反馈） | 待实施 | T6 | #130 |
-| T8 | 设置页 + API Key 管理 + 后端 /web 路由 + docker 集成 | 待实施 | T7 | #131 |
+| T3 | 文档管理 UI（列表 + 上传 + 删除） | ✅ 已完成 | T2 | #126 |
+| T4 | 会话管理 UI（列表 + 创建 + 删除 + 切换） | ✅ 已完成 | T2 | #127 |
+| T5 | SSE 流式问答 + 消息渲染 + 引用卡片 + 复制按钮 | ✅ 已完成 | T3, T4 | #128 |
+| T6 | 历史消息加载 + 多轮对话 | ✅ 已完成 | T5 | #129 |
+| T7 | 反馈 UI（点赞/点踩 + 历史消息反馈） | ✅ 已完成 | T6 | #130 |
+| T8 | 设置页 + API Key 管理 + 后端 /web 路由 + docker 集成 | ✅ 已完成 | T7 | #131 |
 
 ### T1 React 项目骨架 + 删除 Streamlit + CI 集成
 
@@ -471,6 +472,16 @@
   - **不引入图标库**：用 emoji 或 SVG inline，避免依赖
   - **CSS 变量测试用 fs.readFileSync**：vitest `css: false` 配置下 `?raw` 后缀返回空字符串，改用 Node fs 模块直接读 CSS 原文断言
 - **验收**：33 前端测试全绿（T1 9 + T2 新增 24，覆盖布局结构、CSS 变量完整性、模型下拉占位状态、左侧栏分组渲染）+ 后端 829 测试零回归 + CI 四项全绿
+
+### T3-T8 React SPA 业务闭环
+
+- **状态**：✅ 已完成（Issues #126-#131 / PR #134）
+- **文档与会话**：TanStack Query hooks 封装文档 CRUD、会话 CRUD 与会话详情；支持文档状态/页数/失败原因、会话日期/锁定文档数量，以及无二次确认的删除操作
+- **问答与历史**：独立 SSE 解析模块兼容分块、CRLF 与尾部缓冲；`useChat` 管理历史消息、流式追加、会话懒创建和错误状态；SSE `done` 返回真实 assistant `message_id`
+- **反馈与复制**：历史和新消息支持赞/踩回填、切换与取消，点踩可附 2000 字以内评论；复制内容剥离 Markdown 标记
+- **设置与部署**：API Key 使用 `localStorage.apiKey` 并即时更新客户端；FastAPI 同源托管 SPA，开发允许 Vite 5173、生产由 `APP_ENV=production` 关闭 CORS；根 Dockerfile 构建并内置前端产物
+- **响应式导航**：窄屏提供菜单按钮、抽屉侧栏与遮罩，选择会话、文档、设置或帮助后自动收起
+- **验收**：837 个后端测试 + 102 个前端测试全绿，TypeScript、Vite build、Ruff 与 mypy 均通过
 
 ---
 

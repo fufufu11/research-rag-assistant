@@ -2,7 +2,8 @@
 
 ## 当前状态
 
-`v4.1` — 阶段 0-10.3 + 11.1 + 11.2 + 11.3 + 11.4 + 11.5 + 11.6 全部完成（阶段 11.6 生产安全加固 6 个切片 A-F 全部完成：#97 #98 #99 #101 #100 #102）；阶段 10.2 前端补充（PR #87）完成反馈按钮接入；历史消息反馈 prefactor（PR #93 / Issue #89）完成 `Message.request_id` 列 + ADR 0003 演进；历史消息反馈写入读出（PR #94 / Issue #90）完成 `_persist_turn` 透传 `request_id` 到 assistant `Message` + `MessageRead` schema 暴露 `request_id` + `add_message` 签名扩展；历史消息反馈前端 model+client（PR #95 / Issue #91）完成 `MessageInfo.request_id` 字段 + `_parse_message` 解析 + `ApiClient.get_feedback` 404 转 None；历史消息反馈前端 UI 渲染（PR #96 / Issue #92）完成 `_render_feedback_buttons` 扩展到历史消息循环 + `_init_feedback_state_for_history` 批量初始化反馈状态 + 旧消息隐藏按钮，历史消息反馈端到端体验闭环完成；阶段 11.6 切片 A-F（PR #103 #105 #104 #106 #107 #108）完成生产安全加固全部 6 个切片；**UI 体验优化阶段二**（基于 ChatGPT 界面截图的二轮迭代，5 个 ticket #109-#113 全部 squash 合并到 main，905 → 938 测试零回归）；**UI 体验优化阶段三过渡切片**（PR #122 / Issue #121）将 Claude 静谧极简风格落地到 Streamlit `app.py`：新增 `_get_claude_style_css()` 函数注入完整 CSS（Google Fonts Newsreader + IBM Plex Sans/Mono + CSS 变量暖米色背景 + 赤陶土强调色 + 噪声纹理 + 衬线消息流 + pill 输入栏 + 引用卡片彩色边框）+ 改造 `_render_citations_inline()` 为 HTML 双列卡片网格（4 色循环彩色左边框 + hover 抬升）+ 保留 `_get_chat_layout_css()` 向后兼容；**React SPA 阶段 T1**（Issue #124）创建 `frontend/` Vite + React 18 + TypeScript 项目骨架（`api/client.ts` ApiClient 封装 + `api/types.ts` 严格对应 `schemas.py` + `App.tsx` hello world + API 健康检查），配置 Vitest + React Testing Library + jsdom（9 个前端测试），新增 `.github/workflows/ci.yml` frontend job（与 python job 并行），后端 CORS 保留 5173，**删除** `src/research_rag/ui/` Streamlit 层 + 8 个相关测试文件 + `pyproject.toml` 移除 streamlit/requests 依赖 + mypy override 清理，`test_auth.py` 移除 `TestApiClientApiKey` 类（前端 `client.test.ts` 替代），后端测试 938 → 829 零回归 + 前端 9 测试，CI 四项全绿（Lint / Type Check / Test / Frontend）；**React SPA 阶段 T2**（Issue #125 / PR #133）落地 Claude 风格主题与基础布局骨架：新增 `frontend/src/styles/claude-theme.css` 完整 CSS 变量（背景/表面色、文字色、赤陶土强调色 `#c96442`、边框、引用卡片彩色边框 `--cite-1` ~ `--cite-4`、阴影、布局尺寸 `--sidebar-width=260px` / `--content-max-width=720px`）+ 重写 `globals.css` 为 `@import` + `.app` grid 主布局（260px 左侧栏 + 1fr 右侧主区）+ 左侧栏深棕 `#1c1815` + 右侧主区暖米色 `#faf9f7` + 模型下拉占位 + 居中收窄 720px 内容占位样式；`frontend/index.html` 引入 Google Fonts（Newsreader + IBM Plex Sans + IBM Plex Mono，含 preconnect）；新增 `components/Sidebar/Sidebar.tsx`（header logo dot + research·rag 品牌 / 新建对话按钮 / 搜索输入框 / 历史会话与文档库分组占位空状态 / 下层设置 + 帮助按钮）+ `components/ChatArea/ChatArea.tsx`（顶部栏 ModelDropdown + 未选择会话提示 + 居中 720px 内容占位「科研文献智能问答」）+ `components/ModelDropdown/ModelDropdown.tsx`（`<select disabled>` 单元素占位，仅展示 research-rag + 占位 badge，不响应切换）；重写 `App.tsx` 为 `<div class="app"><Sidebar /><ChatArea /></div>` 双栏布局；24 个新增前端测试（App 3 + Sidebar 6 + ChatArea 4 + ModelDropdown 4 + claude-theme 9，CSS 变量测试用 `fs.readFileSync` 读文件原文断言绕过 vitest `css: false` 限制），后端 829 测试零回归 + 前端 9 → 33 测试，CI 四项全绿。后续 T3-T8 逐步接入文档管理 / 会话管理 / SSE 流式问答 / 反馈 / 部署集成。
+- **React SPA T3-T8 已完成**（Issues #126-#131 / PR #134）：文档管理、会话管理、SSE 流式问答、历史消息、多轮对话、反馈、设置/帮助、移动导航与生产同源部署形成完整闭环。
+- **版本**：`v4.1`，后端阶段 0-11.6 与 React SPA T1-T8 均已完成；历史切片、决策与验收记录见下方对应章节及 ADR。
 
 ## 已完成功能
 
@@ -27,7 +28,7 @@
 - OpenAI 兼容协议客户端，超时与重试由 httpx 实现指数退避
 - 服务端引用映射：模型输出 `[C1]` 编号，服务端映射真实文档名、页码与片段
 - 证据不足时拒绝猜测（`[INSUFFICIENT_EVIDENCE]`）
-- 流式输出（SSE）：FastAPI `StreamingResponse` + LangChain `astream` + SSE 协议（token/done/error 三类事件），Streamlit `st.write_stream` 接收（阶段 9.1）
+- 流式输出（SSE）：FastAPI `StreamingResponse` + LangChain `astream` + SSE 协议（token/done/error 三类事件），React `fetch` + `ReadableStream` 分块解析
 - 多轮对话：DB 持久化会话历史 + 查询改写 + 历史截断双重保护 + 会话级文档范围锁定，流式/非流式双路径都支持（阶段 9.2）
 
 ### FastAPI 与数据库
@@ -42,14 +43,15 @@
 
 ### 演示界面（React SPA）
 
-- **React SPA**（ADR 0005，Issue #124/#125）：`frontend/` Vite + React 18 + TypeScript，落地 Claude 静谧极简风格（设计稿 `.trae/handoffs/ui_claude_v1.html`）
-  - **T2 已完成**：260px 左侧栏（深棕 `#1c1815`）+ 右侧主聊天区（暖米色 `#faf9f7`）+ 顶部模型下拉占位 + 居中收窄 720px 内容区
-  - 左侧栏：header logo dot + research·rag 品牌 / 新建对话按钮 / 搜索输入框 / 历史会话与文档库分组占位（暂无会话/暂无文档空状态）/ 下层设置 + 帮助按钮
-  - 右侧主区：顶部栏 ModelDropdown（`<select disabled>` 占位）+ 未选择会话提示 + 内容占位「科研文献智能问答」
+- **React SPA**（ADR 0005，Issues #124-#131）：`frontend/` Vite + React 18 + TypeScript，T1-T8 全部完成
+  - 左侧栏：文档上传/选择/删除与状态展示，会话创建/切换/删除、日期与锁定文档数量，设置和帮助视图
+  - 主聊天区：历史消息、多轮上下文、SSE 实时追加、Markdown、引用卡片、纯文本复制、反馈回填与可选点踩评论
+  - 前端状态：TanStack Query 分域 hooks + `useChat`；API Key 持久化到 `localStorage.apiKey` 并即时应用
+  - 生产部署：根 Dockerfile 构建并内置 `frontend/dist`，FastAPI 同源托管并提供 SPA fallback；`APP_ENV=production` 默认关闭 CORS
   - Google Fonts：Newsreader（衬线消息正文）+ IBM Plex Sans（UI）+ IBM Plex Mono（代码/ID）
   - CSS 变量主题：`claude-theme.css` 定义完整设计 token（背景/表面色、文字色、赤陶土强调色 `#c96442`、边框、引用卡片彩色边框 `--cite-1` ~ `--cite-4`、阴影、布局尺寸）
 - **历史**：Streamlit UI 层已在 T1 删除（`src/research_rag/ui/` 移除 + streamlit/requests 依赖清理），UI 体验优化阶段一/二/三过渡切片（#72 / #109-#113 / #121）已随 Streamlit 退役归档
-- 文档范围锁定、引用卡片、流式输出等业务功能将在 T3-T8 逐步接入 React SPA
+- 文档范围锁定、引用卡片、流式输出与反馈等业务功能已在 T3-T8 完成接入
 
 ### UI 体验优化阶段二（#109-#113）
 
@@ -125,11 +127,11 @@
 ### Docker 部署
 
 - Docker Compose 一键部署（阶段 11.4）：`docker compose up -d --build` 启动 API + Qdrant + PostgreSQL 三服务
-- `Dockerfile`：`python:3.11-slim` + 多阶段复制 `uv` + `uv sync --frozen --extra embedding --extra chinese`；`libgomp1`（BM25/lightgbm）+ `curl`（healthcheck）
+- `Dockerfile`：Node 20 构建 React SPA 并复制到最终镜像；`python:3.11-slim` + 多阶段复制 `uv` + `uv sync --frozen --extra embedding --extra chinese`；`libgomp1`（BM25/lightgbm）+ `curl`（healthcheck）
 - `docker-compose.yml`：api / qdrant / postgres 三服务 + postgres healthcheck + 三个命名卷（`rrag-postgres-data` / `rrag-qdrant-data` / `rrag-api-uploads`）持久化
 - `docker/entrypoint.sh`：先 `alembic upgrade head` 迁移 schema，再 `exec uvicorn` 启动 API（`exec` 接管 PID 1 优雅接收 SIGTERM）
 - `pyproject.toml`：补 `psycopg[binary]>=3.1`（PostgreSQL 驱动，psycopg3 是 SQLAlchemy 2.0 推荐）
-- 部署文档见 [README.md](../README.md)「Docker 部署」章节；Streamlit UI 不容器化，本地运行指向容器化 API
+- 部署文档见 [README.md](../README.md)「Docker 部署」章节；React SPA 已内置于 API 镜像并由 FastAPI 同源托管
 
 ### 认证鉴权
 
@@ -265,18 +267,17 @@ uv run python scripts/evaluate.py run --pdfs-dir <含 PDF 的目录>
 
 ## 测试状态
 
-- pytest：829 passed（T1 删除 Streamlit UI 层后端减 109 个 UI/ApiClient 测试，详见 ADR 0005；阶段 9.1 新增 16 个、阶段 9.2 新增 111 个、阶段 9.3 新增 65 个、阶段 10.1 新增 25 个、阶段 10.2 后端新增 30 个、阶段 10.2 前端补充新增 9 个、阶段 11.1 新增 31 个、阶段 11.2 新增 77 个、阶段 11.3 新增 45 个、阶段 11.5 新增 15 个、#89 历史消息反馈 prefactor 新增 7 个、#90 历史消息反馈写入读出新增 5 个、#91 历史消息反馈前端 model+client 新增 5 个、#92 历史消息反馈前端 UI 渲染新增 8 个、#97 secrets.py helper 新增 7 个、#99 密钥读取点替换 + postgres 密码文件支持新增 24 个、#98 非 root 容器 Dockerfile 改造新增 7 个、#101 docker-compose.prod.yml docker secrets 配置新增 10 个、#100 nginx + certbot 容器化 + TLS 反代新增 33 个、#102 文档同步收官纯文档无新增、UI 体验优化阶段二新增 33 个：#109 左侧导航重构 +6 / #112 输入栏上传按钮+免责声明 +8 / #111 对话区居中布局 +5 / #113 AI 回复复制按钮 +8 / #110 顶部模型下拉占位 +6）
-- vitest：33 passed（T1 9 个 ApiClient/App 测试 + T2 新增 24 个：App 3 + Sidebar 6 + ChatArea 4 + ModelDropdown 4 + claude-theme 9）
+- pytest：837 passed（`QDRANT_ENABLED=false`、`RERANKER_ENABLED=false` 本地全量验证）
+- vitest：102 passed（13 个测试文件）
 - ruff format --check：通过
 - ruff check：通过
-- mypy：CI 环境（Linux）通过；本机 Windows 因应用程序控制策略阻止 C 扩展加载无法运行
+- mypy：本机通过（31 个源文件）
 
 ## 已知问题
 
-1. **mypy 本机不可用**：uv 管理的独立 Python 的 C 扩展在 Windows 本机被应用程序控制策略阻止加载。CI 环境（Linux）使用系统 Python，不受影响。已创建 conda 环境 `rrag311`（Python 3.11.15）作为本地替代，但 mypy 仍受 `_sqlite3.dll` 阻塞无法运行，留待 CI 验证。
-2. **PyMuPDF 类型存根不完整**：`pymupdf.open` / `page.get_text` / `doc.close` 在 mypy strict 下报 `no-untyped-call`，已在调用处用 `# type: ignore[no-untyped-call]` 精确抑制。
-3. **测试 PDF 用英文文本**：PyMuPDF 的 `insert_text` 默认字体不含中文字形，CI 环境也不一定有中文字体，故测试用英文。解析器本身对中文无特殊处理。
-4. **本地 pytest 全量运行注意事项**：部分测试可能加载真实 Embedding 模型导致卡住，建议单独跑改动相关测试文件；API 路由测试需设置 `$env:RERANKER_ENABLED="false"; $env:QDRANT_ENABLED="false"` 避免 lifespan 加载真实 reranker/Qdrant。
+1. **PyMuPDF 类型存根不完整**：`pymupdf.open` / `page.get_text` / `doc.close` 在 mypy strict 下报 `no-untyped-call`，已在调用处用 `# type: ignore[no-untyped-call]` 精确抑制。
+2. **测试 PDF 用英文文本**：PyMuPDF 的 `insert_text` 默认字体不含中文字形，CI 环境也不一定有中文字体，故测试用英文。解析器本身对中文无特殊处理。
+3. **本地 pytest 全量运行注意事项**：API 路由测试需设置 `$env:RERANKER_ENABLED="false"; $env:QDRANT_ENABLED="false"`，避免 lifespan 加载真实 reranker/Qdrant。
 
 ## 后续可选方向
 

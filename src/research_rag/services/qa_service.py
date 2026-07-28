@@ -132,12 +132,15 @@ class StreamDoneEvent:
         elapsed_ms: 本次问答总耗时（毫秒）。
         conversation_id: 本次问答所属会话 ID（阶段 9.2）。``None`` 表示单轮
             问答未关联会话。前端据此维护会话状态。
+        message_id: 已持久化的 assistant 消息 ID。单轮问答未持久化消息时为
+            ``None``，多轮问答可用于提交反馈的外键。
     """
 
     citations: list[CitationRead]
     request_id: uuid.UUID
     elapsed_ms: int
     conversation_id: uuid.UUID | None = None
+    message_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -451,8 +454,9 @@ class QaService:
         citations = self._map_citations(result, contexts, context_doc_ids)
 
         # 3. 持久化消息（若关联会话）
+        message_id = None
         if conv is not None:
-            self._persist_turn(conv, question, answer_text, citations, request_id)
+            message_id = self._persist_turn(conv, question, answer_text, citations, request_id)
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         yield StreamDoneEvent(
@@ -460,6 +464,7 @@ class QaService:
             request_id=request_id,
             elapsed_ms=elapsed_ms,
             conversation_id=conversation_id,
+            message_id=message_id,
         )
 
     # ------------------------------------------------------------------
@@ -597,7 +602,7 @@ class QaService:
         answer_text: str,
         citations: list[CitationRead],
         request_id: uuid.UUID,
-    ) -> None:
+    ) -> uuid.UUID:
         """持久化一轮问答到 DB（阶段 9.2；阶段 10.2 加 ``request_id`` 透传）。
 
         写入两条消息（user + assistant），assistant 消息的 ``citations``
@@ -614,6 +619,9 @@ class QaService:
             citations: 服务端映射后的引用列表（结构对齐 ``CitationRead``）。
             request_id: 本轮问答的 ``request_id``（仅写到 assistant 消息，
                 user 消息不写）。
+
+        Returns:
+            已持久化的 assistant 消息 ID。
         """
 
         # 首条消息时设置标题（截取前 30 字符，避免过长）
@@ -631,13 +639,14 @@ class QaService:
         # assistant 消息（含 citations 快照 + request_id 透传）
         # CitationRead 是 Pydantic BaseModel，转 dict 存 JSON
         citations_snapshot = [c.model_dump(mode="json") for c in citations] if citations else None
-        self.conv_repo.add_message(
+        assistant_message = self.conv_repo.add_message(
             conv.id,
             role=MessageRole.ASSISTANT,
             content=answer_text,
             citations=citations_snapshot,
             request_id=request_id,
         )
+        return assistant_message.id
 
     # ------------------------------------------------------------------
     # 私有：检索 + 重排（非流式与流式共享）

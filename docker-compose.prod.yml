@@ -51,6 +51,7 @@ services:
     # base compose 的 LLM_API_KEY / LANGFUSE_* 等明文变量在生产为空（.env 不配置），
     # helper fallback 到 _FILE 路径读取 docker secrets 挂载的文件内容
     environment:
+      APP_ENV: production
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
       JUDGE_LLM_API_KEY_FILE: /run/secrets/judge_llm_api_key
       API_KEYS_FILE: /run/secrets/api_keys
